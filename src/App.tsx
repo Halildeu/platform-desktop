@@ -11,7 +11,7 @@ import { useEffect, useState } from 'react';
  * - Speaker diarization timeline
  * - Summary + actions panel
  */
-function App(): JSX.Element {
+function App() {
   const [version, setVersion] = useState<string>('');
 
   useEffect(() => {
