@@ -20,6 +20,7 @@ describe('oauth-flow (saf)', () => {
         codeChallenge: 'CHAL',
         state: 'ST',
         redirectUri: 'http://127.0.0.1:8123/callback',
+        nonce: 'NON',
       }),
     );
     expect(url.origin + url.pathname).toBe(
@@ -30,6 +31,7 @@ describe('oauth-flow (saf)', () => {
     expect(url.searchParams.get('code_challenge')).toBe('CHAL');
     expect(url.searchParams.get('code_challenge_method')).toBe('S256');
     expect(url.searchParams.get('state')).toBe('ST');
+    expect(url.searchParams.get('nonce')).toBe('NON');
     expect(url.searchParams.get('redirect_uri')).toBe('http://127.0.0.1:8123/callback');
     expect(url.searchParams.get('scope')).toBe('openid profile');
   });

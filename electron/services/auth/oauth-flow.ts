@@ -22,6 +22,8 @@ export interface AuthUrlParams {
   codeChallenge: string;
   state: string;
   redirectUri: string;
+  /** OIDC nonce (Codex hardening — id_token replay koruması). */
+  nonce: string;
 }
 
 /** Authorization endpoint + query (system browser'da açılacak login URL'i). */
@@ -34,6 +36,7 @@ export function buildAuthorizationUrl(cfg: KeycloakConfig, p: AuthUrlParams): st
     code_challenge: p.codeChallenge,
     code_challenge_method: 'S256',
     state: p.state,
+    nonce: p.nonce,
   });
   return `${authorizationEndpoint(cfg)}?${params.toString()}`;
 }
