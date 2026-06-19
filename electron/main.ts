@@ -13,9 +13,13 @@
  * - Crash report PII redacted
  */
 
+import 'dotenv/config'; // .env → process.env (Keycloak/gateway config), en başta
+
 import { app, BrowserWindow, ipcMain, shell } from 'electron';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+
+import { registerAuthIpc } from './ipc/auth';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -67,6 +71,7 @@ ipcMain.handle('audio:permission-status', async () => {
 });
 
 void app.whenReady().then(() => {
+  registerAuthIpc(); // #1 auth:login / auth:status / auth:logout
   createMainWindow();
 
   app.on('activate', () => {
