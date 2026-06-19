@@ -11,7 +11,7 @@ import {
   type KeycloakConfig,
   tokenEndpoint,
 } from './keycloak-config';
-import { expiresAtFromExpiresIn, type TokenSet } from './token-store';
+import { expiresAtFromExpiresIn, type TokenSet } from './token-utils';
 
 /** Loopback redirect URI (RFC 8252): http://127.0.0.1:<port>/callback */
 export function loopbackRedirectUri(port: number): string {

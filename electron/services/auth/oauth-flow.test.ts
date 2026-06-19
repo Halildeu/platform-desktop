@@ -23,7 +23,7 @@ describe('oauth-flow (saf)', () => {
       }),
     );
     expect(url.origin + url.pathname).toBe(
-      'https://auth.example.com/realms/platform/protocol/openid-connect/auth',
+      'https://auth.example.com/realms/platform-test/protocol/openid-connect/auth',
     );
     expect(url.searchParams.get('client_id')).toBe('platform-desktop');
     expect(url.searchParams.get('response_type')).toBe('code');

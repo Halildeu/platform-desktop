@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { DEFAULT_SKEW_MS, expiresAtFromExpiresIn, isExpired } from './token-store';
+import { DEFAULT_SKEW_MS, expiresAtFromExpiresIn, isExpired } from './token-utils';
 
 describe('token-store (saf yardımcılar)', () => {
   it('expiresAtFromExpiresIn: now + expires_in*1000', () => {

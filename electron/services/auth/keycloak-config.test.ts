@@ -9,12 +9,12 @@ import {
 } from './keycloak-config';
 
 describe('keycloak-config', () => {
-  it('env boşken güvenli varsayılanlar (realm=platform)', () => {
+  it('env boşken Halil #1 default config (platform-test, 8123)', () => {
     const cfg = loadKeycloakConfig({});
-    expect(cfg.realm).toBe('platform');
+    expect(cfg.realm).toBe('platform-test');
     expect(cfg.baseUrl).toBe('');
-    expect(cfg.clientId).toBe('');
-    expect(cfg.redirectPort).toBe(0);
+    expect(cfg.clientId).toBe('platform-desktop');
+    expect(cfg.redirectPort).toBe(8123);
     expect(cfg.scope).toBe('openid profile email');
   });
 
@@ -31,23 +31,22 @@ describe('keycloak-config', () => {
     expect(cfg.scope).toBe('openid');
   });
 
-  it('geçersiz port → 0 (OS seçsin)', () => {
-    expect(loadKeycloakConfig({ KEYCLOAK_REDIRECT_PORT: 'abc' }).redirectPort).toBe(0);
+  it('geçersiz port → 8123 default (sabit-port loopback)', () => {
+    expect(loadKeycloakConfig({ KEYCLOAK_REDIRECT_PORT: 'abc' }).redirectPort).toBe(8123);
   });
 
-  it('isConfigReady: baseUrl + clientId dolana dek false', () => {
-    expect(isConfigReady(loadKeycloakConfig({}))).toBe(false);
-    expect(isConfigReady(loadKeycloakConfig({ KEYCLOAK_BASE_URL: 'https://a' }))).toBe(false);
+  it('isConfigReady: baseUrl boşken false, dolunca true (realm+clientId default dolu)', () => {
+    expect(isConfigReady(loadKeycloakConfig({}))).toBe(false); // baseUrl boş
+    expect(isConfigReady(loadKeycloakConfig({ KEYCLOAK_BASE_URL: 'https://a' }))).toBe(true);
+    // boş clientId açıkça verilirse yine false
     expect(
-      isConfigReady(
-        loadKeycloakConfig({ KEYCLOAK_BASE_URL: 'https://a', KEYCLOAK_CLIENT_ID: 'c' }),
-      ),
-    ).toBe(true);
+      isConfigReady(loadKeycloakConfig({ KEYCLOAK_BASE_URL: 'https://a', KEYCLOAK_CLIENT_ID: '' })),
+    ).toBe(false);
   });
 
   it('OIDC endpoint URL’lerini doğru kurar', () => {
     const cfg = loadKeycloakConfig({ KEYCLOAK_BASE_URL: 'https://a', KEYCLOAK_CLIENT_ID: 'c' });
-    const base = 'https://a/realms/platform/protocol/openid-connect';
+    const base = 'https://a/realms/platform-test/protocol/openid-connect';
     expect(authorizationEndpoint(cfg)).toBe(`${base}/auth`);
     expect(tokenEndpoint(cfg)).toBe(`${base}/token`);
     expect(logoutEndpoint(cfg)).toBe(`${base}/logout`);

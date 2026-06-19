@@ -12,7 +12,7 @@
 export interface KeycloakConfig {
   /** Keycloak kök URL, örn. https://auth.example.com */
   baseUrl: string;
-  /** Realm — contract-v1: `platform` */
+  /** Realm — Halil #1 config: test realm = `platform-test` */
   realm: string;
   /** Desktop public client id (PKCE) */
   clientId: string;
@@ -26,9 +26,9 @@ export interface KeycloakConfig {
 export function loadKeycloakConfig(env: NodeJS.ProcessEnv = process.env): KeycloakConfig {
   return {
     baseUrl: (env.KEYCLOAK_BASE_URL ?? '').replace(/\/+$/, ''),
-    realm: env.KEYCLOAK_REALM ?? 'platform',
-    clientId: env.KEYCLOAK_CLIENT_ID ?? '',
-    redirectPort: Number.parseInt(env.KEYCLOAK_REDIRECT_PORT ?? '0', 10) || 0,
+    realm: env.KEYCLOAK_REALM ?? 'platform-test',
+    clientId: env.KEYCLOAK_CLIENT_ID ?? 'platform-desktop',
+    redirectPort: Number.parseInt(env.KEYCLOAK_REDIRECT_PORT ?? '8123', 10) || 8123,
     scope: env.KEYCLOAK_SCOPE ?? 'openid profile email',
   };
 }
