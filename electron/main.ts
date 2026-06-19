@@ -32,13 +32,13 @@ function createMainWindow(): void {
     height: 800,
     minWidth: 1024,
     minHeight: 700,
-    title: 'Workcube Meeting Intelligence',
+    title: 'Meeting Intelligence',
     backgroundColor: '#0f172a',
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
-      preload: path.join(__dirname, 'preload.js'),
+      preload: path.join(__dirname, 'preload.mjs'),
     },
   });
 
