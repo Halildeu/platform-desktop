@@ -5,8 +5,9 @@ import { defineConfig } from 'vitest/config';
  * plugin'ine (vite-plugin-electron) bağımlı olmasın. Unit testler saf Node/
  * TS mantığını koşar; renderer DOM testleri gerekince ayrı `environment` eklenir.
  *
- * passWithNoTests: bu CI-altyapı dalında henüz test yok (login/audio ayrı
- * dallarda); onlar merge olunca gerçek testler koşar.
+ * passWithNoTests: test dosyası henüz eklenmemiş slice'lar (audio capture vb.)
+ * merge olana kadar `vitest run` boş-suite'te fail etmesin; gerçek testler
+ * eklendiğinde otomatik koşulur.
  */
 export default defineConfig({
   test: {

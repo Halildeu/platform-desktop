@@ -7,6 +7,8 @@
 
 import { contextBridge, ipcRenderer } from 'electron';
 
+import type { AuthStatus } from './ipc/auth';
+
 const electronAPI = {
   app: {
     getVersion: (): Promise<string> => ipcRenderer.invoke('app:version'),
@@ -17,7 +19,10 @@ const electronAPI = {
     // Extend: start/stop/chunk-stream/transcript-listener
   },
   auth: {
-    // Extend: login/logout/getToken (OAuth2 PKCE)
+    // Token RENDERER'a verilmez — yalnız durum (loggedIn/expiresAt) döner.
+    login: (): Promise<AuthStatus> => ipcRenderer.invoke('auth:login'),
+    status: (): Promise<AuthStatus> => ipcRenderer.invoke('auth:status'),
+    logout: (): Promise<AuthStatus> => ipcRenderer.invoke('auth:logout'),
   },
 };
 
