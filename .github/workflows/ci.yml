@@ -11,7 +11,11 @@ permissions:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    # Self-hosted build runner (staging-sw, izole). GitHub-hosted dakika
+    # kotası billing-bloklu → Codex 019ee5aa sertleştirilmiş runner:
+    # secret-mount yok + egress firewall + no-new-privileges + cap_drop ALL.
+    # Spesifik label (generic 'staging-sw' tek başına DEĞİL).
+    runs-on: [self-hosted, platform-desktop-ci]
     steps:
       - uses: actions/checkout@v4
 
