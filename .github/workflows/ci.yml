@@ -5,6 +5,10 @@ on:
     branches: [main]
   pull_request:
 
+# Least-privilege: CI yalnız build+test koşar (deploy/comment yok) → read yeter.
+permissions:
+  contents: read
+
 jobs:
   build:
     runs-on: ubuntu-latest
