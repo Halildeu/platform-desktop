@@ -1,0 +1,3 @@
+# Codex 019ee5aa #5 — self-hosted runner savunması: workflow değişiklikleri owner-review gerektirir.
+# (Hard enforcement icin branch protection "Require review from Code Owners" gerekir — owner toggle.)
+/.github/workflows/ @Halildeu
