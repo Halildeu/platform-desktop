@@ -16,7 +16,11 @@ const electronAPI = {
   audio: {
     permissionStatus: (): Promise<{ granted: boolean }> =>
       ipcRenderer.invoke('audio:permission-status'),
-    // Extend: start/stop/chunk-stream/transcript-listener
+    start: (meetingId: string, deviceId: string): Promise<{ sessionId: string }> =>
+      ipcRenderer.invoke('audio:start', meetingId, deviceId),
+    sendChunk: (payload: { bytes: Uint8Array; startedAtMs: number }): Promise<{ seq: number }> =>
+      ipcRenderer.invoke('audio:chunk', payload),
+    finish: (): Promise<{ ok: boolean }> => ipcRenderer.invoke('audio:finish'),
   },
   auth: {
     // Token RENDERER'a verilmez — yalnız durum (loggedIn/expiresAt) döner.

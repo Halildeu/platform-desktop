@@ -23,6 +23,11 @@ function store(): TokenStore {
   return tokenStore;
 }
 
+/** Paylaşılan token deposu (audio IPC gateway JWT'si için). */
+export function getTokenStore(): TokenStore {
+  return store();
+}
+
 export function registerAuthIpc(): void {
   ipcMain.handle('auth:login', async (): Promise<AuthStatus> => {
     const cfg = loadKeycloakConfig();
