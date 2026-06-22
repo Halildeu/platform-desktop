@@ -1,11 +1,8 @@
 /**
- * Renderer capture (#2) — mic (+ ileride loopback) → AudioWorklet → PCM16 → IPC.
+ * Renderer capture (#2): mic -> AudioWorklet -> PCM16 -> IPC.
  *
- * Akış: getUserMedia → AudioWorklet (pcm-worklet.js) → Float32 frame →
- * FrameBuffer (100ms) → encodeChunk (mix + 16kHz + PCM16) → electronAPI.audio.sendChunk.
- * Main process JWT ekleyip gateway'e REST chunk olarak yollar. Chunk diske yazılmaz.
- *
- * MVP: mic-only. Loopback (sistem sesi — getDisplayMedia, Windows) sonraki iterasyon.
+ * Main process attaches the JWT and sends chunks to audio-gateway.
+ * Audio is kept in memory only.
  */
 
 import { encodeChunk } from './pcm-encode';
@@ -13,6 +10,7 @@ import { FrameBuffer } from './frame-buffer';
 
 const TARGET_RATE = 16000;
 const CHUNK_MS = 100;
+const MAX_PENDING_CHUNKS = 20;
 
 export interface Recorder {
   sessionId: string;
@@ -22,33 +20,60 @@ export interface Recorder {
 export async function startRecording(meetingId: string, deviceId: string): Promise<Recorder> {
   const api = window.electronAPI;
   if (!api) {
-    throw new Error('electronAPI yok (preload yüklenmedi)');
+    throw new Error('electronAPI yok (preload yuklenmedi)');
   }
 
-  // 1) Gateway oturumu (main process JWT ekler)
-  const { sessionId } = await api.audio.start(meetingId, deviceId);
+  const { sessionId, captureId } = await api.audio.start(meetingId, deviceId);
 
-  // 2) Mikrofon + AudioWorklet
   const mic = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1 } });
   const ctx = new AudioContext();
   await ctx.audioWorklet.addModule('/pcm-worklet.js');
   const src = ctx.createMediaStreamSource(mic);
   const node = new AudioWorkletNode(ctx, 'pcm-capture');
+  const sink = ctx.createGain();
+  sink.gain.value = 0;
 
-  // 3) Frame → 100ms chunk → PCM16 16kHz → IPC
   const frameSamples = Math.round((ctx.sampleRate * CHUNK_MS) / 1000);
   const fb = new FrameBuffer(frameSamples);
   const empty = new Float32Array(0);
+  let pendingChunks = 0;
+  let uploadError: Error | null = null;
+  let uploadTail: Promise<void> = Promise.resolve();
+
+  const enqueueChunk = (bytes: Uint8Array, startedAtMs: number): void => {
+    if (uploadError) {
+      return;
+    }
+    if (pendingChunks >= MAX_PENDING_CHUNKS) {
+      uploadError = new Error('audio upload queue full');
+      return;
+    }
+
+    pendingChunks += 1;
+    const op = uploadTail.then(async () => {
+      if (uploadError) {
+        throw uploadError;
+      }
+      await api.audio.sendChunk({ captureId, bytes, startedAtMs });
+    });
+    uploadTail = op
+      .catch((err: unknown) => {
+        uploadError = err instanceof Error ? err : new Error(String(err));
+      })
+      .finally(() => {
+        pendingChunks -= 1;
+      });
+  };
 
   node.port.onmessage = (ev: MessageEvent<Float32Array>): void => {
     for (const chunk of fb.push(ev.data)) {
       const bytes = encodeChunk(chunk, empty, ctx.sampleRate, TARGET_RATE);
-      void api.audio.sendChunk({ bytes, startedAtMs: Date.now() });
+      enqueueChunk(bytes, Date.now());
     }
   };
 
   src.connect(node);
-  // node'u hoparlöre bağlama (geri besleme/echo olmasın) — sadece veri akışı.
+  node.connect(sink).connect(ctx.destination);
 
   return {
     sessionId,
@@ -57,13 +82,23 @@ export async function startRecording(meetingId: string, deviceId: string): Promi
       const rest = fb.flush();
       if (rest) {
         const bytes = encodeChunk(rest, empty, ctx.sampleRate, TARGET_RATE);
-        await api.audio.sendChunk({ bytes, startedAtMs: Date.now() });
+        enqueueChunk(bytes, Date.now());
       }
+
+      await uploadTail;
+      const finalError = uploadError;
       src.disconnect();
       node.disconnect();
-      mic.getTracks().forEach((t) => t.stop());
+      sink.disconnect();
+      mic.getTracks().forEach((track) => {
+        track.stop();
+      });
       await ctx.close();
-      await api.audio.finish();
+
+      if (finalError) {
+        throw finalError;
+      }
+      await api.audio.finish(captureId);
     },
   };
 }

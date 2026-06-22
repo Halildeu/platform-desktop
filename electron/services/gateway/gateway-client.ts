@@ -63,8 +63,31 @@ async function httpErrorMessage(res: Response, label: string): Promise<string> {
     body = '';
   }
 
-  const safeBody = body.trim().slice(0, 500);
-  const suffix = safeBody ? ` body=${safeBody}` : contentType ? ` contentType=${contentType}` : '';
+  const fields: string[] = [];
+  if (contentType.toLowerCase().includes('application/json') && body.trim()) {
+    try {
+      const parsed = JSON.parse(body) as {
+        code?: unknown;
+        correlationId?: unknown;
+        retryable?: unknown;
+      };
+      if (typeof parsed.code === 'string') {
+        fields.push(`code=${parsed.code}`);
+      }
+      if (typeof parsed.correlationId === 'string') {
+        fields.push(`correlationId=${parsed.correlationId}`);
+      }
+      if (typeof parsed.retryable === 'boolean') {
+        fields.push(`retryable=${String(parsed.retryable)}`);
+      }
+    } catch {
+      fields.push('response=unparseable');
+    }
+  } else if (contentType) {
+    fields.push(`contentType=${contentType}`);
+  }
+
+  const suffix = fields.length > 0 ? ` ${fields.join(' ')}` : '';
   return `${label} failed: ${res.status}${suffix}`;
 }
 

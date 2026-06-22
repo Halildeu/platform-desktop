@@ -45,6 +45,32 @@ describe('ChunkSender (seq state machine)', () => {
     expect(sender.nextSeq()).toBe(3);
   });
 
+  it('send: paralel çağrılar seq değerlerini seri ve benzersiz üretir', async () => {
+    const seenSeq: string[] = [];
+    const fetchMock = vi.fn(async (url: string, opts?: RequestInit) => {
+      if (url.endsWith('/sessions')) {
+        return { ok: true, json: async () => ({ sessionId: 'SES-1' }) };
+      }
+      await new Promise((resolve) => {
+        setTimeout(resolve, 5);
+      });
+      const headers = opts?.headers as Record<string, string>;
+      seenSeq.push(headers['X-Audio-Chunk-Seq']);
+      return { ok: true };
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await sender.start('MTG-2026-0001', 'dev1');
+    const result = await Promise.all([
+      sender.send(new Uint8Array([1]), 10),
+      sender.send(new Uint8Array([2]), 20),
+    ]);
+
+    expect(result).toEqual([0, 1]);
+    expect(seenSeq).toEqual(['0', '1']);
+    expect(sender.nextSeq()).toBe(2);
+  });
+
   it('finish: active → finished', async () => {
     mockFetch();
     await sender.start('MTG-2026-0001', 'dev1');

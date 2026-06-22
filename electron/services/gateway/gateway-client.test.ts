@@ -19,19 +19,19 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe('gateway-client (saf)', () => {
-  it('loadGatewayConfig: sondaki slash temizlenir', () => {
+describe('gateway-client pure helpers', () => {
+  it('loadGatewayConfig: trims trailing slash', () => {
     expect(cfg.baseUrl).toBe('https://gw.example.com');
   });
 
-  it('URL kurucular: contract-v1 path', () => {
+  it('URL builders use contract-v1 paths', () => {
     const base = 'https://gw.example.com/api/v1/audio-gateway';
     expect(sessionsUrl(cfg)).toBe(`${base}/sessions`);
     expect(chunksUrl(cfg, 'SES-1')).toBe(`${base}/sessions/SES-1/chunks`);
     expect(finishUrl(cfg, 'SES-1')).toBe(`${base}/sessions/SES-1/finish`);
   });
 
-  it('chunkHeaders: seq + started-at + byte-length + octet-stream', () => {
+  it('chunkHeaders include seq, started-at, byte-length and octet-stream', () => {
     const h = chunkHeaders({
       jwt: 'JWT',
       idempotencyKey: 'IK',
@@ -47,15 +47,15 @@ describe('gateway-client (saf)', () => {
     expect(h['Content-Type']).toBe('application/octet-stream');
   });
 
-  it('newIdempotencyKey: 32 hex char, benzersiz', () => {
+  it('newIdempotencyKey returns unique 32-char hex values', () => {
     const a = newIdempotencyKey();
     expect(a).toMatch(/^[0-9a-f]{32}$/);
     expect(a).not.toBe(newIdempotencyKey());
   });
 });
 
-describe('gateway-client (HTTP — fetch mock)', () => {
-  it('startSession: POST /sessions + JWT + PCM16/16k/mono body', async () => {
+describe('gateway-client HTTP fetch wrapper', () => {
+  it('startSession posts session metadata as PCM16/16k/mono', async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
       json: async () => ({ sessionId: 'SES-9', chunkUploadUrl: '/c', finishUrl: '/f' }),
@@ -82,7 +82,7 @@ describe('gateway-client (HTTP — fetch mock)', () => {
     });
   });
 
-  it('sendChunk: POST /chunks + sıra header + byte body', async () => {
+  it('sendChunk posts byte body with strict sequence headers', async () => {
     const fetchMock = vi.fn().mockResolvedValue({ ok: true });
     vi.stubGlobal('fetch', fetchMock);
 
@@ -96,7 +96,7 @@ describe('gateway-client (HTTP — fetch mock)', () => {
     expect(opts.body).toBe(bytes);
   });
 
-  it('finishSession: POST /finish', async () => {
+  it('finishSession posts finish request', async () => {
     const fetchMock = vi.fn().mockResolvedValue({ ok: true });
     vi.stubGlobal('fetch', fetchMock);
     await finishSession(cfg, 'JWT', 'SES-9', 'IK');
@@ -105,8 +105,45 @@ describe('gateway-client (HTTP — fetch mock)', () => {
     );
   });
 
-  it('hata: res.ok false → throw', async () => {
+  it('throws status on non-ok response', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 502 }));
     await expect(finishSession(cfg, 'JWT', 'SES-9', 'IK')).rejects.toThrow('502');
+  });
+
+  it('sanitizes JSON error body and does not expose message or details', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: false,
+        status: 403,
+        headers: { get: () => 'application/json' },
+        text: async () =>
+          JSON.stringify({
+            code: 'AUDIO_GATEWAY_MEETING_FORBIDDEN',
+            message: 'JWT missing required claim tenantId for user@example.com',
+            correlationId: 'corr-123',
+            retryable: false,
+            details: { meetingId: 'MTG-SECRET' },
+          }),
+      }),
+    );
+
+    let message = '';
+    try {
+      await startSession(
+        cfg,
+        'JWT',
+        { meetingId: 'MTG-2026-0042', deviceId: 'dev1', language: 'tr' },
+        'IK',
+      );
+    } catch (err) {
+      message = err instanceof Error ? err.message : String(err);
+    }
+
+    expect(message).toBe(
+      'startSession failed: 403 code=AUDIO_GATEWAY_MEETING_FORBIDDEN correlationId=corr-123 retryable=false',
+    );
+    expect(message).not.toContain('user@example.com');
+    expect(message).not.toContain('MTG-SECRET');
   });
 });

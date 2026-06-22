@@ -16,11 +16,16 @@ const electronAPI = {
   audio: {
     permissionStatus: (): Promise<{ granted: boolean }> =>
       ipcRenderer.invoke('audio:permission-status'),
-    start: (meetingId: string, deviceId: string): Promise<{ sessionId: string }> =>
+    start: (meetingId: string, deviceId: string): Promise<{ sessionId: string; captureId: string }> =>
       ipcRenderer.invoke('audio:start', meetingId, deviceId),
-    sendChunk: (payload: { bytes: Uint8Array; startedAtMs: number }): Promise<{ seq: number }> =>
+    sendChunk: (payload: {
+      captureId: string;
+      bytes: Uint8Array;
+      startedAtMs: number;
+    }): Promise<{ seq: number }> =>
       ipcRenderer.invoke('audio:chunk', payload),
-    finish: (): Promise<{ ok: boolean }> => ipcRenderer.invoke('audio:finish'),
+    finish: (captureId: string): Promise<{ ok: boolean }> =>
+      ipcRenderer.invoke('audio:finish', captureId),
   },
   auth: {
     // Token RENDERER'a verilmez — yalnız durum (loggedIn/expiresAt) döner.
