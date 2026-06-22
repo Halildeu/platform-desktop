@@ -14,10 +14,12 @@ import { loadGatewayConfig } from '../services/gateway/gateway-client';
 import { getValidAccessToken } from './auth';
 
 const MAX_CHUNK_BYTES = 6_400;
+const ID_PATTERN = /^[A-Za-z0-9._:-]{1,128}$/;
 
 interface ActiveRecording {
   captureId: string;
   sender: ChunkSender;
+  lastStartedAtMs: number | null;
 }
 
 let active: ActiveRecording | null = null;
@@ -27,6 +29,14 @@ function requireText(value: unknown, label: string): string {
     throw new Error(`${label} is required`);
   }
   return value;
+}
+
+function requireIdentifier(value: unknown, label: string): string {
+  const text = requireText(value, label);
+  if (!ID_PATTERN.test(text)) {
+    throw new Error(`${label} has invalid format`);
+  }
+  return text;
 }
 
 function requireActive(captureId: unknown): ActiveRecording {
@@ -57,7 +67,11 @@ function requireChunkPayload(payload: unknown): {
   if (record.bytes.byteLength === 0 || record.bytes.byteLength > MAX_CHUNK_BYTES) {
     throw new Error(`audio chunk byte length out of bounds: ${record.bytes.byteLength}`);
   }
-  if (typeof record.startedAtMs !== 'number' || !Number.isFinite(record.startedAtMs)) {
+  if (
+    typeof record.startedAtMs !== 'number' ||
+    !Number.isFinite(record.startedAtMs) ||
+    record.startedAtMs < 0
+  ) {
     throw new Error('startedAtMs must be finite');
   }
 
@@ -78,11 +92,11 @@ export function registerAudioIpc(): void {
       const cfg = loadGatewayConfig();
       const sender = new ChunkSender(cfg, () => getValidAccessToken());
       const sessionId = await sender.start(
-        requireText(meetingId, 'meetingId'),
-        requireText(deviceId, 'deviceId'),
+        requireIdentifier(meetingId, 'meetingId'),
+        requireIdentifier(deviceId, 'deviceId'),
       );
       const captureId = randomUUID();
-      active = { captureId, sender };
+      active = { captureId, sender, lastStartedAtMs: null };
       return { sessionId, captureId };
     },
   );
@@ -92,6 +106,13 @@ export function registerAudioIpc(): void {
     async (_e, payload: unknown): Promise<{ seq: number }> => {
       const chunk = requireChunkPayload(payload);
       const recording = requireActive(chunk.captureId);
+      if (
+        recording.lastStartedAtMs !== null &&
+        chunk.startedAtMs < recording.lastStartedAtMs
+      ) {
+        throw new Error('startedAtMs must be monotonic');
+      }
+      recording.lastStartedAtMs = chunk.startedAtMs;
       const seq = await recording.sender.send(chunk.bytes, chunk.startedAtMs);
       return { seq };
     },

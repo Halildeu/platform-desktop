@@ -1,12 +1,9 @@
 /**
- * Audio DSP çekirdeği — saf, test-edilebilir (getUserMedia/AudioWorklet'ten bağımsız).
+ * Pure audio DSP helpers.
  *
- * Akış (contract-v1): loopback (sistem sesi) + mic → mix → 16kHz mono → PCM16 → chunk.
- * Bu modül DSP adımlarını saf fonksiyon olarak verir; I/O (getUserMedia, worklet,
- * IPC) ayrı katmanda. Halil (a): loopback + mic; (b): PCM16 16kHz mono → REST chunks.
+ * Flow: loopback + mic -> mix -> 16kHz mono -> PCM16 -> chunk bytes.
  */
 
-/** Float32 [-1,1] örnekleri → Int16 PCM (clamp ile taşmayı önler). */
 export function floatToPcm16(input: Float32Array): Int16Array {
   const out = new Int16Array(input.length);
   for (let i = 0; i < input.length; i += 1) {
@@ -16,7 +13,6 @@ export function floatToPcm16(input: Float32Array): Int16Array {
   return out;
 }
 
-/** Loopback + mic (iki mono kaynak) → tek mono, toplayıp [-1,1]'e clamp. */
 export function mixMono(a: Float32Array, b: Float32Array): Float32Array {
   const n = Math.max(a.length, b.length);
   const out = new Float32Array(n);
@@ -27,7 +23,23 @@ export function mixMono(a: Float32Array, b: Float32Array): Float32Array {
   return out;
 }
 
-/** Lineer resample (mono): srcRate → dstRate (ör. 48000 → 16000). */
+function lowPassForDownsample(input: Float32Array, ratio: number): Float32Array {
+  const radius = Math.max(1, Math.floor(ratio / 2));
+  const out = new Float32Array(input.length);
+  for (let i = 0; i < input.length; i += 1) {
+    let sum = 0;
+    let count = 0;
+    for (let j = i - radius; j <= i + radius; j += 1) {
+      if (j >= 0 && j < input.length) {
+        sum += input[j] ?? 0;
+        count += 1;
+      }
+    }
+    out[i] = count > 0 ? sum / count : 0;
+  }
+  return out;
+}
+
 export function resampleLinear(
   input: Float32Array,
   srcRate: number,
@@ -39,30 +51,26 @@ export function resampleLinear(
   const ratio = srcRate / dstRate;
   const outLen = Math.floor(input.length / ratio);
   const out = new Float32Array(outLen);
+  const source = ratio > 1 ? lowPassForDownsample(input, ratio) : input;
   for (let i = 0; i < outLen; i += 1) {
     const idx = i * ratio;
     const i0 = Math.floor(idx);
-    const i1 = Math.min(i0 + 1, input.length - 1);
+    const i1 = Math.min(i0 + 1, source.length - 1);
     const frac = idx - i0;
-    out[i] = (input[i0] ?? 0) * (1 - frac) + (input[i1] ?? 0) * frac;
+    out[i] = (source[i0] ?? 0) * (1 - frac) + (source[i1] ?? 0) * frac;
   }
   return out;
 }
 
-/** Int16 PCM → little-endian byte'lar (chunk gövdesi: octet-stream). */
 export function pcm16ToBytes(pcm: Int16Array): Uint8Array {
   const bytes = new Uint8Array(pcm.length * 2);
   const view = new DataView(bytes.buffer);
   for (let i = 0; i < pcm.length; i += 1) {
-    view.setInt16(i * 2, pcm[i] ?? 0, true); // little-endian
+    view.setInt16(i * 2, pcm[i] ?? 0, true);
   }
   return bytes;
 }
 
-/**
- * Tek geçişte capture DSP: (loopback, mic) → mix → 16kHz → PCM16 byte'lar.
- * `srcRate` AudioContext örnekleme hızı (genelde 48000).
- */
 export function encodeChunk(
   loopback: Float32Array,
   mic: Float32Array,

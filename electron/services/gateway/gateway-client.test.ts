@@ -24,6 +24,22 @@ describe('gateway-client pure helpers', () => {
     expect(cfg.baseUrl).toBe('https://gw.example.com');
   });
 
+  it('loadGatewayConfig rejects missing or relative base URLs', () => {
+    expect(() => loadGatewayConfig({})).toThrow('GATEWAY_BASE_URL is required');
+    expect(() => loadGatewayConfig({ GATEWAY_BASE_URL: '/audio-gateway' })).toThrow(
+      'GATEWAY_BASE_URL must be an absolute URL',
+    );
+  });
+
+  it('loadGatewayConfig requires https except local development URLs', () => {
+    expect(() => loadGatewayConfig({ GATEWAY_BASE_URL: 'http://gw.example.com' })).toThrow(
+      'GATEWAY_BASE_URL must use https',
+    );
+    expect(loadGatewayConfig({ GATEWAY_BASE_URL: 'http://127.0.0.1:8210' }).baseUrl).toBe(
+      'http://127.0.0.1:8210',
+    );
+  });
+
   it('URL builders use contract-v1 paths', () => {
     const base = 'https://gw.example.com/api/v1/audio-gateway';
     expect(sessionsUrl(cfg)).toBe(`${base}/sessions`);

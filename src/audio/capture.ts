@@ -23,15 +23,32 @@ export async function startRecording(meetingId: string, deviceId: string): Promi
     throw new Error('electronAPI yok (preload yuklenmedi)');
   }
 
-  const { sessionId, captureId } = await api.audio.start(meetingId, deviceId);
-
   const mic = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1 } });
   const ctx = new AudioContext();
-  await ctx.audioWorklet.addModule('/pcm-worklet.js');
+  try {
+    await ctx.audioWorklet.addModule('/pcm-worklet.js');
+  } catch (err) {
+    mic.getTracks().forEach((track) => {
+      track.stop();
+    });
+    await ctx.close();
+    throw err;
+  }
   const src = ctx.createMediaStreamSource(mic);
   const node = new AudioWorkletNode(ctx, 'pcm-capture');
   const sink = ctx.createGain();
   sink.gain.value = 0;
+  let session: { sessionId: string; captureId: string };
+  try {
+    session = await api.audio.start(meetingId, deviceId);
+  } catch (err) {
+    mic.getTracks().forEach((track) => {
+      track.stop();
+    });
+    await ctx.close();
+    throw err;
+  }
+  const { sessionId, captureId } = session;
 
   const frameSamples = Math.round((ctx.sampleRate * CHUNK_MS) / 1000);
   const fb = new FrameBuffer(frameSamples);

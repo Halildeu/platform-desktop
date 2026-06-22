@@ -17,8 +17,31 @@ export interface GatewayConfig {
   baseUrl: string;
 }
 
+function isLocalHttp(url: URL): boolean {
+  return (
+    url.protocol === 'http:' &&
+    (url.hostname === 'localhost' || url.hostname === '127.0.0.1' || url.hostname === '::1')
+  );
+}
+
 export function loadGatewayConfig(env: NodeJS.ProcessEnv = process.env): GatewayConfig {
-  return { baseUrl: (env.GATEWAY_BASE_URL ?? '').replace(/\/+$/, '') };
+  const raw = (env.GATEWAY_BASE_URL ?? '').replace(/\/+$/, '');
+  if (!raw) {
+    throw new Error('GATEWAY_BASE_URL is required');
+  }
+
+  let parsed: URL;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    throw new Error('GATEWAY_BASE_URL must be an absolute URL');
+  }
+
+  if (parsed.protocol !== 'https:' && !isLocalHttp(parsed)) {
+    throw new Error('GATEWAY_BASE_URL must use https, except local development URLs');
+  }
+
+  return { baseUrl: raw };
 }
 
 export function sessionsUrl(cfg: GatewayConfig): string {
