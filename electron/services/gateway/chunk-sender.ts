@@ -23,7 +23,7 @@ export class ChunkSender {
 
   constructor(
     private readonly cfg: GatewayConfig,
-    private readonly getJwt: () => string,
+    private readonly getJwt: () => string | Promise<string>,
   ) {}
 
   getState(): SessionState {
@@ -41,7 +41,7 @@ export class ChunkSender {
     }
     const info = await startSession(
       this.cfg,
-      this.getJwt(),
+      await this.getJwt(),
       { meetingId, deviceId, language },
       newIdempotencyKey(),
     );
@@ -59,7 +59,7 @@ export class ChunkSender {
     const seq = this.seq + 1;
     await sendChunk(
       this.cfg,
-      this.getJwt(),
+      await this.getJwt(),
       this.sessionId,
       { seq, bytes, startedAtMs },
       newIdempotencyKey(),
@@ -72,7 +72,7 @@ export class ChunkSender {
     if (this.state !== 'active' || this.sessionId === null) {
       throw new Error('no active session');
     }
-    await finishSession(this.cfg, this.getJwt(), this.sessionId, newIdempotencyKey());
+    await finishSession(this.cfg, await this.getJwt(), this.sessionId, newIdempotencyKey());
     this.state = 'finished';
   }
 }

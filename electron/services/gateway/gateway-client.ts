@@ -54,6 +54,20 @@ export function chunkHeaders(args: {
   };
 }
 
+async function httpErrorMessage(res: Response, label: string): Promise<string> {
+  const contentType = res.headers?.get('content-type') ?? '';
+  let body = '';
+  try {
+    body = typeof res.text === 'function' ? await res.text() : '';
+  } catch {
+    body = '';
+  }
+
+  const safeBody = body.trim().slice(0, 500);
+  const suffix = safeBody ? ` body=${safeBody}` : contentType ? ` contentType=${contentType}` : '';
+  return `${label} failed: ${res.status}${suffix}`;
+}
+
 export interface StartSessionArgs {
   meetingId: string;
   deviceId: string;
@@ -90,7 +104,7 @@ export async function startSession(
     }),
   });
   if (!res.ok) {
-    throw new Error(`startSession failed: ${res.status}`);
+    throw new Error(await httpErrorMessage(res, 'startSession'));
   }
   return (await res.json()) as SessionInfo;
 }
@@ -115,7 +129,7 @@ export async function sendChunk(
     body: chunk.bytes,
   });
   if (!res.ok) {
-    throw new Error(`sendChunk failed: ${res.status} (seq=${chunk.seq})`);
+    throw new Error(`${await httpErrorMessage(res, 'sendChunk')} (seq=${chunk.seq})`);
   }
 }
 
@@ -134,6 +148,6 @@ export async function finishSession(
     },
   });
   if (!res.ok) {
-    throw new Error(`finishSession failed: ${res.status}`);
+    throw new Error(await httpErrorMessage(res, 'finishSession'));
   }
 }

@@ -2,21 +2,24 @@ import { useEffect, useRef, useState } from 'react';
 
 import { type Recorder, startRecording } from './audio/capture';
 
-/**
- * App — Meeting Intelligence root (Faz 24, bağımsız ürün).
- *
- * Login (Keycloak PKCE) + toplantı kaydı (mic → PCM16 → gateway). Token RENDERER'da
- * TUTULMAZ (main-process). Sonraki: loopback (sistem sesi), live transcript, summary.
- */
 function newMeetingId(): string {
   const year = new Date().getFullYear();
   const n = Math.floor(Math.random() * 100_000_000);
   return `MTG-${year}-${n}`;
 }
 
+interface SafeJwtClaims {
+  iss?: string;
+  aud?: string | string[];
+  azp?: string;
+  scope?: string;
+  exp?: number;
+}
+
 function App() {
   const [version, setVersion] = useState('');
   const [loggedIn, setLoggedIn] = useState(false);
+  const [claims, setClaims] = useState<SafeJwtClaims | null>(null);
   const [busy, setBusy] = useState(false);
   const [recording, setRecording] = useState(false);
   const [status, setStatus] = useState('');
@@ -30,7 +33,10 @@ function App() {
       .catch(() => setVersion('unknown'));
     void window.electronAPI?.auth
       .status()
-      .then((s) => setLoggedIn(s.loggedIn))
+      .then((s) => {
+        setLoggedIn(s.loggedIn);
+        setClaims(s.claims ?? null);
+      })
       .catch(() => undefined);
   }, []);
 
@@ -40,6 +46,7 @@ function App() {
     try {
       const s = await window.electronAPI?.auth.login();
       setLoggedIn(s?.loggedIn ?? false);
+      setClaims(s?.claims ?? null);
     } catch (e) {
       setError(`Giriş başarısız: ${(e as Error).message}`);
     } finally {
@@ -48,8 +55,15 @@ function App() {
   };
 
   const handleLogout = async (): Promise<void> => {
-    const s = await window.electronAPI?.auth.logout();
-    setLoggedIn(s?.loggedIn ?? false);
+    setError('');
+    try {
+      const s = await window.electronAPI?.auth.logout();
+      setLoggedIn(s?.loggedIn ?? false);
+      setClaims(null);
+      setStatus('Çıkış yapıldı; Keycloak logout/revoke isteği gönderildi.');
+    } catch (e) {
+      setError(`Çıkış başarısız: ${(e as Error).message}`);
+    }
   };
 
   const handleStart = async (): Promise<void> => {
@@ -87,25 +101,42 @@ function App() {
           <>
             <p>Toplantı kaydı için giriş yapın.</p>
             <button type="button" onClick={() => void handleLogin()} disabled={busy}>
-              {busy ? 'Giriş açılıyor…' : 'Giriş (Keycloak)'}
+              {busy ? 'Giriş açılıyor...' : 'Giriş (Keycloak)'}
             </button>
           </>
         ) : recording ? (
           <>
-            <p>🔴 Kayıt sürüyor…</p>
+            <p>Kayıt sürüyor...</p>
             <button type="button" onClick={() => void handleStop()}>
               Bitir
             </button>
           </>
         ) : (
           <>
-            <p>✓ Giriş yapıldı. Toplantı kaydına hazır.</p>
+            <p>Giriş yapıldı. Toplantı kaydına hazır.</p>
             <button type="button" onClick={() => void handleStart()}>
               Kaydet
             </button>
             <button type="button" onClick={() => void handleLogout()} style={{ marginLeft: 8 }}>
               Çıkış
             </button>
+            {claims ? (
+              <section className="claims">
+                <h2>JWT claim özeti</h2>
+                <dl>
+                  <dt>iss</dt>
+                  <dd>{claims.iss ?? '-'}</dd>
+                  <dt>aud</dt>
+                  <dd>{Array.isArray(claims.aud) ? claims.aud.join(', ') : claims.aud ?? '-'}</dd>
+                  <dt>azp</dt>
+                  <dd>{claims.azp ?? '-'}</dd>
+                  <dt>scope</dt>
+                  <dd>{claims.scope ?? '-'}</dd>
+                  <dt>exp</dt>
+                  <dd>{claims.exp ? new Date(claims.exp * 1000).toLocaleString() : '-'}</dd>
+                </dl>
+              </section>
+            ) : null}
           </>
         )}
         {status ? <p className="status">{status}</p> : null}

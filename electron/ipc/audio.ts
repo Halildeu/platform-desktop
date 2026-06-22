@@ -10,7 +10,7 @@ import { ipcMain } from 'electron';
 
 import { ChunkSender } from '../services/gateway/chunk-sender';
 import { loadGatewayConfig } from '../services/gateway/gateway-client';
-import { getTokenStore } from './auth';
+import { getValidAccessToken } from './auth';
 
 let sender: ChunkSender | null = null;
 
@@ -19,14 +19,7 @@ export function registerAudioIpc(): void {
     'audio:start',
     async (_e, meetingId: string, deviceId: string): Promise<{ sessionId: string }> => {
       const cfg = loadGatewayConfig();
-      const tokenStore = getTokenStore();
-      sender = new ChunkSender(cfg, () => {
-        const t = tokenStore.getAccess();
-        if (!t) {
-          throw new Error('not logged in (no access token)');
-        }
-        return t.accessToken;
-      });
+      sender = new ChunkSender(cfg, () => getValidAccessToken());
       const sessionId = await sender.start(meetingId, deviceId);
       return { sessionId };
     },
