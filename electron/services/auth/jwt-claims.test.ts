@@ -18,6 +18,7 @@ describe('safeJwtClaims', () => {
         azp: 'platform-desktop',
         scope: 'openid profile email',
         exp: 1_800_000_000,
+        tenantId: 1,
         preferred_username: 'zeynep@example.com',
       }),
       'signature',
@@ -29,6 +30,7 @@ describe('safeJwtClaims', () => {
       azp: 'platform-desktop',
       scope: 'openid profile email',
       exp: 1_800_000_000,
+      tenantId: 1,
     });
   });
 

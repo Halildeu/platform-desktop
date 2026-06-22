@@ -14,6 +14,7 @@ interface SafeJwtClaims {
   azp?: string;
   scope?: string;
   exp?: number;
+  tenantId?: number | string;
 }
 
 function App() {
@@ -132,6 +133,8 @@ function App() {
                   <dd>{claims.azp ?? '-'}</dd>
                   <dt>scope</dt>
                   <dd>{claims.scope ?? '-'}</dd>
+                  <dt>tenantId</dt>
+                  <dd>{claims.tenantId ?? '-'}</dd>
                   <dt>exp</dt>
                   <dd>{claims.exp ? new Date(claims.exp * 1000).toLocaleString() : '-'}</dd>
                 </dl>

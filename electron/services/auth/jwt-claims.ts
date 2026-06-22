@@ -6,6 +6,7 @@ export interface SafeJwtClaims {
   azp?: string;
   scope?: string;
   exp?: number;
+  tenantId?: number | string;
 }
 
 function decodeBase64UrlJson(segment: string): unknown {
@@ -45,6 +46,9 @@ export function safeJwtClaims(token: string | null | undefined): SafeJwtClaims |
     if (typeof claims.azp === 'string') out.azp = claims.azp;
     if (typeof claims.scope === 'string') out.scope = claims.scope;
     if (typeof claims.exp === 'number') out.exp = claims.exp;
+    if (typeof claims.tenantId === 'number' || typeof claims.tenantId === 'string') {
+      out.tenantId = claims.tenantId;
+    }
     return out;
   } catch {
     return null;
