@@ -1,0 +1,37 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Least-privilege: CI yalnız build+test koşar (deploy/comment yok) → read yeter.
+permissions:
+  contents: read
+
+jobs:
+  build:
+    # Self-hosted build runner (staging-sw, izole). GitHub-hosted dakika
+    # kotası billing-bloklu → Codex 019ee5aa sertleştirilmiş runner:
+    # secret-mount yok + egress firewall + no-new-privileges + cap_drop ALL.
+    # Spesifik label (generic 'staging-sw' tek başına DEĞİL).
+    runs-on: [self-hosted, platform-desktop-ci]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Typecheck (renderer)
+        run: npx tsc --noEmit
+
+      - name: Typecheck (electron)
+        run: npx tsc --noEmit -p tsconfig.electron.json
+
+      - name: Unit tests
+        run: npx vitest run --config vitest.config.ts

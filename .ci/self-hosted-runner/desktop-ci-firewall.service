@@ -1,0 +1,16 @@
+# Codex 019ee5aa #1 persistence — platform-desktop-ci runner egress firewall.
+# docker.service DOCKER-USER chain'i boot'ta yeniden kurar; bu oneshot
+# idempotent firewall script'imi SONRASINDA re-apply eder (reboot guard).
+# Docker'ın dinamik kurallarını over-capture etmez (rules.v4 save footgun yok).
+[Unit]
+Description=platform-desktop-ci runner egress firewall (DOCKER-USER deny private/host)
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/home/halil/desktop-ci-runner/desktop-ci-firewall.sh
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

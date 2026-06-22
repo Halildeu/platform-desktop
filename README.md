@@ -1,13 +1,13 @@
 # platform-desktop
 
-Meeting Intelligence Desktop Client — Workcube ERP ekosistemine entegre **Electron + React + TypeScript** masaüstü uygulaması.
+Meeting Intelligence Desktop Client — **Faz 24 bağımsız Meeting Intelligence ürünü** için **Electron + React + TypeScript** masaüstü uygulaması.
 
 ## Amaç
 
 Toplantı katılımcıları için masaüstü deneyimi (mac/Windows/Linux):
 
-- 🎙️ Mikrofon ses yakalama (getUserMedia + WebRTC)
-- 📡 WebSocket akış → `audio-gateway-service` (platform-backend)
+- 🎙️ Sistem sesi (loopback) + mikrofon yakalama — tüm platform / yüz yüze / hibrit tek client
+- 📡 REST chunk akışı → `audio-gateway-service` (`POST /sessions → /chunks → /finish`)
 - 📝 Canlı geçici transkript + kesinleşmiş metin
 - 🗣️ Konuşmacı ayrımı (diarization render)
 - 📋 Özet + karar + aksiyon paneli
@@ -35,8 +35,8 @@ Faz 24 M6 Integration kapsamında konumlanır.
 | **UI** | React 19 + TypeScript |
 | **Build** | Vite (renderer) + electron-builder (packaging) |
 | **State** | Redux Toolkit (platform-web reuse) |
-| **Audio** | getUserMedia + Web Audio API + AudioWorklet |
-| **Network** | WebSocket (`/api/meeting-audio/sessions/{id}/stream`) |
+| **Audio** | getUserMedia (mic) + loopback (sistem sesi) + AudioWorklet → PCM16 16kHz mono |
+| **Network** | REST chunks (`POST /api/v1/audio-gateway/sessions/{id}/chunks`; WS `/stream` planned-404) |
 | **Auth** | Keycloak OAuth2 PKCE (`keycloak-js` + custom URI scheme callback) |
 | **Test** | Vitest (unit) + Playwright (e2e renderer) + Spectron (Electron main) |
 | **Package** | electron-builder — DMG (macOS) + NSIS (Windows) + AppImage (Linux) |
@@ -49,18 +49,18 @@ Faz 24 M6 Integration kapsamında konumlanır.
    │
    ├─ Renderer (React) → Login (Keycloak PKCE) → Meeting UI
    │
-   ├─ Main process → Audio capture (Web Audio API)
-   │                  ↓ chunk-by-chunk PCM16
-   │                  WebSocket secure
+   ├─ Main process → Audio capture (loopback + mic, Web Audio API)
+   │                  ↓ chunk-by-chunk PCM16 (16kHz mono)
+   │                  REST chunks (idempotent + strict-contiguous seq)
    │
-   └─ → audio-gateway-service (platform-backend)
+   └─ → audio-gateway-service (POST /sessions → /chunks → /finish)
               ↓ Redis queue (PR-queue-01)
               live-stt-service (platform-ai) → draft transcript
               final-stt-service                → final transcript
               diarization-service              → speaker tags
               meeting-ai-service               → summary + actions
               ↓
-        Renderer canlı UI güncellemesi (WebSocket bidirectional)
+        Renderer canlı UI güncellemesi (status/sonuç; meetingId ile tek dashboard)
 ```
 
 ## Reuse — Workcube Ekosisteminden
@@ -141,4 +141,4 @@ npm run package:linux
 
 ## Lisans
 
-Internal — Workcube ERP platform.
+Internal — Faz 24 Meeting Intelligence (bağımsız ürün).

@@ -1,35 +1,70 @@
 import { useEffect, useState } from 'react';
 
 /**
- * App — Workcube Meeting Intelligence root component.
+ * App — Meeting Intelligence root (Faz 24, bağımsız ürün).
  *
- * Faz 24 M6 Integration — PR-desktop-01 skeleton. Sonraki PR'larda:
- * - Keycloak SSO PKCE login
- * - Meeting list + create
- * - Audio capture (mikrofon)
- * - Live transcript view
- * - Speaker diarization timeline
- * - Summary + actions panel
+ * PR-desktop-01: Keycloak SSO PKCE login UI. Token RENDERER'da TUTULMAZ —
+ * yalnız `loggedIn` durumu (gerçek OAuth + token main-process'te).
+ * Sonraki: audio capture (loopback+mic), live transcript, summary.
  */
-function App(): JSX.Element {
-  const [version, setVersion] = useState<string>('');
+function App() {
+  const [version, setVersion] = useState('');
+  const [loggedIn, setLoggedIn] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
 
   useEffect(() => {
     void window.electronAPI?.app
       .getVersion()
-      .then((v: string) => setVersion(v))
+      .then((v) => setVersion(v))
       .catch(() => setVersion('unknown'));
+    void window.electronAPI?.auth
+      .status()
+      .then((s) => setLoggedIn(s.loggedIn))
+      .catch(() => undefined);
   }, []);
+
+  const handleLogin = async (): Promise<void> => {
+    setBusy(true);
+    setError('');
+    try {
+      const s = await window.electronAPI?.auth.login();
+      setLoggedIn(s?.loggedIn ?? false);
+    } catch (e) {
+      setError(`Giriş başarısız: ${(e as Error).message}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleLogout = async (): Promise<void> => {
+    const s = await window.electronAPI?.auth.logout();
+    setLoggedIn(s?.loggedIn ?? false);
+  };
 
   return (
     <div className="app-root">
       <header className="app-header">
-        <h1>Workcube Meeting Intelligence</h1>
+        <h1>Meeting Intelligence</h1>
         <span className="version">v{version}</span>
       </header>
       <main className="app-main">
-        <p>Faz 24 M6 Integration — skeleton.</p>
-        <p>Next: Keycloak SSO + audio capture + live transcript.</p>
+        {loggedIn ? (
+          <>
+            <p>✓ Giriş yapıldı. Toplantı kaydına hazır.</p>
+            <button type="button" onClick={() => void handleLogout()}>
+              Çıkış
+            </button>
+          </>
+        ) : (
+          <>
+            <p>Toplantı kaydı için giriş yapın.</p>
+            <button type="button" onClick={() => void handleLogin()} disabled={busy}>
+              {busy ? 'Giriş açılıyor…' : 'Giriş (Keycloak)'}
+            </button>
+          </>
+        )}
+        {error ? <p className="error">{error}</p> : null}
       </main>
     </div>
   );

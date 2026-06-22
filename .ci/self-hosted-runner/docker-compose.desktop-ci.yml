@@ -1,0 +1,61 @@
+# platform-desktop BUILD-only self-hosted runner (staging-sw).
+#
+# Codex 019ee5aa SECURITY review absorb. Deploy runner'dan (docker-compose.yml)
+# STRICTLY daha kilitli — build prod erişimi GEREKTİRMEZ (node/npm/tsc/vitest):
+#   - network: dedicated bridge (NOT host) — yalnız internet egress (npm).
+#   - egress firewall: DOCKER-USER chain runner subnet → RFC1918/link-local DROP
+#     (ayrı runtime; bu compose'un dışında, deploy script'inde kurulur).
+#   - mounts: secret YOK (kubeconfig/web-stage/docker.sock YOK) — sadece
+#     entrypoint + cleanup hook RO.
+#   - no-new-privileges + cap_drop ALL → image'daki NOPASSWD sudo nötralize.
+#   - registration: tek-seferlik token (PAT container'da YOK).
+#   - job-completed hook ile _work wipe (non-ephemeral state-poisoning guard).
+#
+# Setup:
+#   1. RUNNER_REGISTRATION_TOKEN al:
+#      gh api -X POST repos/Halildeu/platform-desktop/actions/runners/registration-token --jq .token
+#   2. RUNNER_REGISTRATION_TOKEN=<token> docker compose -f docker-compose.desktop-ci.yml up -d
+#   3. GitHub Settings → Actions → Runners'da staging-sw-desktop-ci görünür.
+
+services:
+  desktop-ci-runner:
+    image: gha-runner-testai-deploy:latest    # mevcut kanıtlı image reuse (no rebuild)
+    container_name: platform-gha-runner-desktop-ci
+    restart: unless-stopped
+    user: runner
+    init: true
+
+    # Codex #2 — privilege profili düşür (image'da runner NOPASSWD sudo'da).
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    privileged: false
+    pids_limit: 512
+    mem_limit: 6g
+    cpus: 2.0
+
+    networks:
+      - desktop-ci-net
+
+    environment:
+      RUNNER_REPO: Halildeu/platform-desktop
+      RUNNER_NAME: staging-sw-desktop-ci
+      RUNNER_LABELS: self-hosted,staging-sw,platform-desktop-ci
+      RUNNER_REGISTRATION_TOKEN: ${RUNNER_REGISTRATION_TOKEN:-}
+
+    entrypoint: ["/usr/local/bin/desktop-ci-entrypoint.sh"]
+
+    volumes:
+      # SADECE script'ler (RO). Secret mount YOK.
+      - ./desktop-ci-entrypoint.sh:/usr/local/bin/desktop-ci-entrypoint.sh:ro
+      - ./hooks:/home/runner/hooks:ro
+      # Codex S1 (deploy runner'dan miras): docker.sock NO mount.
+
+networks:
+  desktop-ci-net:
+    name: platform-desktop-ci-net
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.31.255.0/24

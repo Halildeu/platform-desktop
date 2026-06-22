@@ -13,9 +13,13 @@
  * - Crash report PII redacted
  */
 
+import 'dotenv/config'; // .env → process.env (Keycloak/gateway config), en başta
+
 import { app, BrowserWindow, ipcMain, shell } from 'electron';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+
+import { registerAuthIpc } from './ipc/auth';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -28,13 +32,13 @@ function createMainWindow(): void {
     height: 800,
     minWidth: 1024,
     minHeight: 700,
-    title: 'Workcube Meeting Intelligence',
+    title: 'Meeting Intelligence',
     backgroundColor: '#0f172a',
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
-      preload: path.join(__dirname, 'preload.js'),
+      preload: path.join(__dirname, 'preload.mjs'),
     },
   });
 
@@ -67,6 +71,7 @@ ipcMain.handle('audio:permission-status', async () => {
 });
 
 void app.whenReady().then(() => {
+  registerAuthIpc(); // #1 auth:login / auth:status / auth:logout
   createMainWindow();
 
   app.on('activate', () => {
