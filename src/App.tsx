@@ -73,6 +73,12 @@ function App() {
     setStartPending(true);
     try {
       const rec = await startRecording(newMeetingId(), 'desktop-1');
+      rec.onError((err) => {
+        recorderRef.current = null;
+        setRecording(false);
+        setError(`Kayıt hatası (ses kaybı): ${err.message}`);
+        setStatus('');
+      });
       recorderRef.current = rec;
       setRecording(true);
       setStatus(`Kayıt başladı (oturum ${rec.sessionId})`);

@@ -15,6 +15,7 @@ const MAX_PENDING_CHUNKS = 20;
 export interface Recorder {
   sessionId: string;
   stop: () => Promise<void>;
+  onError: (handler: (err: Error) => void) => void;
 }
 
 export async function startRecording(meetingId: string, deviceId: string): Promise<Recorder> {
@@ -56,6 +57,19 @@ export async function startRecording(meetingId: string, deviceId: string): Promi
   let pendingChunks = 0;
   let uploadError: Error | null = null;
   let uploadTail: Promise<void> = Promise.resolve();
+  let errorHandler: ((err: Error) => void) | null = null;
+
+  const stopCapture = (): void => {
+    node.port.onmessage = null;
+    src.disconnect();
+    node.disconnect();
+    sink.disconnect();
+    mic.getTracks().forEach((track) => {
+      track.stop();
+    });
+    void ctx.close();
+    void api.audio.abort(captureId).catch(() => {});
+  };
 
   const enqueueChunk = (bytes: Uint8Array, startedAtMs: number): void => {
     if (uploadError) {
@@ -63,6 +77,8 @@ export async function startRecording(meetingId: string, deviceId: string): Promi
     }
     if (pendingChunks >= MAX_PENDING_CHUNKS) {
       uploadError = new Error('audio upload queue full');
+      stopCapture();
+      errorHandler?.(uploadError);
       return;
     }
 
@@ -75,7 +91,12 @@ export async function startRecording(meetingId: string, deviceId: string): Promi
     });
     uploadTail = op
       .catch((err: unknown) => {
-        uploadError = err instanceof Error ? err : new Error(String(err));
+        const error = err instanceof Error ? err : new Error(String(err));
+        if (!uploadError) {
+          uploadError = error;
+          stopCapture();
+          errorHandler?.(error);
+        }
       })
       .finally(() => {
         pendingChunks -= 1;
@@ -92,28 +113,43 @@ export async function startRecording(meetingId: string, deviceId: string): Promi
   src.connect(node);
   node.connect(sink).connect(ctx.destination);
 
+  let stopped = false;
+
   return {
     sessionId,
+    onError: (handler: (err: Error) => void): void => {
+      errorHandler = handler;
+    },
     stop: async (): Promise<void> => {
+      if (stopped) return;
+      stopped = true;
+
       node.port.onmessage = null;
-      const rest = fb.flush();
-      if (rest) {
-        const bytes = encodeChunk(rest, empty, ctx.sampleRate, TARGET_RATE);
-        enqueueChunk(bytes, Date.now());
+      if (!uploadError) {
+        const rest = fb.flush();
+        if (rest) {
+          const bytes = encodeChunk(rest, empty, ctx.sampleRate, TARGET_RATE);
+          enqueueChunk(bytes, Date.now());
+        }
       }
 
       await uploadTail;
       const finalError = uploadError;
-      src.disconnect();
-      node.disconnect();
-      sink.disconnect();
-      mic.getTracks().forEach((track) => {
-        track.stop();
-      });
-      await ctx.close();
+
+      if (!uploadError) {
+        src.disconnect();
+        node.disconnect();
+        sink.disconnect();
+        mic.getTracks().forEach((track) => {
+          track.stop();
+        });
+        await ctx.close();
+      }
 
       if (finalError) {
-        await api.audio.abort(captureId).catch(() => {});
+        if (!uploadError) {
+          await api.audio.abort(captureId).catch(() => {});
+        }
         throw finalError;
       }
       await api.audio.finish(captureId);

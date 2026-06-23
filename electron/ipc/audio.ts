@@ -24,6 +24,7 @@ interface ActiveRecording {
 
 let active: ActiveRecording | null = null;
 let starting = false;
+let finishing = false;
 
 function requireText(value: unknown, label: string): string {
   if (typeof value !== 'string' || value.trim() === '') {
@@ -110,6 +111,9 @@ export function registerAudioIpc(): void {
   ipcMain.handle(
     'audio:chunk',
     async (_e, payload: unknown): Promise<{ seq: number }> => {
+      if (finishing) {
+        throw new Error('recording session is finishing');
+      }
       const chunk = requireChunkPayload(payload);
       const recording = requireActive(chunk.captureId);
       if (
@@ -126,9 +130,11 @@ export function registerAudioIpc(): void {
 
   ipcMain.handle('audio:finish', async (_e, captureId: unknown): Promise<{ ok: boolean }> => {
     const recording = requireActive(captureId);
+    finishing = true;
     try {
       await recording.sender.finish();
     } finally {
+      finishing = false;
       if (active?.captureId === recording.captureId) {
         active = null;
       }

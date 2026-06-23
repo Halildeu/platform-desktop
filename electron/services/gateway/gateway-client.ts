@@ -59,13 +59,16 @@ export function newIdempotencyKey(): string {
   return randomBytes(16).toString('hex');
 }
 
-/** Chunk admission header'ları (contract-v1: seq + started-at + byte-length). */
+/** Chunk admission header'ları (contract-v1: seq + started-at + byte-length + format/rate/channels). */
 export function chunkHeaders(args: {
   jwt: string;
   idempotencyKey: string;
   seq: number;
   startedAtMs: number;
   byteLength: number;
+  audioFormat?: string;
+  sampleRateHz?: number;
+  channels?: number;
 }): Record<string, string> {
   return {
     Authorization: `Bearer ${args.jwt}`,
@@ -73,6 +76,9 @@ export function chunkHeaders(args: {
     'X-Audio-Chunk-Seq': String(args.seq),
     'X-Audio-Chunk-Started-At-Ms': String(args.startedAtMs),
     'X-Audio-Byte-Length': String(args.byteLength),
+    'X-Audio-Format': args.audioFormat ?? 'PCM16',
+    'X-Audio-Sample-Rate-Hz': String(args.sampleRateHz ?? 16000),
+    'X-Audio-Channels': String(args.channels ?? 1),
     'Content-Type': 'application/octet-stream',
   };
 }

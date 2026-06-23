@@ -47,7 +47,7 @@ describe('gateway-client pure helpers', () => {
     expect(finishUrl(cfg, 'SES-1')).toBe(`${base}/sessions/SES-1/finish`);
   });
 
-  it('chunkHeaders include seq, started-at, byte-length and octet-stream', () => {
+  it('chunkHeaders include seq, started-at, byte-length, format/rate/channels and octet-stream', () => {
     const h = chunkHeaders({
       jwt: 'JWT',
       idempotencyKey: 'IK',
@@ -60,7 +60,26 @@ describe('gateway-client pure helpers', () => {
     expect(h['X-Audio-Chunk-Seq']).toBe('3');
     expect(h['X-Audio-Chunk-Started-At-Ms']).toBe('123');
     expect(h['X-Audio-Byte-Length']).toBe('640');
+    expect(h['X-Audio-Format']).toBe('PCM16');
+    expect(h['X-Audio-Sample-Rate-Hz']).toBe('16000');
+    expect(h['X-Audio-Channels']).toBe('1');
     expect(h['Content-Type']).toBe('application/octet-stream');
+  });
+
+  it('chunkHeaders accepts custom format/rate/channels', () => {
+    const h = chunkHeaders({
+      jwt: 'JWT',
+      idempotencyKey: 'IK',
+      seq: 0,
+      startedAtMs: 0,
+      byteLength: 100,
+      audioFormat: 'WEBM_OPUS',
+      sampleRateHz: 48000,
+      channels: 2,
+    });
+    expect(h['X-Audio-Format']).toBe('WEBM_OPUS');
+    expect(h['X-Audio-Sample-Rate-Hz']).toBe('48000');
+    expect(h['X-Audio-Channels']).toBe('2');
   });
 
   it('newIdempotencyKey returns unique 32-char hex values', () => {
@@ -109,6 +128,9 @@ describe('gateway-client HTTP fetch wrapper', () => {
     expect(url).toBe('https://gw.example.com/api/v1/audio-gateway/sessions/SES-9/chunks');
     expect(opts.headers['X-Audio-Chunk-Seq']).toBe('0');
     expect(opts.headers['X-Audio-Byte-Length']).toBe('4');
+    expect(opts.headers['X-Audio-Format']).toBe('PCM16');
+    expect(opts.headers['X-Audio-Sample-Rate-Hz']).toBe('16000');
+    expect(opts.headers['X-Audio-Channels']).toBe('1');
     expect(opts.body).toBe(bytes);
   });
 
