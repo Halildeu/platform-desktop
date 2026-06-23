@@ -184,4 +184,36 @@ describe('gateway-client HTTP fetch wrapper', () => {
     expect(message).not.toContain('user@example.com');
     expect(message).not.toContain('MTG-SECRET');
   });
+
+  it('redacts code/correlationId that do not match safe patterns', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: false,
+        status: 500,
+        headers: { get: () => 'application/json' },
+        text: async () =>
+          JSON.stringify({
+            code: 'some <script>alert(1)</script> injection',
+            correlationId: 'x'.repeat(200),
+          }),
+      }),
+    );
+
+    let message = '';
+    try {
+      await startSession(
+        cfg,
+        'JWT',
+        { meetingId: 'MTG-2026-0001', deviceId: 'dev1', language: 'tr' },
+        'IK',
+      );
+    } catch (err) {
+      message = err instanceof Error ? err.message : String(err);
+    }
+
+    expect(message).toBe('startSession failed: 500');
+    expect(message).not.toContain('script');
+    expect(message).not.toContain('x'.repeat(200));
+  });
 });
