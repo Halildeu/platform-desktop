@@ -2,10 +2,10 @@ import { useEffect, useRef, useState } from 'react';
 
 import { type Recorder, startRecording } from './audio/capture';
 
-function newMeetingId(): string {
-  const year = new Date().getFullYear();
-  const n = Math.floor(Math.random() * 100_000_000);
-  return `MTG-${year}-${n}`;
+function getMeetingId(): string {
+  // TODO: Halil'den gerçek meetingId contract bekleniyor (issue #2).
+  // Geçici olarak kayıt başlatmayı engelleyen açık hata.
+  throw new Error('Geçerli meetingId bulunamadı; kayıt başlatılamaz. (meetingId kaynağı henüz belirlenmedi)');
 }
 
 interface SafeJwtClaims {
@@ -72,7 +72,7 @@ function App() {
     setError('');
     setStartPending(true);
     try {
-      const rec = await startRecording(newMeetingId(), 'desktop-1');
+      const rec = await startRecording(getMeetingId(), 'desktop-1');
       rec.onError((err) => {
         recorderRef.current = null;
         setRecording(false);
