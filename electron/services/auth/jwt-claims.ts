@@ -11,9 +11,7 @@ export interface SafeJwtClaims {
 
 function decodeBase64UrlJson(segment: string): unknown {
   const padded = segment.padEnd(segment.length + ((4 - (segment.length % 4)) % 4), '=');
-  const json = Buffer.from(padded.replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString(
-    'utf8',
-  );
+  const json = Buffer.from(padded.replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8');
   return JSON.parse(json);
 }
 

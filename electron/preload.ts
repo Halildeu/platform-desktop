@@ -16,20 +16,16 @@ const electronAPI = {
   audio: {
     permissionStatus: (): Promise<{ granted: boolean }> =>
       ipcRenderer.invoke('audio:permission-status'),
-    consent: (
-      consentVersion: string,
-      consentTextHash: string,
-      locale: string,
-    ): Promise<{ ok: boolean }> =>
-      ipcRenderer.invoke('audio:consent', consentVersion, consentTextHash, locale),
-    start: (meetingId: string, deviceId: string): Promise<{ sessionId: string; captureId: string }> =>
+    start: (
+      meetingId: string,
+      deviceId: string,
+    ): Promise<{ sessionId: string; captureId: string }> =>
       ipcRenderer.invoke('audio:start', meetingId, deviceId),
     sendChunk: (payload: {
       captureId: string;
       bytes: Uint8Array;
       startedAtMs: number;
-    }): Promise<{ seq: number }> =>
-      ipcRenderer.invoke('audio:chunk', payload),
+    }): Promise<{ seq: number }> => ipcRenderer.invoke('audio:chunk', payload),
     finish: (captureId: string): Promise<{ ok: boolean }> =>
       ipcRenderer.invoke('audio:finish', captureId),
     abort: (captureId: string): Promise<{ ok: boolean }> =>

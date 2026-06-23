@@ -38,7 +38,9 @@ describe('waitForCallback (gerçek http, loopback)', () => {
 
   it('state mismatch → reject', async () => {
     const port = 18766;
-    const expectation = expect(waitForCallback(port, 'ST', 5_000)).rejects.toThrow('state mismatch');
+    const expectation = expect(waitForCallback(port, 'ST', 5_000)).rejects.toThrow(
+      'state mismatch',
+    );
     await tick();
     await fetch(`http://127.0.0.1:${port}/callback?code=ABC&state=WRONG`).catch(() => undefined);
     await expectation;

@@ -83,11 +83,7 @@ function App() {
     setShowConsent(false);
     void (async () => {
       try {
-        await window.electronAPI?.audio.consent(
-          CONSENT_VERSION,
-          CONSENT_TEXT_HASH,
-          CONSENT_LOCALE,
-        );
+        await window.electronAPI?.audio.consent(CONSENT_VERSION, CONSENT_TEXT_HASH, CONSENT_LOCALE);
       } catch (e) {
         setError(`Rıza kaydı başarısız: ${(e as Error).message}`);
         return;
@@ -171,7 +167,7 @@ function App() {
                   <dt>iss</dt>
                   <dd>{claims.iss ?? '-'}</dd>
                   <dt>aud</dt>
-                  <dd>{Array.isArray(claims.aud) ? claims.aud.join(', ') : claims.aud ?? '-'}</dd>
+                  <dd>{Array.isArray(claims.aud) ? claims.aud.join(', ') : (claims.aud ?? '-')}</dd>
                   <dt>azp</dt>
                   <dd>{claims.azp ?? '-'}</dd>
                   <dt>scope</dt>
