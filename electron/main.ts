@@ -15,7 +15,7 @@
 
 import 'dotenv/config'; // .env → process.env (Keycloak/gateway config), en başta
 
-import { app, BrowserWindow, ipcMain, shell } from 'electron';
+import { app, BrowserWindow, desktopCapturer, ipcMain, session, shell } from 'electron';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -72,6 +72,16 @@ ipcMain.handle('audio:permission-status', async () => {
 });
 
 void app.whenReady().then(() => {
+  session.defaultSession.setDisplayMediaRequestHandler(async (_req, callback) => {
+    const sources = await desktopCapturer.getSources({ types: ['screen'] });
+    const primary = sources[0];
+    if (!primary) {
+      callback({});
+      return;
+    }
+    callback({ video: primary, enableLocalEcho: false });
+  });
+
   registerAuthIpc(); // #1 auth:login / auth:status / auth:logout
   registerAudioIpc(); // #2 audio:start / audio:chunk / audio:finish
   createMainWindow();
