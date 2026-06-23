@@ -5,7 +5,7 @@
  * KVKK Md.5: kişisel veri işleme ancak açık rıza ile mümkündür.
  */
 
-import { useEffect, useRef, useCallback } from 'react';
+import { useEffect, useRef, useCallback, type ReactElement } from 'react';
 
 export const CONSENT_VERSION = '1.0.0';
 export const CONSENT_TEXT_HASH = 'sha256:kvkk-ses-kaydi-rizasi-v1.0.0-tr';
@@ -16,7 +16,7 @@ export interface ConsentDialogProps {
   onCancel: () => void;
 }
 
-export function ConsentDialog({ onAccept, onCancel }: ConsentDialogProps) {
+export function ConsentDialog({ onAccept, onCancel }: ConsentDialogProps): ReactElement {
   const dialogRef = useRef<HTMLDivElement>(null);
   const previousFocusRef = useRef<Element | null>(null);
 
@@ -72,8 +72,8 @@ export function ConsentDialog({ onAccept, onCancel }: ConsentDialogProps) {
         <h2 id="consent-title">Ses Kaydı Onayı</h2>
         <div id="consent-body">
           <p>
-            Bu toplantının ses kaydı yapılacaktır. Kayıt, mikrofon ve varsa sistem
-            sesi (toplantı uygulaması) verilerini içerir.
+            Bu toplantının ses kaydı yapılacaktır. Kayıt, mikrofon ve varsa sistem sesi (toplantı
+            uygulaması) verilerini içerir.
           </p>
           <ul>
             <li>Ses verileri şifreli olarak sunucuya iletilir.</li>
@@ -82,12 +82,10 @@ export function ConsentDialog({ onAccept, onCancel }: ConsentDialogProps) {
             <li>Cihazınızda ses verisi saklanmaz.</li>
           </ul>
           <p className="consent-legal">
-            Devam ederek ses kaydı yapılmasını ve verilerinizin yukarıda belirtilen
-            amaçlarla işlenmesini kabul etmiş olursunuz (KVKK Md. 5).
+            Devam ederek ses kaydı yapılmasını ve verilerinizin yukarıda belirtilen amaçlarla
+            işlenmesini kabul etmiş olursunuz (KVKK Md. 5).
           </p>
-          <p className="consent-version">
-            Rıza metni sürümü: {CONSENT_VERSION}
-          </p>
+          <p className="consent-version">Rıza metni sürümü: {CONSENT_VERSION}</p>
         </div>
         <div className="consent-actions">
           <button type="button" className="consent-cancel" onClick={onCancel}>
