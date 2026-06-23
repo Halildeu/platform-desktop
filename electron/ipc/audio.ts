@@ -11,6 +11,7 @@ import { randomUUID } from 'node:crypto';
 
 import { ChunkSender } from '../services/gateway/chunk-sender';
 import { loadGatewayConfig } from '../services/gateway/gateway-client';
+import { setRecordingActive } from '../main';
 import { getValidAccessToken } from './auth';
 
 const MAX_CHUNK_BYTES = 6_400;
@@ -101,6 +102,7 @@ export function registerAudioIpc(): void {
         );
         const captureId = randomUUID();
         active = { captureId, sender, lastStartedAtMs: null };
+        setRecordingActive(true);
         return { sessionId, captureId };
       } finally {
         starting = false;
@@ -137,6 +139,7 @@ export function registerAudioIpc(): void {
       finishing = false;
       if (active?.captureId === recording.captureId) {
         active = null;
+        setRecordingActive(false);
       }
     }
     return { ok: true };
@@ -153,6 +156,7 @@ export function registerAudioIpc(): void {
         // best-effort cleanup
       } finally {
         active = null;
+        setRecordingActive(false);
       }
     }
     return { ok: true };

@@ -71,15 +71,29 @@ ipcMain.handle('audio:permission-status', async () => {
   return { granted: true };
 });
 
+let recordingActive = false;
+
+export function setRecordingActive(active: boolean): void {
+  recordingActive = active;
+}
+
 void app.whenReady().then(() => {
-  session.defaultSession.setDisplayMediaRequestHandler(async (_req, callback) => {
+  session.defaultSession.setDisplayMediaRequestHandler(async (req, callback) => {
+    if (!recordingActive) {
+      callback({});
+      return;
+    }
+    if (mainWindow && req.frame?.processId !== mainWindow.webContents.mainFrame.processId) {
+      callback({});
+      return;
+    }
     const sources = await desktopCapturer.getSources({ types: ['screen'] });
     const primary = sources[0];
     if (!primary) {
       callback({});
       return;
     }
-    callback({ video: primary, enableLocalEcho: false });
+    callback({ video: primary, audio: 'loopback', enableLocalEcho: false });
   });
 
   registerAuthIpc(); // #1 auth:login / auth:status / auth:logout

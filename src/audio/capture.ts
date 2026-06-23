@@ -6,6 +6,9 @@
  *
  * Loopback: getDisplayMedia({audio:true}) ile sistem sesi yakalanır.
  * Kullanıcı reddederse veya platform desteklemiyorsa mic-only fallback.
+ *
+ * Mix: ChannelMerger + GainNode ile Web Audio graph'ta toplandıktan sonra
+ * tek AudioWorkletNode ile capture edilir (frame-loss riski yok).
  */
 
 import { encodeChunk } from './pcm-encode';
@@ -64,17 +67,28 @@ export async function startRecording(meetingId: string, deviceId: string): Promi
   }
 
   const micSrc = ctx.createMediaStreamSource(mic);
-  const micNode = new AudioWorkletNode(ctx, 'pcm-capture');
-  const sink = ctx.createGain();
-  sink.gain.value = 0;
 
-  let loopbackSrc: MediaStreamAudioSourceNode | null = null;
-  let loopbackNode: AudioWorkletNode | null = null;
+  let mixedSource: AudioNode;
 
   if (loopback) {
-    loopbackSrc = ctx.createMediaStreamSource(loopback);
-    loopbackNode = new AudioWorkletNode(ctx, 'pcm-capture');
+    const loopbackSrc = ctx.createMediaStreamSource(loopback);
+    const micGain = ctx.createGain();
+    micGain.gain.value = 1.0;
+    const loopbackGain = ctx.createGain();
+    loopbackGain.gain.value = 1.0;
+    const merger = ctx.createChannelMerger(1);
+    micSrc.connect(micGain).connect(merger, 0, 0);
+    loopbackSrc.connect(loopbackGain).connect(merger, 0, 0);
+    mixedSource = merger;
+  } else {
+    mixedSource = micSrc;
   }
+
+  const captureNode = new AudioWorkletNode(ctx, 'pcm-capture');
+  const sink = ctx.createGain();
+  sink.gain.value = 0;
+  mixedSource.connect(captureNode);
+  captureNode.connect(sink).connect(ctx.destination);
 
   let session: { sessionId: string; captureId: string };
   try {
@@ -87,8 +101,7 @@ export async function startRecording(meetingId: string, deviceId: string): Promi
   const { sessionId, captureId } = session;
 
   const frameSamples = Math.round((ctx.sampleRate * CHUNK_MS) / 1000);
-  const micFb = new FrameBuffer(frameSamples);
-  const loopbackFb = loopback ? new FrameBuffer(frameSamples) : null;
+  const fb = new FrameBuffer(frameSamples);
   const empty = new Float32Array(0);
 
   let pendingChunks = 0;
@@ -97,22 +110,13 @@ export async function startRecording(meetingId: string, deviceId: string): Promi
   let errorHandler: ((err: Error) => void) | null = null;
 
   const stopCapture = (): void => {
-    micNode.port.onmessage = null;
-    if (loopbackNode) {
-      loopbackNode.port.onmessage = null;
-    }
-    micSrc.disconnect();
-    micNode.disconnect();
-    loopbackSrc?.disconnect();
-    loopbackNode?.disconnect();
+    captureNode.port.onmessage = null;
+    captureNode.disconnect();
     sink.disconnect();
     stopAllTracks(mic, loopback);
     void ctx.close();
     void api.audio.abort(captureId).catch(() => {});
   };
-
-  let micLatest: Float32Array = empty;
-  let loopbackLatest: Float32Array = empty;
 
   const enqueueChunk = (bytes: Uint8Array, startedAtMs: number): void => {
     if (uploadError) {
@@ -146,38 +150,12 @@ export async function startRecording(meetingId: string, deviceId: string): Promi
       });
   };
 
-  const emitMixed = (): void => {
-    const bytes = encodeChunk(loopbackLatest, micLatest, ctx.sampleRate, TARGET_RATE);
-    enqueueChunk(bytes, Date.now());
-    micLatest = empty;
-    loopbackLatest = empty;
-  };
-
-  micNode.port.onmessage = (ev: MessageEvent<Float32Array>): void => {
-    for (const chunk of micFb.push(ev.data)) {
-      micLatest = chunk;
-      if (!loopbackFb) {
-        emitMixed();
-      }
+  captureNode.port.onmessage = (ev: MessageEvent<Float32Array>): void => {
+    for (const chunk of fb.push(ev.data)) {
+      const bytes = encodeChunk(chunk, empty, ctx.sampleRate, TARGET_RATE);
+      enqueueChunk(bytes, Date.now());
     }
   };
-
-  if (loopbackNode && loopbackFb) {
-    loopbackNode.port.onmessage = (ev: MessageEvent<Float32Array>): void => {
-      for (const chunk of loopbackFb.push(ev.data)) {
-        loopbackLatest = chunk;
-        emitMixed();
-      }
-    };
-  }
-
-  micSrc.connect(micNode);
-  micNode.connect(sink).connect(ctx.destination);
-
-  if (loopbackSrc && loopbackNode) {
-    loopbackSrc.connect(loopbackNode);
-    loopbackNode.connect(sink);
-  }
 
   let stopped = false;
 
@@ -191,18 +169,13 @@ export async function startRecording(meetingId: string, deviceId: string): Promi
       if (stopped) return;
       stopped = true;
 
-      micNode.port.onmessage = null;
-      if (loopbackNode) {
-        loopbackNode.port.onmessage = null;
-      }
+      captureNode.port.onmessage = null;
 
       if (!uploadError) {
-        const micRest = micFb.flush();
-        const loopbackRest = loopbackFb?.flush() ?? null;
-        if (micRest || loopbackRest) {
-          micLatest = micRest ?? empty;
-          loopbackLatest = loopbackRest ?? empty;
-          emitMixed();
+        const rest = fb.flush();
+        if (rest) {
+          const bytes = encodeChunk(rest, empty, ctx.sampleRate, TARGET_RATE);
+          enqueueChunk(bytes, Date.now());
         }
       }
 
@@ -210,10 +183,7 @@ export async function startRecording(meetingId: string, deviceId: string): Promi
       const finalError = uploadError;
 
       if (!uploadError) {
-        micSrc.disconnect();
-        micNode.disconnect();
-        loopbackSrc?.disconnect();
-        loopbackNode?.disconnect();
+        captureNode.disconnect();
         sink.disconnect();
         stopAllTracks(mic, loopback);
         await ctx.close();
