@@ -1,7 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
 
 import { type Recorder, startRecording } from './audio/capture';
-import { ConsentDialog } from './components/ConsentDialog';
+import {
+  ConsentDialog,
+  CONSENT_VERSION,
+  CONSENT_TEXT_HASH,
+  CONSENT_LOCALE,
+} from './components/ConsentDialog';
 
 function getMeetingId(): string {
   // TODO: Halil'den gerçek meetingId contract bekleniyor (issue #2).
@@ -76,7 +81,19 @@ function App() {
 
   const handleConsentAccept = (): void => {
     setShowConsent(false);
-    void handleStart();
+    void (async () => {
+      try {
+        await window.electronAPI?.audio.consent(
+          CONSENT_VERSION,
+          CONSENT_TEXT_HASH,
+          CONSENT_LOCALE,
+        );
+      } catch (e) {
+        setError(`Rıza kaydı başarısız: ${(e as Error).message}`);
+        return;
+      }
+      await handleStart();
+    })();
   };
 
   const handleConsentCancel = (): void => {
