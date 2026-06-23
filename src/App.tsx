@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 
 import { type Recorder, startRecording } from './audio/capture';
+import { ConsentDialog } from './components/ConsentDialog';
 
 function getMeetingId(): string {
   // TODO: Halil'den gerçek meetingId contract bekleniyor (issue #2).
@@ -24,6 +25,7 @@ function App() {
   const [busy, setBusy] = useState(false);
   const [recording, setRecording] = useState(false);
   const [startPending, setStartPending] = useState(false);
+  const [showConsent, setShowConsent] = useState(false);
   const [status, setStatus] = useState('');
   const [error, setError] = useState('');
   const recorderRef = useRef<Recorder | null>(null);
@@ -66,6 +68,19 @@ function App() {
     } catch (e) {
       setError(`Çıkış başarısız: ${(e as Error).message}`);
     }
+  };
+
+  const handleRecordClick = (): void => {
+    setShowConsent(true);
+  };
+
+  const handleConsentAccept = (): void => {
+    setShowConsent(false);
+    void handleStart();
+  };
+
+  const handleConsentCancel = (): void => {
+    setShowConsent(false);
   };
 
   const handleStart = async (): Promise<void> => {
@@ -126,7 +141,7 @@ function App() {
         ) : (
           <>
             <p>Giriş yapıldı. Toplantı kaydına hazır.</p>
-            <button type="button" onClick={() => void handleStart()} disabled={startPending}>
+            <button type="button" onClick={handleRecordClick} disabled={startPending}>
               {startPending ? 'Başlatılıyor...' : 'Kaydet'}
             </button>
             <button type="button" onClick={() => void handleLogout()} style={{ marginLeft: 8 }}>
@@ -156,6 +171,9 @@ function App() {
         {status ? <p className="status">{status}</p> : null}
         {error ? <p className="error">{error}</p> : null}
       </main>
+      {showConsent ? (
+        <ConsentDialog onAccept={handleConsentAccept} onCancel={handleConsentCancel} />
+      ) : null}
     </div>
   );
 }
