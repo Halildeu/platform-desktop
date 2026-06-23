@@ -11,7 +11,9 @@ import {
 function getMeetingId(): string {
   // TODO: Halil'den gerçek meetingId contract bekleniyor (issue #2).
   // Geçici olarak kayıt başlatmayı engelleyen açık hata.
-  throw new Error('Geçerli meetingId bulunamadı; kayıt başlatılamaz. (meetingId kaynağı henüz belirlenmedi)');
+  throw new Error(
+    'Geçerli meetingId bulunamadı; kayıt başlatılamaz. (meetingId kaynağı henüz belirlenmedi)',
+  );
 }
 
 interface SafeJwtClaims {
