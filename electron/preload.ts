@@ -26,6 +26,8 @@ const electronAPI = {
       ipcRenderer.invoke('audio:chunk', payload),
     finish: (captureId: string): Promise<{ ok: boolean }> =>
       ipcRenderer.invoke('audio:finish', captureId),
+    abort: (captureId: string): Promise<{ ok: boolean }> =>
+      ipcRenderer.invoke('audio:abort', captureId),
   },
   auth: {
     // Token RENDERER'a verilmez — yalnız durum (loggedIn/expiresAt) döner.

@@ -23,6 +23,7 @@ function App() {
   const [claims, setClaims] = useState<SafeJwtClaims | null>(null);
   const [busy, setBusy] = useState(false);
   const [recording, setRecording] = useState(false);
+  const [startPending, setStartPending] = useState(false);
   const [status, setStatus] = useState('');
   const [error, setError] = useState('');
   const recorderRef = useRef<Recorder | null>(null);
@@ -69,6 +70,7 @@ function App() {
 
   const handleStart = async (): Promise<void> => {
     setError('');
+    setStartPending(true);
     try {
       const rec = await startRecording(newMeetingId(), 'desktop-1');
       recorderRef.current = rec;
@@ -76,6 +78,8 @@ function App() {
       setStatus(`Kayıt başladı (oturum ${rec.sessionId})`);
     } catch (e) {
       setError(`Kayıt başlatılamadı: ${(e as Error).message}`);
+    } finally {
+      setStartPending(false);
     }
   };
 
@@ -115,8 +119,8 @@ function App() {
         ) : (
           <>
             <p>Giriş yapıldı. Toplantı kaydına hazır.</p>
-            <button type="button" onClick={() => void handleStart()}>
-              Kaydet
+            <button type="button" onClick={() => void handleStart()} disabled={startPending}>
+              {startPending ? 'Başlatılıyor...' : 'Kaydet'}
             </button>
             <button type="button" onClick={() => void handleLogout()} style={{ marginLeft: 8 }}>
               Çıkış

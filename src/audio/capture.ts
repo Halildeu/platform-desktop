@@ -113,6 +113,7 @@ export async function startRecording(meetingId: string, deviceId: string): Promi
       await ctx.close();
 
       if (finalError) {
+        await api.audio.abort(captureId).catch(() => {});
         throw finalError;
       }
       await api.audio.finish(captureId);

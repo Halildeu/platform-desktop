@@ -23,6 +23,7 @@ interface ActiveRecording {
 }
 
 let active: ActiveRecording | null = null;
+let starting = false;
 
 function requireText(value: unknown, label: string): string {
   if (typeof value !== 'string' || value.trim() === '') {
@@ -86,18 +87,23 @@ export function registerAudioIpc(): void {
       meetingId: unknown,
       deviceId: unknown,
     ): Promise<{ sessionId: string; captureId: string }> => {
-      if (active?.sender.getState() === 'active') {
+      if (starting || active?.sender.getState() === 'active') {
         throw new Error('recording session already active');
       }
-      const cfg = loadGatewayConfig();
-      const sender = new ChunkSender(cfg, () => getValidAccessToken());
-      const sessionId = await sender.start(
-        requireIdentifier(meetingId, 'meetingId'),
-        requireIdentifier(deviceId, 'deviceId'),
-      );
-      const captureId = randomUUID();
-      active = { captureId, sender, lastStartedAtMs: null };
-      return { sessionId, captureId };
+      starting = true;
+      try {
+        const cfg = loadGatewayConfig();
+        const sender = new ChunkSender(cfg, () => getValidAccessToken());
+        const sessionId = await sender.start(
+          requireIdentifier(meetingId, 'meetingId'),
+          requireIdentifier(deviceId, 'deviceId'),
+        );
+        const captureId = randomUUID();
+        active = { captureId, sender, lastStartedAtMs: null };
+        return { sessionId, captureId };
+      } finally {
+        starting = false;
+      }
     },
   );
 
@@ -124,6 +130,22 @@ export function registerAudioIpc(): void {
       await recording.sender.finish();
     } finally {
       if (active?.captureId === recording.captureId) {
+        active = null;
+      }
+    }
+    return { ok: true };
+  });
+
+  ipcMain.handle('audio:abort', async (_e, captureId: unknown): Promise<{ ok: boolean }> => {
+    const id = requireText(captureId, 'captureId');
+    if (active?.captureId === id) {
+      try {
+        if (active.sender.getState() === 'active') {
+          await active.sender.finish();
+        }
+      } catch {
+        // best-effort cleanup
+      } finally {
         active = null;
       }
     }
