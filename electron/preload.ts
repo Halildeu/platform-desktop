@@ -26,6 +26,17 @@ const electronAPI = {
       ipcRenderer.invoke("audio:prepare-capture"),
     cancelCapture: (): Promise<{ ok: boolean }> =>
       ipcRenderer.invoke("audio:cancel-capture"),
+    consent: (
+      consentVersion: string,
+      consentTextHash: string,
+      locale: string,
+    ): Promise<{ ok: boolean }> =>
+      ipcRenderer.invoke(
+        "audio:consent",
+        consentVersion,
+        consentTextHash,
+        locale,
+      ),
     start: (
       meetingId: string,
       deviceId: string,

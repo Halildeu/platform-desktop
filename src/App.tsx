@@ -1,6 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 
 import { type Recorder, startRecording } from "./audio/capture";
+import {
+  ConsentDialog,
+  CONSENT_VERSION,
+  CONSENT_TEXT_HASH,
+  CONSENT_LOCALE,
+} from "./components/ConsentDialog";
 
 const MEETING_ID_MISSING_MESSAGE =
   "Geçerli meetingId bulunamadı; kayıt başlatılamaz. (meetingId kaynağı henüz belirlenmedi)";
@@ -28,6 +34,7 @@ function App() {
   const [busy, setBusy] = useState(false);
   const [recording, setRecording] = useState(false);
   const [startPending, setStartPending] = useState(false);
+  const [showConsent, setShowConsent] = useState(false);
   const [recorderConfig, setRecorderConfig] =
     useState<RecorderRuntimeConfig | null>(null);
   const [status, setStatus] = useState("");
@@ -83,6 +90,35 @@ function App() {
     } catch (e) {
       setError(`Çıkış başarısız: ${(e as Error).message}`);
     }
+  };
+
+  const handleRecordClick = (): void => {
+    if (!recorderConfig?.ready || !recorderConfig.meetingId) {
+      setError(recorderConfig?.reason ?? MEETING_ID_MISSING_MESSAGE);
+      return;
+    }
+    setShowConsent(true);
+  };
+
+  const handleConsentAccept = (): void => {
+    setShowConsent(false);
+    void (async () => {
+      try {
+        await window.electronAPI?.audio.consent(
+          CONSENT_VERSION,
+          CONSENT_TEXT_HASH,
+          CONSENT_LOCALE,
+        );
+      } catch (e) {
+        setError(`Rıza kaydı başarısız: ${(e as Error).message}`);
+        return;
+      }
+      await handleStart();
+    })();
+  };
+
+  const handleConsentCancel = (): void => {
+    setShowConsent(false);
   };
 
   const handleStart = async (): Promise<void> => {
@@ -161,7 +197,7 @@ function App() {
             )}
             <button
               type="button"
-              onClick={() => void handleStart()}
+              onClick={handleRecordClick}
               disabled={startPending || !recorderConfig?.ready}
             >
               {startPending
@@ -209,6 +245,12 @@ function App() {
         {status ? <p className="status">{status}</p> : null}
         {error ? <p className="error">{error}</p> : null}
       </main>
+      {showConsent ? (
+        <ConsentDialog
+          onAccept={handleConsentAccept}
+          onCancel={handleConsentCancel}
+        />
+      ) : null}
     </div>
   );
 }

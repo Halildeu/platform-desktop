@@ -100,10 +100,13 @@ async function httpErrorMessage(res: Response, label: string): Promise<string> {
         correlationId?: unknown;
         retryable?: unknown;
       };
-      if (typeof parsed.code === 'string') {
+      if (typeof parsed.code === 'string' && /^[A-Z_]{1,64}$/.test(parsed.code)) {
         fields.push(`code=${parsed.code}`);
       }
-      if (typeof parsed.correlationId === 'string') {
+      if (
+        typeof parsed.correlationId === 'string' &&
+        /^[A-Za-z0-9._:-]{1,128}$/.test(parsed.correlationId)
+      ) {
         fields.push(`correlationId=${parsed.correlationId}`);
       }
       if (typeof parsed.retryable === 'boolean') {
