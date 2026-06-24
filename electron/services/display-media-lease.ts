@@ -31,16 +31,11 @@ export interface DisplayMediaRequestPolicy {
   mainFrameProcessId: number | null;
 }
 
-export function shouldGrantDisplayMediaRequest(
-  policy: DisplayMediaRequestPolicy,
-): boolean {
+export function shouldGrantDisplayMediaRequest(policy: DisplayMediaRequestPolicy): boolean {
   if (!policy.canGrantLease) {
     return false;
   }
-  if (
-    policy.mainFrameProcessId !== null &&
-    policy.requestProcessId !== policy.mainFrameProcessId
-  ) {
+  if (policy.mainFrameProcessId !== null && policy.requestProcessId !== policy.mainFrameProcessId) {
     return false;
   }
   return true;

@@ -19,7 +19,7 @@
 
 services:
   desktop-ci-runner:
-    image: gha-runner-testai-deploy:latest    # mevcut kanıtlı image reuse (no rebuild)
+    image: gha-runner-testai-deploy:latest # mevcut kanıtlı image reuse (no rebuild)
     container_name: platform-gha-runner-desktop-ci
     restart: unless-stopped
     user: runner
@@ -44,7 +44,7 @@ services:
       RUNNER_LABELS: self-hosted,staging-sw,platform-desktop-ci
       RUNNER_REGISTRATION_TOKEN: ${RUNNER_REGISTRATION_TOKEN:-}
 
-    entrypoint: ["/usr/local/bin/desktop-ci-entrypoint.sh"]
+    entrypoint: ['/usr/local/bin/desktop-ci-entrypoint.sh']
 
     volumes:
       # SADECE script'ler (RO). Secret mount YOK.

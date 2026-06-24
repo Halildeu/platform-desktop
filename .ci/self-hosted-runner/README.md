@@ -13,18 +13,19 @@ için platform-desktop CI (`tsc` + `vitest`, `.github/workflows/ci.yml`) bu
 staging-sw prod-adjacent (Vault-adjacent, k3d, MinIO, Keycloak-prod containerları).
 Build prod erişimi GEREKTİRMEZ → runner buna göre **sıkı izole**:
 
-| Kontrol | Uygulama |
-|---|---|
-| **Secret-mount YOK** | kubeconfig / web-stage / `docker.sock` mount edilmez (deploy runner'dan farkı budur) |
-| **Egress firewall** | `desktop-ci-firewall.sh`: DOCKER-USER chain, runner subnet (`172.31.255.0/24`) → RFC1918 + host-gateway + link-local **DROP**; yalnız internet (npm/GitHub/node) + DNS allow |
-| **Privilege drop** | `no-new-privileges:true` + `cap_drop: ALL` → image'daki `runner` NOPASSWD sudo nötralize |
-| **Resource limit** | `pids_limit 512`, `mem_limit 6g`, `cpus 2.0` |
-| **Credential** | tek-seferlik registration token (PAT container'da YOK); runner yalnız job-listen credential tutar |
-| **State hygiene** | `hooks/cleanup.sh` job-completed hook → `_work` + npm cache wipe (non-ephemeral state-poisoning guard; workflow YAML devre dışı bırakamaz) |
-| **Network** | dedicated bridge `platform-desktop-ci-net` (prod/test docker network'lerinden ayrı) |
-| **Trust model** | repo yalnız trusted collaborator (owner + 1) PR'ı alır; GitHub outside-contributor için auto-approval ister |
+| Kontrol              | Uygulama                                                                                                                                                                     |
+| -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Secret-mount YOK** | kubeconfig / web-stage / `docker.sock` mount edilmez (deploy runner'dan farkı budur)                                                                                         |
+| **Egress firewall**  | `desktop-ci-firewall.sh`: DOCKER-USER chain, runner subnet (`172.31.255.0/24`) → RFC1918 + host-gateway + link-local **DROP**; yalnız internet (npm/GitHub/node) + DNS allow |
+| **Privilege drop**   | `no-new-privileges:true` + `cap_drop: ALL` → image'daki `runner` NOPASSWD sudo nötralize                                                                                     |
+| **Resource limit**   | `pids_limit 512`, `mem_limit 6g`, `cpus 2.0`                                                                                                                                 |
+| **Credential**       | tek-seferlik registration token (PAT container'da YOK); runner yalnız job-listen credential tutar                                                                            |
+| **State hygiene**    | `hooks/cleanup.sh` job-completed hook → `_work` + npm cache wipe (non-ephemeral state-poisoning guard; workflow YAML devre dışı bırakamaz)                                   |
+| **Network**          | dedicated bridge `platform-desktop-ci-net` (prod/test docker network'lerinden ayrı)                                                                                          |
+| **Trust model**      | repo yalnız trusted collaborator (owner + 1) PR'ı alır; GitHub outside-contributor için auto-approval ister                                                                  |
 
 ### Bilinen residual + gelecek sertleştirme
+
 - **Non-ephemeral** (PAT-siz registration sonucu): state `hooks/cleanup.sh` ile
   her job sonrası silinir. İdeal = host-side broker + ephemeral (PAT container'a
   hiç girmeden); bu owner-scoped fine-grained PAT (Administration:Write on
@@ -53,6 +54,7 @@ ssh halil@staging-sw 'sudo cp ~/desktop-ci-runner/desktop-ci-firewall.service /e
 ```
 
 ## Doğrulama
+
 - `gh api repos/Halildeu/platform-desktop/actions/runners` → `staging-sw-desktop-ci` `online`
 - Runner logs: `docker logs platform-gha-runner-desktop-ci` → `Listening for Jobs`
 - CI job: `runs-on: [self-hosted, platform-desktop-ci]` → 11 step pass (~1.5dk)

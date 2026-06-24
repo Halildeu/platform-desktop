@@ -143,6 +143,7 @@ Types: `feat` / `fix` / `refactor` / `docs` / `chore` / `test` / `perf` / `build
 ## Codex Adversarial Protokol
 
 Her büyük delta sonrası Codex MCP adversarial review:
+
 - VERDICT: AGREE / PARTIAL / REVISE / RED
 - AGREE → direkt impl, plan onayı sorma (Plan Consensus Autonomy)
 - PARTIAL/REVISE → absorb + iter

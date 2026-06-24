@@ -10,11 +10,7 @@
  */
 
 import { type KeycloakConfig } from './keycloak-config';
-import {
-  buildAuthorizationUrl,
-  exchangeCodeForTokens,
-  loopbackRedirectUri,
-} from './oauth-flow';
+import { buildAuthorizationUrl, exchangeCodeForTokens, loopbackRedirectUri } from './oauth-flow';
 import { codeChallengeS256, generateCodeVerifier, generateState } from './pkce';
 import { type CallbackResult, waitForCallback } from './loopback-server';
 import { type TokenSet } from './token-utils';

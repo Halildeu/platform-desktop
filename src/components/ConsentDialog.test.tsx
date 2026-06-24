@@ -12,10 +12,10 @@
  * - Versiyonlanmış rıza metni gösterilir
  */
 
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import "@testing-library/jest-dom/vitest";
-import { createHash } from "node:crypto";
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import '@testing-library/jest-dom/vitest';
+import { createHash } from 'node:crypto';
 
 import {
   ConsentDialog,
@@ -23,101 +23,101 @@ import {
   CONSENT_TEXT_HASH,
   CONSENT_LOCALE,
   CONSENT_TEXT_TR,
-} from "./ConsentDialog";
+} from './ConsentDialog';
 
 afterEach(() => {
   cleanup();
 });
 
-describe("ConsentDialog", () => {
-  it("İptal tıklanınca onCancel çağrılır, onAccept ÇAĞRILMAZ (kayıt başlamaz)", () => {
+describe('ConsentDialog', () => {
+  it('İptal tıklanınca onCancel çağrılır, onAccept ÇAĞRILMAZ (kayıt başlamaz)', () => {
     const onAccept = vi.fn();
     const onCancel = vi.fn();
     render(<ConsentDialog onAccept={onAccept} onCancel={onCancel} />);
 
-    fireEvent.click(screen.getByRole("button", { name: /İptal/i }));
+    fireEvent.click(screen.getByRole('button', { name: /İptal/i }));
 
     expect(onCancel).toHaveBeenCalledTimes(1);
     expect(onAccept).not.toHaveBeenCalled();
   });
 
-  it("Onayla tıklanınca onAccept çağrılır (kayıt başlar)", () => {
+  it('Onayla tıklanınca onAccept çağrılır (kayıt başlar)', () => {
     const onAccept = vi.fn();
     const onCancel = vi.fn();
     render(<ConsentDialog onAccept={onAccept} onCancel={onCancel} />);
 
-    fireEvent.click(screen.getByRole("button", { name: /Onaylıyorum/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Onaylıyorum/i }));
 
     expect(onAccept).toHaveBeenCalledTimes(1);
     expect(onCancel).not.toHaveBeenCalled();
   });
 
-  it("Escape tuşu iptal eder (onCancel), onAccept ÇAĞRILMAZ", () => {
+  it('Escape tuşu iptal eder (onCancel), onAccept ÇAĞRILMAZ', () => {
     const onAccept = vi.fn();
     const onCancel = vi.fn();
     render(<ConsentDialog onAccept={onAccept} onCancel={onCancel} />);
 
-    fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
+    fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' });
 
     expect(onCancel).toHaveBeenCalledTimes(1);
     expect(onAccept).not.toHaveBeenCalled();
   });
 
-  it("modal a11y: role=dialog + aria-modal + label/description bağları", () => {
+  it('modal a11y: role=dialog + aria-modal + label/description bağları', () => {
     render(<ConsentDialog onAccept={vi.fn()} onCancel={vi.fn()} />);
 
-    const dialog = screen.getByRole("dialog");
-    expect(dialog).toHaveAttribute("aria-modal", "true");
-    expect(dialog).toHaveAttribute("aria-labelledby", "consent-title");
-    expect(dialog).toHaveAttribute("aria-describedby", "consent-body");
+    const dialog = screen.getByRole('dialog');
+    expect(dialog).toHaveAttribute('aria-modal', 'true');
+    expect(dialog).toHaveAttribute('aria-labelledby', 'consent-title');
+    expect(dialog).toHaveAttribute('aria-describedby', 'consent-body');
   });
 
-  it("açılışta odak modal kapsayıcıya/onay butonuna taşınır", () => {
+  it('açılışta odak modal kapsayıcıya/onay butonuna taşınır', () => {
     render(<ConsentDialog onAccept={vi.fn()} onCancel={vi.fn()} />);
     // autoFocus onay butonunda; odak modal sınırları içinde olmalı.
-    const dialog = screen.getByRole("dialog");
+    const dialog = screen.getByRole('dialog');
     expect(dialog.contains(document.activeElement)).toBe(true);
   });
 
-  it("focus-trap: son elemandan Tab ilk elemana döner", () => {
+  it('focus-trap: son elemandan Tab ilk elemana döner', () => {
     render(<ConsentDialog onAccept={vi.fn()} onCancel={vi.fn()} />);
 
-    const cancelBtn = screen.getByRole("button", { name: /İptal/i });
-    const acceptBtn = screen.getByRole("button", { name: /Onaylıyorum/i });
+    const cancelBtn = screen.getByRole('button', { name: /İptal/i });
+    const acceptBtn = screen.getByRole('button', { name: /Onaylıyorum/i });
 
     // Son odaklanabilir eleman (accept) üzerindeyken Tab → ilk elemana (cancel) sarmalı.
     acceptBtn.focus();
     expect(document.activeElement).toBe(acceptBtn);
-    fireEvent.keyDown(screen.getByRole("dialog"), { key: "Tab" });
+    fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Tab' });
     expect(document.activeElement).toBe(cancelBtn);
   });
 
-  it("focus-trap: ilk elemandan Shift+Tab son elemana döner", () => {
+  it('focus-trap: ilk elemandan Shift+Tab son elemana döner', () => {
     render(<ConsentDialog onAccept={vi.fn()} onCancel={vi.fn()} />);
 
-    const cancelBtn = screen.getByRole("button", { name: /İptal/i });
-    const acceptBtn = screen.getByRole("button", { name: /Onaylıyorum/i });
+    const cancelBtn = screen.getByRole('button', { name: /İptal/i });
+    const acceptBtn = screen.getByRole('button', { name: /Onaylıyorum/i });
 
     cancelBtn.focus();
     expect(document.activeElement).toBe(cancelBtn);
-    fireEvent.keyDown(screen.getByRole("dialog"), {
-      key: "Tab",
+    fireEvent.keyDown(screen.getByRole('dialog'), {
+      key: 'Tab',
       shiftKey: true,
     });
     expect(document.activeElement).toBe(acceptBtn);
   });
 
-  it("versiyonlanmış rıza metni gösterilir (ispat değeri)", () => {
+  it('versiyonlanmış rıza metni gösterilir (ispat değeri)', () => {
     render(<ConsentDialog onAccept={vi.fn()} onCancel={vi.fn()} />);
     expect(screen.getByText(new RegExp(CONSENT_VERSION))).toBeInTheDocument();
   });
 
-  it("consent sabitleri ispat zinciri için sabit kalır", () => {
-    expect(CONSENT_VERSION).toBe("1.0.0");
+  it('consent sabitleri ispat zinciri için sabit kalır', () => {
+    expect(CONSENT_VERSION).toBe('1.0.0');
     expect(CONSENT_TEXT_HASH).toMatch(/^sha256:[a-f0-9]{64}$/);
     expect(CONSENT_TEXT_HASH).toBe(
-      `sha256:${createHash("sha256").update(CONSENT_TEXT_TR, "utf8").digest("hex")}`,
+      `sha256:${createHash('sha256').update(CONSENT_TEXT_TR, 'utf8').digest('hex')}`,
     );
-    expect(CONSENT_LOCALE).toBe("tr-TR");
+    expect(CONSENT_LOCALE).toBe('tr-TR');
   });
 });

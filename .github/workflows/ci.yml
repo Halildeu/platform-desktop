@@ -33,5 +33,11 @@ jobs:
       - name: Typecheck (electron)
         run: npx tsc --noEmit -p tsconfig.electron.json
 
+      - name: Lint
+        run: npm run lint
+
+      - name: Format check
+        run: npm run format:check
+
       - name: Unit tests
         run: npx vitest run --config vitest.config.ts

@@ -11,8 +11,8 @@
  * tek AudioWorkletNode ile capture edilir (frame-loss riski yok).
  */
 
-import { encodeChunk } from "./pcm-encode";
-import { FrameBuffer } from "./frame-buffer";
+import { encodeChunk } from './pcm-encode';
+import { FrameBuffer } from './frame-buffer';
 
 const TARGET_RATE = 16000;
 const CHUNK_MS = 100;
@@ -48,13 +48,10 @@ function stopAllTracks(...streams: (MediaStream | null)[]): void {
   }
 }
 
-export async function startRecording(
-  meetingId: string,
-  deviceId: string,
-): Promise<Recorder> {
+export async function startRecording(meetingId: string, deviceId: string): Promise<Recorder> {
   const api = window.electronAPI;
   if (!api) {
-    throw new Error("electronAPI yok (preload yuklenmedi)");
+    throw new Error('electronAPI yok (preload yuklenmedi)');
   }
 
   await api.audio.prepareCapture();
@@ -69,7 +66,7 @@ export async function startRecording(
     });
     loopback = await tryLoopbackStream();
     ctx = new AudioContext();
-    await ctx.audioWorklet.addModule("/pcm-worklet.js");
+    await ctx.audioWorklet.addModule('/pcm-worklet.js');
   } catch (err) {
     stopAllTracks(mic, loopback);
     if (ctx) {
@@ -81,7 +78,7 @@ export async function startRecording(
 
   if (!mic || !ctx) {
     await api.audio.cancelCapture().catch(() => {});
-    throw new Error("audio capture setup failed");
+    throw new Error('audio capture setup failed');
   }
 
   const micStream = mic;
@@ -105,7 +102,7 @@ export async function startRecording(
     mixedSource = micSrc;
   }
 
-  const captureNode = new AudioWorkletNode(audioContext, "pcm-capture");
+  const captureNode = new AudioWorkletNode(audioContext, 'pcm-capture');
   const sink = audioContext.createGain();
   sink.gain.value = 0;
   mixedSource.connect(captureNode);
@@ -145,7 +142,7 @@ export async function startRecording(
       return;
     }
     if (pendingChunks >= MAX_PENDING_CHUNKS) {
-      uploadError = new Error("audio upload queue full");
+      uploadError = new Error('audio upload queue full');
       stopCapture();
       errorHandler?.(uploadError);
       return;
@@ -174,12 +171,7 @@ export async function startRecording(
 
   captureNode.port.onmessage = (ev: MessageEvent<Float32Array>): void => {
     for (const chunk of fb.push(ev.data)) {
-      const bytes = encodeChunk(
-        chunk,
-        empty,
-        audioContext.sampleRate,
-        TARGET_RATE,
-      );
+      const bytes = encodeChunk(chunk, empty, audioContext.sampleRate, TARGET_RATE);
       enqueueChunk(bytes, Date.now());
     }
   };
@@ -201,12 +193,7 @@ export async function startRecording(
       if (!uploadError) {
         const rest = fb.flush();
         if (rest) {
-          const bytes = encodeChunk(
-            rest,
-            empty,
-            audioContext.sampleRate,
-            TARGET_RATE,
-          );
+          const bytes = encodeChunk(rest, empty, audioContext.sampleRate, TARGET_RATE);
           enqueueChunk(bytes, Date.now());
         }
       }

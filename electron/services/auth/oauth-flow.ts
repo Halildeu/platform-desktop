@@ -106,10 +106,7 @@ export async function refreshAccessToken(
 }
 
 /** refresh_token revoke/logout. Token degeri loglanmaz veya renderer'a donmez. */
-export async function revokeRefreshToken(
-  cfg: KeycloakConfig,
-  refreshToken: string,
-): Promise<void> {
+export async function revokeRefreshToken(cfg: KeycloakConfig, refreshToken: string): Promise<void> {
   const body = new URLSearchParams({
     client_id: cfg.clientId,
     refresh_token: refreshToken,

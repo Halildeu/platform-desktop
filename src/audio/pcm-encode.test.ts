@@ -1,12 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import {
-  encodeChunk,
-  floatToPcm16,
-  mixMono,
-  pcm16ToBytes,
-  resampleLinear,
-} from './pcm-encode';
+import { encodeChunk, floatToPcm16, mixMono, pcm16ToBytes, resampleLinear } from './pcm-encode';
 
 describe('pcm-encode pure DSP', () => {
   it('floatToPcm16 clamps sample bounds', () => {

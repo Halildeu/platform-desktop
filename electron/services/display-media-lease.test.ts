@@ -1,18 +1,15 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from 'vitest';
 
-import {
-  DisplayMediaLease,
-  shouldGrantDisplayMediaRequest,
-} from "./display-media-lease";
+import { DisplayMediaLease, shouldGrantDisplayMediaRequest } from './display-media-lease';
 
-describe("DisplayMediaLease", () => {
-  it("fails closed when there is no recorder lease or active recording", () => {
+describe('DisplayMediaLease', () => {
+  it('fails closed when there is no recorder lease or active recording', () => {
     const lease = new DisplayMediaLease(1000);
 
     expect(lease.canGrant(10)).toBe(false);
   });
 
-  it("allows display media only inside the bounded pre-capture lease", () => {
+  it('allows display media only inside the bounded pre-capture lease', () => {
     const lease = new DisplayMediaLease(1000);
 
     expect(lease.begin(10)).toBe(1010);
@@ -20,7 +17,7 @@ describe("DisplayMediaLease", () => {
     expect(lease.canGrant(1010)).toBe(false);
   });
 
-  it("allows display media while recording is active and clears when recording stops", () => {
+  it('allows display media while recording is active and clears when recording stops', () => {
     const lease = new DisplayMediaLease(1000);
 
     lease.setRecordingActive(true);
@@ -30,7 +27,7 @@ describe("DisplayMediaLease", () => {
     expect(lease.canGrant(1_000_000)).toBe(false);
   });
 
-  it("explicit clear revokes an unused capture lease", () => {
+  it('explicit clear revokes an unused capture lease', () => {
     const lease = new DisplayMediaLease(1000);
 
     lease.begin(10);
@@ -39,7 +36,7 @@ describe("DisplayMediaLease", () => {
     expect(lease.canGrant(20)).toBe(false);
   });
 
-  it("display media request policy requires lease and the main frame process", () => {
+  it('display media request policy requires lease and the main frame process', () => {
     expect(
       shouldGrantDisplayMediaRequest({
         canGrantLease: false,

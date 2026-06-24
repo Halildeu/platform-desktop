@@ -10,6 +10,7 @@ Bu dosya repo içindeki en yüksek öncelikli giriş yüzeyidir.
 4. `README.md` (proje + ekosistem haritası)
 
 Soru tipine göre otoriter kaynak:
+
 - **Mimari karar**: `docs/adr/*.md`
 - **Aktif iş**: [Project #4 platform-ai Faz 24](https://github.com/users/Halildeu/projects/4) (Hedef Repo: platform-desktop filter)
 - **Audio contract**: `platform-backend/audio-gateway-service/docs/contract-v1.md`

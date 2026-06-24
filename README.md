@@ -18,29 +18,29 @@ Faz 24 M6 Integration kapsamında konumlanır.
 
 ## Repo Konumu (Workcube ekosistem haritası)
 
-| Repo | Rol |
-|---|---|
-| **platform-desktop** (bu) | Electron + React desktop client (mac/Windows/Linux) |
-| [platform-mobile](https://github.com/Halildeu/platform-mobile) | React Native + Expo mobile client (planlı) |
-| [platform-ai](https://github.com/Halildeu/platform-ai) | Python servisleri — STT, diarization, meeting-ai |
-| [platform-backend](https://github.com/Halildeu/platform-backend) | Spring Boot — `audio-gateway-service` + `meeting-service` + `transcript-service` |
-| [platform-web](https://github.com/Halildeu/platform-web) | React + Single-SPA — `mfe-meeting` MFE (paralel) |
-| [platform-k8s-gitops](https://github.com/Halildeu/platform-k8s-gitops) | GitOps desired-state |
+| Repo                                                                   | Rol                                                                              |
+| ---------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
+| **platform-desktop** (bu)                                              | Electron + React desktop client (mac/Windows/Linux)                              |
+| [platform-mobile](https://github.com/Halildeu/platform-mobile)         | React Native + Expo mobile client (planlı)                                       |
+| [platform-ai](https://github.com/Halildeu/platform-ai)                 | Python servisleri — STT, diarization, meeting-ai                                 |
+| [platform-backend](https://github.com/Halildeu/platform-backend)       | Spring Boot — `audio-gateway-service` + `meeting-service` + `transcript-service` |
+| [platform-web](https://github.com/Halildeu/platform-web)               | React + Single-SPA — `mfe-meeting` MFE (paralel)                                 |
+| [platform-k8s-gitops](https://github.com/Halildeu/platform-k8s-gitops) | GitOps desired-state                                                             |
 
 ## Stack
 
-| Katman | Teknoloji |
-|---|---|
-| **Shell** | Electron 31+ (main + preload + renderer processes) |
-| **UI** | React 19 + TypeScript |
-| **Build** | Vite (renderer) + electron-builder (packaging) |
-| **State** | Redux Toolkit (platform-web reuse) |
-| **Audio** | getUserMedia (mic) + loopback (sistem sesi) + AudioWorklet → PCM16 16kHz mono |
+| Katman      | Teknoloji                                                                                 |
+| ----------- | ----------------------------------------------------------------------------------------- |
+| **Shell**   | Electron 31+ (main + preload + renderer processes)                                        |
+| **UI**      | React 19 + TypeScript                                                                     |
+| **Build**   | Vite (renderer) + electron-builder (packaging)                                            |
+| **State**   | Redux Toolkit (platform-web reuse)                                                        |
+| **Audio**   | getUserMedia (mic) + loopback (sistem sesi) + AudioWorklet → PCM16 16kHz mono             |
 | **Network** | REST chunks (`POST /api/v1/audio-gateway/sessions/{id}/chunks`; WS `/stream` planned-404) |
-| **Auth** | Keycloak OAuth2 PKCE (`keycloak-js` + custom URI scheme callback) |
-| **Test** | Vitest (unit) + Playwright (e2e renderer) + Spectron (Electron main) |
-| **Package** | electron-builder — DMG (macOS) + NSIS (Windows) + AppImage (Linux) |
-| **Update** | electron-updater (Squirrel/Sparkle/AppImage) |
+| **Auth**    | Keycloak OAuth2 PKCE (`keycloak-js` + custom URI scheme callback)                         |
+| **Test**    | Vitest (unit) + Playwright (e2e renderer) + Spectron (Electron main)                      |
+| **Package** | electron-builder — DMG (macOS) + NSIS (Windows) + AppImage (Linux)                        |
+| **Update**  | electron-updater (Squirrel/Sparkle/AppImage)                                              |
 
 ## Mimari Akış
 
@@ -89,6 +89,7 @@ Faz 24 M6 Integration kapsamında konumlanır.
 Tam liste: [CLAUDE.md](./CLAUDE.md) + global `~/.claude/CLAUDE.md` HARD RULE seti.
 
 Özet:
+
 - **Cross-AI Peer Review** zorunlu (provider-level)
 - **Plan Consensus Autonomy** — Codex AGREE → direkt impl
 - **No Fake Work** — Electron e2e test koşmadan "tests added" yasak
@@ -98,18 +99,18 @@ Tam liste: [CLAUDE.md](./CLAUDE.md) + global `~/.claude/CLAUDE.md` HARD RULE set
 
 ## Faz Yol Haritası — Faz 24 M6 Integration
 
-| Slice | Konu | Durum |
-|---|---|---|
+| Slice             | Konu                                                 | Durum       |
+| ----------------- | ---------------------------------------------------- | ----------- |
 | **PR-desktop-01** | Electron + React + Vite scaffold + Keycloak SSO PKCE | ⏳ planning |
-| **PR-desktop-02** | Audio capture + WebSocket → audio-gateway-service | ⏳ |
-| **PR-desktop-03** | Live transcript UI + draft→final state machine | ⏳ |
-| **PR-desktop-04** | Speaker diarization render (timeline) | ⏳ |
-| **PR-desktop-05** | Summary + actions panel + export | ⏳ |
-| **PR-desktop-06** | System tray + native notifications + auto-launch | ⏳ |
-| **PR-desktop-07** | macOS code signing + notarization | ⏳ |
-| **PR-desktop-08** | Windows Authenticode + installer (NSIS) | ⏳ |
-| **PR-desktop-09** | Linux AppImage + Debian package | ⏳ |
-| **PR-desktop-10** | Auto-updater (Squirrel/Sparkle/AppImage) | ⏳ |
+| **PR-desktop-02** | Audio capture + WebSocket → audio-gateway-service    | ⏳          |
+| **PR-desktop-03** | Live transcript UI + draft→final state machine       | ⏳          |
+| **PR-desktop-04** | Speaker diarization render (timeline)                | ⏳          |
+| **PR-desktop-05** | Summary + actions panel + export                     | ⏳          |
+| **PR-desktop-06** | System tray + native notifications + auto-launch     | ⏳          |
+| **PR-desktop-07** | macOS code signing + notarization                    | ⏳          |
+| **PR-desktop-08** | Windows Authenticode + installer (NSIS)              | ⏳          |
+| **PR-desktop-09** | Linux AppImage + Debian package                      | ⏳          |
+| **PR-desktop-10** | Auto-updater (Squirrel/Sparkle/AppImage)             | ⏳          |
 
 ## Hızlı Başlangıç
 
