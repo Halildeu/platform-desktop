@@ -4,6 +4,8 @@ import { ChunkSender } from './chunk-sender';
 import { loadGatewayConfig } from './gateway-client';
 
 const cfg = loadGatewayConfig({ GATEWAY_BASE_URL: 'https://gw.example.com' });
+const meetingId = '22222222-2222-4222-8222-222222222222';
+const otherMeetingId = '33333333-3333-4333-8333-333333333333';
 
 function mockFetch() {
   const fetchMock = vi.fn(async (url: string) => {
@@ -30,7 +32,7 @@ describe('ChunkSender (seq state machine)', () => {
   it('start: idle → active + sessionId', async () => {
     mockFetch();
     expect(sender.getState()).toBe('idle');
-    const id = await sender.start('MTG-2026-0001', 'dev1');
+    const id = await sender.start(meetingId, 'dev1');
     expect(id).toBe('SES-1');
     expect(sender.getState()).toBe('active');
     expect(sender.nextSeq()).toBe(0);
@@ -38,7 +40,7 @@ describe('ChunkSender (seq state machine)', () => {
 
   it('send: seq 0,1,2 strict-contiguous artar', async () => {
     mockFetch();
-    await sender.start('MTG-2026-0001', 'dev1');
+    await sender.start(meetingId, 'dev1');
     expect(await sender.send(new Uint8Array([1]), 10)).toBe(0);
     expect(await sender.send(new Uint8Array([2]), 20)).toBe(1);
     expect(await sender.send(new Uint8Array([3]), 30)).toBe(2);
@@ -60,7 +62,7 @@ describe('ChunkSender (seq state machine)', () => {
     });
     vi.stubGlobal('fetch', fetchMock);
 
-    await sender.start('MTG-2026-0001', 'dev1');
+    await sender.start(meetingId, 'dev1');
     const result = await Promise.all([
       sender.send(new Uint8Array([1]), 10),
       sender.send(new Uint8Array([2]), 20),
@@ -73,7 +75,7 @@ describe('ChunkSender (seq state machine)', () => {
 
   it('finish: active → finished', async () => {
     mockFetch();
-    await sender.start('MTG-2026-0001', 'dev1');
+    await sender.start(meetingId, 'dev1');
     await sender.finish();
     expect(sender.getState()).toBe('finished');
   });
@@ -84,15 +86,15 @@ describe('ChunkSender (seq state machine)', () => {
 
   it('double start → throw', async () => {
     mockFetch();
-    await sender.start('MTG-2026-0001', 'dev1');
-    await expect(sender.start('MTG-2026-0002', 'dev1')).rejects.toThrow('already active');
+    await sender.start(meetingId, 'dev1');
+    await expect(sender.start(otherMeetingId, 'dev1')).rejects.toThrow('already active');
   });
 
   it('getJwt lazily çağrılır (login gelince gerçek token)', async () => {
     const getJwt = vi.fn(() => 'JWT');
     const s = new ChunkSender(cfg, getJwt);
     mockFetch();
-    await s.start('MTG-2026-0001', 'dev1');
+    await s.start(meetingId, 'dev1');
     await s.send(new Uint8Array([1]), 0);
     expect(getJwt).toHaveBeenCalled();
   });

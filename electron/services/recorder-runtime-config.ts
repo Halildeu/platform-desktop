@@ -1,4 +1,5 @@
-const MEETING_ID_PATTERN = /^MTG-[0-9]{4}-[0-9]{1,8}$/;
+const MEETING_ID_PATTERN =
+  /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
 const DEVICE_ID_PATTERN = /^[A-Za-z0-9._-]{1,64}$/;
 const DEFAULT_DEVICE_ID = 'desktop-1';
 
@@ -34,7 +35,7 @@ export function loadRecorderRuntimeConfig(
       deviceId,
       ready: false,
       reason:
-        'RECORDER_MEETING_ID tanimli degil; meeting-service/audio-gateway contract netlesene kadar kayit kapali.',
+        'RECORDER_MEETING_ID tanimli degil; kayit icin meeting-service MeetingResponse.id gerekli.',
     };
   }
 
@@ -43,7 +44,7 @@ export function loadRecorderRuntimeConfig(
       meetingId,
       deviceId,
       ready: false,
-      reason: 'RECORDER_MEETING_ID audio-gateway meetingId formatina uymuyor (^MTG-YYYY-N).',
+      reason: 'RECORDER_MEETING_ID meeting-service UUID formatina uymuyor.',
     };
   }
 
