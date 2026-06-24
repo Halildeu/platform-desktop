@@ -1,12 +1,22 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { loadKeycloakConfig } from './keycloak-config';
-import { buildAuthorizationUrl, loopbackRedirectUri, toTokenSet } from './oauth-flow';
+import {
+  buildAuthorizationUrl,
+  loopbackRedirectUri,
+  revokeRefreshToken,
+  toTokenSet,
+} from './oauth-flow';
 
 const cfg = loadKeycloakConfig({
   KEYCLOAK_BASE_URL: 'https://auth.example.com',
   KEYCLOAK_CLIENT_ID: 'platform-desktop',
   KEYCLOAK_SCOPE: 'openid profile',
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
 });
 
 describe('oauth-flow (saf)', () => {
@@ -50,5 +60,23 @@ describe('oauth-flow (saf)', () => {
     expect(ts.accessToken).toBe('AT');
     expect(ts.refreshToken).toBe('RT');
     expect(ts.expiresAt).toBe(1_000 + 300_000);
+  });
+  it('revokeRefreshToken: calls Keycloak logout endpoint with refresh token', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await revokeRefreshToken(cfg, 'REFRESH-TOKEN');
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://auth.example.com/realms/platform-test/protocol/openid-connect/logout',
+      expect.objectContaining({
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      }),
+    );
+
+    const body = new URLSearchParams(fetchMock.mock.calls[0][1].body);
+    expect(body.get('client_id')).toBe('platform-desktop');
+    expect(body.get('refresh_token')).toBe('REFRESH-TOKEN');
   });
 });

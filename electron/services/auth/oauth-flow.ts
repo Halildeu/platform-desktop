@@ -8,6 +8,7 @@
 
 import {
   authorizationEndpoint,
+  logoutEndpoint,
   type KeycloakConfig,
   tokenEndpoint,
 } from './keycloak-config';
@@ -102,4 +103,23 @@ export async function refreshAccessToken(
     throw new Error(`token refresh failed: ${res.status}`);
   }
   return toTokenSet((await res.json()) as OidcTokenResponse);
+}
+
+/** refresh_token revoke/logout. Token degeri loglanmaz veya renderer'a donmez. */
+export async function revokeRefreshToken(
+  cfg: KeycloakConfig,
+  refreshToken: string,
+): Promise<void> {
+  const body = new URLSearchParams({
+    client_id: cfg.clientId,
+    refresh_token: refreshToken,
+  });
+  const res = await fetch(logoutEndpoint(cfg), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: body.toString(),
+  });
+  if (!res.ok) {
+    throw new Error(`token revoke failed: ${res.status}`);
+  }
 }

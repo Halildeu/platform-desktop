@@ -139,6 +139,14 @@ npm run package:win
 npm run package:linux
 ```
 
+## Current Audio Capture Scope
+
+PR-desktop-02 currently records microphone audio only and streams PCM16/16kHz mono
+chunks to `audio-gateway-service` over REST. System audio / loopback capture remains
+the product target, but it is intentionally handled as a separate follow-up slice so
+the authentication, gateway session, strict chunk sequencing, and privacy hardening
+can be reviewed cleanly first.
+
 ## Lisans
 
 Internal — Faz 24 Meeting Intelligence (bağımsız ürün).
