@@ -2,15 +2,17 @@
   "name": "platform-desktop",
   "version": "0.1.0",
   "description": "Meeting Intelligence Desktop Client — Electron + React + TypeScript",
+  "author": "Workcube Platform Team",
   "main": "dist-electron/main.js",
   "private": true,
   "type": "module",
   "engines": {
-    "node": ">=22.0.0"
+    "node": ">=22.12.0"
   },
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build && tsc -p tsconfig.electron.json",
+    "security:audit": "npm audit --audit-level=moderate",
     "preview": "vite preview",
     "package": "npm run build && electron-builder",
     "package:mac": "npm run build && electron-builder --mac",
@@ -47,8 +49,8 @@
     "@typescript-eslint/eslint-plugin": "^8.0.0",
     "@typescript-eslint/parser": "^8.0.0",
     "@vitejs/plugin-react": "^4.3.0",
-    "electron": "^33.0.0",
-    "electron-builder": "^25.0.0",
+    "electron": "^42.5.0",
+    "electron-builder": "^26.15.3",
     "electron-updater": "^6.3.0",
     "eslint": "^9.0.0",
     "eslint-plugin-react": "^7.37.0",
@@ -60,7 +62,7 @@
     "vite": "^6.0.0",
     "vite-plugin-electron": "^0.29.0",
     "vite-plugin-electron-renderer": "^1.0.0",
-    "vitest": "^2.1.0"
+    "vitest": "^4.1.9"
   },
   "build": {
     "appId": "com.workcube.meeting-intelligence",
