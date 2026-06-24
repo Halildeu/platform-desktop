@@ -2,8 +2,9 @@
  * audio-gateway REST client (#2 PR-desktop-02, Halil (b)).
  *
  * Contract-v1 (platform-backend/audio-gateway-service/docs/contract-v1.md):
- *   POST /sessions → POST /sessions/{id}/chunks (seq strict-contiguous + idempotent)
- *   → POST /finish. WS /stream planned-404, REST kullanılır.
+ *   POST /consents → POST /sessions → POST /sessions/{id}/chunks
+ *   (seq strict-contiguous + idempotent) → POST /finish. WS /stream
+ *   planned-404, REST kullanılır.
  *
  * JWT login'den BAĞIMSIZ — token parametre olarak alınır (#1 login gelince bağlanır).
  * URL + header kurucular saf/test-edilebilir; HTTP (fetch) gerçek gateway gerektirir.
@@ -46,6 +47,9 @@ export function loadGatewayConfig(env: NodeJS.ProcessEnv = process.env): Gateway
 
 export function sessionsUrl(cfg: GatewayConfig): string {
   return `${cfg.baseUrl}${API}/sessions`;
+}
+export function consentsUrl(cfg: GatewayConfig): string {
+  return `${cfg.baseUrl}${API}/consents`;
 }
 export function chunksUrl(cfg: GatewayConfig, sessionId: string): string {
   return `${cfg.baseUrl}${API}/sessions/${sessionId}/chunks`;
@@ -129,10 +133,54 @@ export interface StartSessionArgs {
   language: string;
 }
 
+export interface RecordConsentArgs {
+  meetingId: string;
+  captureId: string;
+  consentVersion: string;
+  consentTextHash: string;
+  locale: string;
+}
+
+export interface RecordConsentInfo {
+  meetingId: string;
+  captureId: string;
+  consentVersion: string;
+  consentTextHash: string;
+  locale: string;
+  correlationId: string;
+  acceptedAtMs: number;
+}
+
 export interface SessionInfo {
   sessionId: string;
   chunkUploadUrl?: string;
   finishUrl?: string;
+}
+
+/** POST /consents — server-time audit proof before local capture starts. */
+export async function recordConsent(
+  cfg: GatewayConfig,
+  jwt: string,
+  args: RecordConsentArgs,
+): Promise<RecordConsentInfo> {
+  const res = await fetch(consentsUrl(cfg), {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${jwt}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      meetingId: args.meetingId,
+      captureId: args.captureId,
+      consentVersion: args.consentVersion,
+      consentTextHash: args.consentTextHash,
+      locale: args.locale,
+    }),
+  });
+  if (!res.ok) {
+    throw new Error(await httpErrorMessage(res, 'recordConsent'));
+  }
+  return (await res.json()) as RecordConsentInfo;
 }
 
 /** POST /sessions — oturum başlat (WAV/PCM16 16kHz mono). */

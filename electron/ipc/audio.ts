@@ -10,7 +10,7 @@ import { ipcMain } from 'electron';
 import { randomUUID } from 'node:crypto';
 
 import { ChunkSender } from '../services/gateway/chunk-sender';
-import { loadGatewayConfig } from '../services/gateway/gateway-client';
+import { loadGatewayConfig, recordConsent } from '../services/gateway/gateway-client';
 import {
   beginCapturePermissionLease,
   clearCapturePermissionLease,
@@ -24,7 +24,9 @@ import { getValidAccessToken } from './auth';
 
 const MAX_CHUNK_BYTES = 6_400;
 const ID_PATTERN = /^[A-Za-z0-9._:-]{1,128}$/;
+const CONSENT_VERSION_PATTERN = /^[A-Za-z0-9._:-]{1,64}$/;
 const CONSENT_HASH_PATTERN = /^sha256:[a-f0-9]{64}$/;
+const LOCALE_PATTERN = /^[a-z]{2}(-[A-Z]{2})?$/;
 
 interface ConsentRecord {
   acceptedAt: string;
@@ -66,6 +68,22 @@ function requireConsentHash(value: unknown): string {
     throw new Error('consentTextHash must be sha256:<64 lowercase hex>');
   }
   return hash;
+}
+
+function requireConsentVersion(value: unknown): string {
+  const version = requireText(value, 'consentVersion');
+  if (!CONSENT_VERSION_PATTERN.test(version)) {
+    throw new Error('consentVersion has invalid format');
+  }
+  return version;
+}
+
+function requireLocale(value: unknown): string {
+  const locale = requireText(value, 'locale');
+  if (!LOCALE_PATTERN.test(locale)) {
+    throw new Error('locale must be ISO language or language-region');
+  }
+  return locale;
 }
 
 function requireActive(captureId: unknown): ActiveRecording {
@@ -124,9 +142,9 @@ export function registerAudioIpc(): void {
       consentTextHash: unknown,
       locale: unknown,
     ): Promise<{ ok: boolean }> => {
-      const version = requireText(consentVersion, 'consentVersion');
+      const version = requireConsentVersion(consentVersion);
       const hash = requireConsentHash(consentTextHash);
-      const loc = requireText(locale, 'locale');
+      const loc = requireLocale(locale);
       pendingConsent = {
         acceptedAt: new Date().toISOString(),
         consentVersion: version,
@@ -174,13 +192,19 @@ export function registerAudioIpc(): void {
       pendingConsent = null;
       starting = true;
       try {
-        const cfg = loadGatewayConfig();
-        const sender = new ChunkSender(cfg, () => getValidAccessToken());
-        const sessionId = await sender.start(
-          requireIdentifier(meetingId, 'meetingId'),
-          requireIdentifier(deviceId, 'deviceId'),
-        );
+        const normalizedMeetingId = requireIdentifier(meetingId, 'meetingId');
+        const normalizedDeviceId = requireIdentifier(deviceId, 'deviceId');
         const captureId = randomUUID();
+        const cfg = loadGatewayConfig();
+        await recordConsent(cfg, await getValidAccessToken(), {
+          meetingId: normalizedMeetingId,
+          captureId,
+          consentVersion: consent.consentVersion,
+          consentTextHash: consent.consentTextHash,
+          locale: consent.locale,
+        });
+        const sender = new ChunkSender(cfg, () => getValidAccessToken());
+        const sessionId = await sender.start(normalizedMeetingId, normalizedDeviceId);
         active = { captureId, sender, lastStartedAtMs: null, consent };
         setRecordingActive(true);
         return { sessionId, captureId };
