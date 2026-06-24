@@ -8,12 +8,14 @@ import {
   CONSENT_LOCALE,
 } from './components/ConsentDialog';
 
-function getMeetingId(): string {
-  // TODO: Halil'den gerçek meetingId contract bekleniyor (issue #2).
-  // Geçici olarak kayıt başlatmayı engelleyen açık hata.
-  throw new Error(
-    'Geçerli meetingId bulunamadı; kayıt başlatılamaz. (meetingId kaynağı henüz belirlenmedi)',
-  );
+const MEETING_ID_MISSING_MESSAGE =
+  'Geçerli meetingId bulunamadı; kayıt başlatılamaz. (meetingId kaynağı henüz belirlenmedi)';
+
+interface RecorderRuntimeConfig {
+  meetingId: string | null;
+  deviceId: string;
+  ready: boolean;
+  reason: string | null;
 }
 
 interface SafeJwtClaims {
@@ -33,6 +35,7 @@ function App() {
   const [recording, setRecording] = useState(false);
   const [startPending, setStartPending] = useState(false);
   const [showConsent, setShowConsent] = useState(false);
+  const [recorderConfig, setRecorderConfig] = useState<RecorderRuntimeConfig | null>(null);
   const [status, setStatus] = useState('');
   const [error, setError] = useState('');
   const recorderRef = useRef<Recorder | null>(null);
@@ -49,6 +52,17 @@ function App() {
         setClaims(s.claims ?? null);
       })
       .catch(() => undefined);
+    void window.electronAPI?.audio
+      .recorderConfig()
+      .then((cfg) => setRecorderConfig(cfg))
+      .catch(() =>
+        setRecorderConfig({
+          meetingId: null,
+          deviceId: 'desktop-1',
+          ready: false,
+          reason: 'Recorder runtime config okunamadi.',
+        }),
+      );
   }, []);
 
   const handleLogin = async (): Promise<void> => {
@@ -78,6 +92,10 @@ function App() {
   };
 
   const handleRecordClick = (): void => {
+    if (!recorderConfig?.ready || !recorderConfig.meetingId) {
+      setError(recorderConfig?.reason ?? MEETING_ID_MISSING_MESSAGE);
+      return;
+    }
     setShowConsent(true);
   };
 
@@ -102,7 +120,10 @@ function App() {
     setError('');
     setStartPending(true);
     try {
-      const rec = await startRecording(getMeetingId(), 'desktop-1');
+      if (!recorderConfig?.ready || !recorderConfig.meetingId) {
+        throw new Error(recorderConfig?.reason ?? MEETING_ID_MISSING_MESSAGE);
+      }
+      const rec = await startRecording(recorderConfig.meetingId, recorderConfig.deviceId);
       rec.onError((err) => {
         recorderRef.current = null;
         setRecording(false);
@@ -155,9 +176,21 @@ function App() {
           </>
         ) : (
           <>
-            <p>Giriş yapıldı. Toplantı kaydına hazır.</p>
-            <button type="button" onClick={handleRecordClick} disabled={startPending}>
-              {startPending ? 'Başlatılıyor...' : 'Kaydet'}
+            {recorderConfig?.ready ? (
+              <p>Giriş yapıldı. Toplantı kaydına hazır.</p>
+            ) : (
+              <p>Giriş yapıldı. Kayıt için canonical meetingId bekleniyor.</p>
+            )}
+            <button
+              type="button"
+              onClick={handleRecordClick}
+              disabled={startPending || !recorderConfig?.ready}
+            >
+              {startPending
+                ? 'Başlatılıyor...'
+                : recorderConfig?.ready
+                  ? 'Kaydet'
+                  : 'Meeting contract bekleniyor'}
             </button>
             <button type="button" onClick={() => void handleLogout()} style={{ marginLeft: 8 }}>
               Çıkış
