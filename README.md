@@ -76,7 +76,7 @@ Faz 24 M6 Integration kapsamında konumlanır.
 
 ## Yeni Eklemeler (Desktop özel)
 
-- **Electron main process** → audio capture native API + WebSocket persistent
+- **Electron main process** → secure IPC + REST audio session/chunk bridge
 - **System tray** → meeting active indicator + quick controls
 - **Native notifications** → OS-level (macOS Notification Center / Windows Action Center)
 - **Auto-launch** → opsiyonel sistem başlangıcı
@@ -102,7 +102,7 @@ Tam liste: [CLAUDE.md](./CLAUDE.md) + global `~/.claude/CLAUDE.md` HARD RULE set
 | Slice             | Konu                                                 | Durum       |
 | ----------------- | ---------------------------------------------------- | ----------- |
 | **PR-desktop-01** | Electron + React + Vite scaffold + Keycloak SSO PKCE | ⏳ planning |
-| **PR-desktop-02** | Audio capture + WebSocket → audio-gateway-service    | ⏳          |
+| **PR-desktop-02** | Audio capture + REST chunks → audio-gateway-service  | ✅ merged   |
 | **PR-desktop-03** | Live transcript UI + draft→final state machine       | ⏳          |
 | **PR-desktop-04** | Speaker diarization render (timeline)                | ⏳          |
 | **PR-desktop-05** | Summary + actions panel + export                     | ⏳          |
@@ -142,11 +142,20 @@ npm run package:linux
 
 ## Current Audio Capture Scope
 
-PR-desktop-02 currently records microphone audio only and streams PCM16/16kHz mono
-chunks to `audio-gateway-service` over REST. System audio / loopback capture remains
-the product target, but it is intentionally handled as a separate follow-up slice so
-the authentication, gateway session, strict chunk sequencing, and privacy hardening
-can be reviewed cleanly first.
+PR-desktop-02 is merged through the stacked PRs #17-#20. Current behavior:
+
+- Auth: Keycloak PKCE login stays in the Electron main process; renderer sees only safe status/claim summary.
+- Runtime config: recorder starts only when `RECORDER_MEETING_ID` satisfies the audio-gateway contract pattern `^MTG-[0-9]{4}-[0-9]{1,8}$`. Random desktop-generated meeting IDs are forbidden.
+- Capture: renderer captures microphone plus best-effort system audio/loopback. The Electron display-media handler is fail-closed unless a bounded recorder capture lease is active and the request comes from the main renderer frame.
+- Encoding: AudioWorklet emits PCM16 / 16kHz / mono chunks.
+- Transport: main process sends REST chunks to `audio-gateway-service` (`POST /sessions` → `POST /sessions/{id}/chunks` → `POST /finish`) using the login JWT.
+- KVKK boundary: raw audio is not cached to local disk by default. Consent text has a real `sha256:<64 hex>` digest derived from the canonical rendered consent text.
+
+Open acceptance boundaries before recorder can be called end-to-end production-ready:
+
+- Canonical meeting source is still a cross-repo contract gate: desktop currently expects a pre-created `RECORDER_MEETING_ID`; meeting-service UUID ↔ audio-gateway `MTG-*` drift is not solved in this repo.
+- Server-time consent audit persistence is a backend/API gate; the desktop slice records only local consent state before starting capture.
+- Real Electron loopback/audio e2e still needs runtime smoke with a live meeting/gateway/STT path.
 
 ## Lisans
 
