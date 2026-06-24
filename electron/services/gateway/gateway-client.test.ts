@@ -13,6 +13,7 @@ import {
 } from './gateway-client';
 
 const cfg = loadGatewayConfig({ GATEWAY_BASE_URL: 'https://gw.example.com/' });
+const meetingId = '22222222-2222-4222-8222-222222222222';
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -100,7 +101,7 @@ describe('gateway-client HTTP fetch wrapper', () => {
     const info = await startSession(
       cfg,
       'JWT',
-      { meetingId: 'MTG-2026-0042', deviceId: 'dev1', language: 'tr' },
+      { meetingId, deviceId: 'dev1', language: 'tr' },
       'IK',
     );
     expect(info.sessionId).toBe('SES-9');
@@ -110,7 +111,7 @@ describe('gateway-client HTTP fetch wrapper', () => {
     expect(opts.headers.Authorization).toBe('Bearer JWT');
     const body = JSON.parse(opts.body as string);
     expect(body).toMatchObject({
-      meetingId: 'MTG-2026-0042',
+      meetingId,
       audioFormat: 'PCM16',
       sampleRateHz: 16000,
       channels: 1,
@@ -161,19 +162,14 @@ describe('gateway-client HTTP fetch wrapper', () => {
             message: 'JWT missing required claim tenantId for user@example.com',
             correlationId: 'corr-123',
             retryable: false,
-            details: { meetingId: 'MTG-SECRET' },
+            details: { meetingId: 'sensitive-meeting-id' },
           }),
       }),
     );
 
     let message = '';
     try {
-      await startSession(
-        cfg,
-        'JWT',
-        { meetingId: 'MTG-2026-0042', deviceId: 'dev1', language: 'tr' },
-        'IK',
-      );
+      await startSession(cfg, 'JWT', { meetingId, deviceId: 'dev1', language: 'tr' }, 'IK');
     } catch (err) {
       message = err instanceof Error ? err.message : String(err);
     }
@@ -182,7 +178,7 @@ describe('gateway-client HTTP fetch wrapper', () => {
       'startSession failed: 403 code=AUDIO_GATEWAY_MEETING_FORBIDDEN correlationId=corr-123 retryable=false',
     );
     expect(message).not.toContain('user@example.com');
-    expect(message).not.toContain('MTG-SECRET');
+    expect(message).not.toContain('sensitive-meeting-id');
   });
 
   it('redacts code/correlationId that do not match safe patterns', async () => {
@@ -202,12 +198,7 @@ describe('gateway-client HTTP fetch wrapper', () => {
 
     let message = '';
     try {
-      await startSession(
-        cfg,
-        'JWT',
-        { meetingId: 'MTG-2026-0001', deviceId: 'dev1', language: 'tr' },
-        'IK',
-      );
+      await startSession(cfg, 'JWT', { meetingId, deviceId: 'dev1', language: 'tr' }, 'IK');
     } catch (err) {
       message = err instanceof Error ? err.message : String(err);
     }

@@ -3,6 +3,8 @@ import { describe, expect, it } from 'vitest';
 import { loadRecorderRuntimeConfig } from './recorder-runtime-config';
 
 describe('loadRecorderRuntimeConfig', () => {
+  const meetingId = '22222222-2222-4222-8222-222222222222';
+
   it('fails closed when no canonical meetingId is configured', () => {
     const cfg = loadRecorderRuntimeConfig({});
 
@@ -19,12 +21,12 @@ describe('loadRecorderRuntimeConfig', () => {
 
     expect(cfg.ready).toBe(false);
     expect(cfg.meetingId).toBe('not-a-meeting');
-    expect(cfg.reason).toContain('meetingId formatina uymuyor');
+    expect(cfg.reason).toContain('meeting-service UUID formatina uymuyor');
   });
 
   it('rejects invalid device identifiers', () => {
     const cfg = loadRecorderRuntimeConfig({
-      RECORDER_MEETING_ID: 'MTG-2026-1',
+      RECORDER_MEETING_ID: meetingId,
       RECORDER_DEVICE_ID: 'bad device',
     });
 
@@ -34,12 +36,12 @@ describe('loadRecorderRuntimeConfig', () => {
 
   it('returns ready config for a canonical gateway meetingId', () => {
     const cfg = loadRecorderRuntimeConfig({
-      RECORDER_MEETING_ID: 'MTG-2026-1',
+      RECORDER_MEETING_ID: meetingId,
       RECORDER_DEVICE_ID: 'desktop-halil',
     });
 
     expect(cfg).toEqual({
-      meetingId: 'MTG-2026-1',
+      meetingId,
       deviceId: 'desktop-halil',
       ready: true,
       reason: null,

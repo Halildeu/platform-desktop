@@ -64,7 +64,7 @@ describe('App recorder readiness', () => {
 
   it('canonical meetingId geldiginde kayit butonunu acar', async () => {
     installElectronApiMock({
-      meetingId: 'MTG-2026-24',
+      meetingId: '22222222-2222-4222-8222-222222222222',
       deviceId: 'desktop-1',
       ready: true,
       reason: null,
