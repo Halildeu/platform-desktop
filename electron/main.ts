@@ -13,14 +13,25 @@
  * - Crash report PII redacted
  */
 
-import 'dotenv/config'; // .env → process.env (Keycloak/gateway config), en başta
+import "dotenv/config"; // .env → process.env (Keycloak/gateway config), en başta
 
-import { app, BrowserWindow, desktopCapturer, ipcMain, session, shell } from 'electron';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import {
+  app,
+  BrowserWindow,
+  desktopCapturer,
+  ipcMain,
+  session,
+  shell,
+} from "electron";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 
-import { registerAudioIpc } from './ipc/audio';
-import { registerAuthIpc } from './ipc/auth';
+import { registerAudioIpc } from "./ipc/audio";
+import { registerAuthIpc } from "./ipc/auth";
+import {
+  canGrantDisplayMedia,
+  shouldGrantDisplayMediaRequest,
+} from "./services/display-media-lease";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -33,90 +44,87 @@ function createMainWindow(): void {
     height: 800,
     minWidth: 1024,
     minHeight: 700,
-    title: 'Meeting Intelligence',
-    backgroundColor: '#0f172a',
+    title: "Meeting Intelligence",
+    backgroundColor: "#0f172a",
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
-      preload: path.join(__dirname, 'preload.mjs'),
+      preload: path.join(__dirname, "preload.mjs"),
     },
   });
 
   // Open external links in default browser (security)
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    if (url.startsWith('http://') || url.startsWith('https://')) {
+    if (url.startsWith("http://") || url.startsWith("https://")) {
       void shell.openExternal(url);
     }
-    return { action: 'deny' };
+    return { action: "deny" };
   });
 
   if (isDev && process.env.VITE_DEV_SERVER_URL) {
     void mainWindow.loadURL(process.env.VITE_DEV_SERVER_URL);
     mainWindow.webContents.openDevTools();
   } else {
-    void mainWindow.loadFile(path.join(__dirname, '../dist/index.html'));
+    void mainWindow.loadFile(path.join(__dirname, "../dist/index.html"));
   }
 
-  mainWindow.on('closed', () => {
+  mainWindow.on("closed", () => {
     mainWindow = null;
   });
 }
 
 // IPC handlers (sample — extend in electron/ipc/*)
-ipcMain.handle('app:version', () => app.getVersion());
+ipcMain.handle("app:version", () => app.getVersion());
 
-ipcMain.handle('audio:permission-status', async () => {
+ipcMain.handle("audio:permission-status", async () => {
   // macOS TCC / Windows / Linux permission check (extend per-platform)
   return { granted: true };
 });
 
-let recordingActive = false;
-
-export function setRecordingActive(active: boolean): void {
-  recordingActive = active;
-}
-
 void app.whenReady().then(() => {
-  session.defaultSession.setDisplayMediaRequestHandler(async (req, callback) => {
-    if (!recordingActive) {
-      callback({});
-      return;
-    }
-    if (mainWindow && req.frame?.processId !== mainWindow.webContents.mainFrame.processId) {
-      callback({});
-      return;
-    }
-    const sources = await desktopCapturer.getSources({ types: ['screen'] });
-    const primary = sources[0];
-    if (!primary) {
-      callback({});
-      return;
-    }
-    callback({ video: primary, audio: 'loopback', enableLocalEcho: false });
-  });
+  session.defaultSession.setDisplayMediaRequestHandler(
+    async (req, callback) => {
+      const allowed = shouldGrantDisplayMediaRequest({
+        canGrantLease: canGrantDisplayMedia(),
+        requestProcessId: req.frame?.processId,
+        mainFrameProcessId: mainWindow?.webContents.mainFrame.processId ?? null,
+      });
+      if (!allowed) {
+        callback({});
+        return;
+      }
+      const sources = await desktopCapturer.getSources({ types: ["screen"] });
+      const primary = sources[0];
+      if (!primary) {
+        callback({});
+        return;
+      }
+      callback({ video: primary, audio: "loopback", enableLocalEcho: false });
+    },
+  );
 
   registerAuthIpc(); // #1 auth:login / auth:status / auth:logout
   registerAudioIpc(); // #2 audio:start / audio:chunk / audio:finish
   createMainWindow();
 
-  app.on('activate', () => {
+  app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) {
       createMainWindow();
     }
   });
 });
 
-app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') {
+app.on("window-all-closed", () => {
+  if (process.platform !== "darwin") {
     app.quit();
   }
 });
 
 // Security: prevent new window/navigation outside whitelist
-app.on('web-contents-created', (_, contents) => {
-  contents.on('will-navigate', (event, url) => {
-    const allowed = ['http://localhost:5173', 'file://'];
+app.on("web-contents-created", (_, contents) => {
+  contents.on("will-navigate", (event, url) => {
+    const allowed = ["http://localhost:5173", "file://"];
     if (!allowed.some((prefix) => url.startsWith(prefix))) {
       event.preventDefault();
     }
