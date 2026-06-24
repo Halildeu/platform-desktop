@@ -104,7 +104,10 @@ function App() {
       });
       recorderRef.current = rec;
       setRecording(true);
-      setStatus(`Kayıt başladı (oturum ${rec.sessionId})`);
+      const mode = rec.hasLoopback
+        ? "mikrofon + sistem sesi"
+        : "yalnız mikrofon";
+      setStatus(`Kayıt başladı (${mode}, oturum ${rec.sessionId})`);
     } catch (e) {
       setError(`Kayıt başlatılamadı: ${(e as Error).message}`);
     } finally {

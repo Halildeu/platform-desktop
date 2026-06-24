@@ -9,6 +9,11 @@
 import { ipcMain } from "electron";
 import { randomUUID } from "node:crypto";
 
+import {
+  beginCapturePermissionLease,
+  clearCapturePermissionLease,
+  setRecordingActive,
+} from "../services/display-media-lease";
 import { ChunkSender } from "../services/gateway/chunk-sender";
 import { loadGatewayConfig } from "../services/gateway/gateway-client";
 import {
@@ -102,6 +107,23 @@ export function registerAudioIpc(): void {
   );
 
   ipcMain.handle(
+    "audio:prepare-capture",
+    async (): Promise<{ ok: boolean; expiresAtMs: number }> => {
+      if (starting || active?.sender.getState() === "active") {
+        throw new Error("recording session already active");
+      }
+      return { ok: true, expiresAtMs: beginCapturePermissionLease() };
+    },
+  );
+
+  ipcMain.handle("audio:cancel-capture", async (): Promise<{ ok: boolean }> => {
+    if (!active) {
+      clearCapturePermissionLease();
+    }
+    return { ok: true };
+  });
+
+  ipcMain.handle(
     "audio:start",
     async (
       _e,
@@ -121,7 +143,11 @@ export function registerAudioIpc(): void {
         );
         const captureId = randomUUID();
         active = { captureId, sender, lastStartedAtMs: null };
+        setRecordingActive(true);
         return { sessionId, captureId };
+      } catch (err) {
+        clearCapturePermissionLease();
+        throw err;
       } finally {
         starting = false;
       }
@@ -159,6 +185,8 @@ export function registerAudioIpc(): void {
         finishing = false;
         if (active?.captureId === recording.captureId) {
           active = null;
+          setRecordingActive(false);
+          clearCapturePermissionLease();
         }
       }
       return { ok: true };
@@ -178,7 +206,11 @@ export function registerAudioIpc(): void {
           // best-effort cleanup
         } finally {
           active = null;
+          setRecordingActive(false);
+          clearCapturePermissionLease();
         }
+      } else {
+        clearCapturePermissionLease();
       }
       return { ok: true };
     },
