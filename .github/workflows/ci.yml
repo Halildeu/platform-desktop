@@ -27,6 +27,9 @@ jobs:
       - name: Install
         run: npm ci
 
+      - name: Security audit
+        run: npm run security:audit
+
       - name: Typecheck (renderer)
         run: npx tsc --noEmit
 
