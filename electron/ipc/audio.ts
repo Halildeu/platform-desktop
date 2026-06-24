@@ -6,16 +6,25 @@
  * KVKK: chunk diske YAZILMAZ, memory'de akar.
  */
 
-import { ipcMain } from 'electron';
-import { randomUUID } from 'node:crypto';
+import { ipcMain } from "electron";
+import { randomUUID } from "node:crypto";
 
-import { ChunkSender } from '../services/gateway/chunk-sender';
-import { loadGatewayConfig } from '../services/gateway/gateway-client';
-import { setRecordingActive } from '../main';
-import { getValidAccessToken } from './auth';
+import { ChunkSender } from "../services/gateway/chunk-sender";
+import { loadGatewayConfig } from "../services/gateway/gateway-client";
+import {
+  beginCapturePermissionLease,
+  clearCapturePermissionLease,
+  setRecordingActive,
+} from "../services/display-media-lease";
+import {
+  loadRecorderRuntimeConfig,
+  type RecorderRuntimeConfig,
+} from "../services/recorder-runtime-config";
+import { getValidAccessToken } from "./auth";
 
 const MAX_CHUNK_BYTES = 6_400;
 const ID_PATTERN = /^[A-Za-z0-9._:-]{1,128}$/;
+const CONSENT_HASH_PATTERN = /^sha256:[a-f0-9]{64}$/;
 
 interface ConsentRecord {
   acceptedAt: string;
@@ -37,7 +46,7 @@ let finishing = false;
 let pendingConsent: ConsentRecord | null = null;
 
 function requireText(value: unknown, label: string): string {
-  if (typeof value !== 'string' || value.trim() === '') {
+  if (typeof value !== "string" || value.trim() === "") {
     throw new Error(`${label} is required`);
   }
   return value;
@@ -51,13 +60,21 @@ function requireIdentifier(value: unknown, label: string): string {
   return text;
 }
 
+function requireConsentHash(value: unknown): string {
+  const hash = requireText(value, "consentTextHash");
+  if (!CONSENT_HASH_PATTERN.test(hash)) {
+    throw new Error("consentTextHash must be sha256:<64 lowercase hex>");
+  }
+  return hash;
+}
+
 function requireActive(captureId: unknown): ActiveRecording {
-  const id = requireText(captureId, 'captureId');
+  const id = requireText(captureId, "captureId");
   if (!active) {
-    throw new Error('no active recording session');
+    throw new Error("no active recording session");
   }
   if (active.captureId !== id) {
-    throw new Error('recording session mismatch');
+    throw new Error("recording session mismatch");
   }
   return active;
 }
@@ -67,24 +84,33 @@ function requireChunkPayload(payload: unknown): {
   bytes: Uint8Array;
   startedAtMs: number;
 } {
-  if (!payload || typeof payload !== 'object') {
-    throw new Error('invalid audio chunk payload');
+  if (!payload || typeof payload !== "object") {
+    throw new Error("invalid audio chunk payload");
   }
 
-  const record = payload as { captureId?: unknown; bytes?: unknown; startedAtMs?: unknown };
-  const captureId = requireText(record.captureId, 'captureId');
+  const record = payload as {
+    captureId?: unknown;
+    bytes?: unknown;
+    startedAtMs?: unknown;
+  };
+  const captureId = requireText(record.captureId, "captureId");
   if (!(record.bytes instanceof Uint8Array)) {
-    throw new Error('audio chunk bytes must be Uint8Array');
-  }
-  if (record.bytes.byteLength === 0 || record.bytes.byteLength > MAX_CHUNK_BYTES) {
-    throw new Error(`audio chunk byte length out of bounds: ${record.bytes.byteLength}`);
+    throw new Error("audio chunk bytes must be Uint8Array");
   }
   if (
-    typeof record.startedAtMs !== 'number' ||
+    record.bytes.byteLength === 0 ||
+    record.bytes.byteLength > MAX_CHUNK_BYTES
+  ) {
+    throw new Error(
+      `audio chunk byte length out of bounds: ${record.bytes.byteLength}`,
+    );
+  }
+  if (
+    typeof record.startedAtMs !== "number" ||
     !Number.isFinite(record.startedAtMs) ||
     record.startedAtMs < 0
   ) {
-    throw new Error('startedAtMs must be finite');
+    throw new Error("startedAtMs must be finite");
   }
 
   return { captureId, bytes: record.bytes, startedAtMs: record.startedAtMs };
@@ -92,16 +118,23 @@ function requireChunkPayload(payload: unknown): {
 
 export function registerAudioIpc(): void {
   ipcMain.handle(
-    'audio:consent',
+    "audio:recorder-config",
+    async (): Promise<RecorderRuntimeConfig> => {
+      return loadRecorderRuntimeConfig();
+    },
+  );
+
+  ipcMain.handle(
+    "audio:consent",
     async (
       _e,
       consentVersion: unknown,
       consentTextHash: unknown,
       locale: unknown,
     ): Promise<{ ok: boolean }> => {
-      const version = requireText(consentVersion, 'consentVersion');
-      const hash = requireText(consentTextHash, 'consentTextHash');
-      const loc = requireText(locale, 'locale');
+      const version = requireText(consentVersion, "consentVersion");
+      const hash = requireConsentHash(consentTextHash);
+      const loc = requireText(locale, "locale");
       pendingConsent = {
         acceptedAt: new Date().toISOString(),
         consentVersion: version,
@@ -113,17 +146,37 @@ export function registerAudioIpc(): void {
   );
 
   ipcMain.handle(
-    'audio:start',
+    "audio:prepare-capture",
+    async (): Promise<{ ok: boolean; expiresAtMs: number }> => {
+      if (!pendingConsent) {
+        throw new Error("consent required before capture permission");
+      }
+      if (starting || active?.sender.getState() === "active") {
+        throw new Error("recording session already active");
+      }
+      return { ok: true, expiresAtMs: beginCapturePermissionLease() };
+    },
+  );
+
+  ipcMain.handle("audio:cancel-capture", async (): Promise<{ ok: boolean }> => {
+    if (!active) {
+      clearCapturePermissionLease();
+    }
+    return { ok: true };
+  });
+
+  ipcMain.handle(
+    "audio:start",
     async (
       _e,
       meetingId: unknown,
       deviceId: unknown,
     ): Promise<{ sessionId: string; captureId: string }> => {
       if (!pendingConsent) {
-        throw new Error('consent required before recording');
+        throw new Error("consent required before recording");
       }
-      if (starting || active?.sender.getState() === 'active') {
-        throw new Error('recording session already active');
+      if (starting || active?.sender.getState() === "active") {
+        throw new Error("recording session already active");
       }
       const consent = pendingConsent;
       pendingConsent = null;
@@ -132,13 +185,16 @@ export function registerAudioIpc(): void {
         const cfg = loadGatewayConfig();
         const sender = new ChunkSender(cfg, () => getValidAccessToken());
         const sessionId = await sender.start(
-          requireIdentifier(meetingId, 'meetingId'),
-          requireIdentifier(deviceId, 'deviceId'),
+          requireIdentifier(meetingId, "meetingId"),
+          requireIdentifier(deviceId, "deviceId"),
         );
         const captureId = randomUUID();
         active = { captureId, sender, lastStartedAtMs: null, consent };
         setRecordingActive(true);
         return { sessionId, captureId };
+      } catch (err) {
+        clearCapturePermissionLease();
+        throw err;
       } finally {
         starting = false;
       }
@@ -146,10 +202,10 @@ export function registerAudioIpc(): void {
   );
 
   ipcMain.handle(
-    'audio:chunk',
+    "audio:chunk",
     async (_e, payload: unknown): Promise<{ seq: number }> => {
       if (finishing) {
-        throw new Error('recording session is finishing');
+        throw new Error("recording session is finishing");
       }
       const chunk = requireChunkPayload(payload);
       const recording = requireActive(chunk.captureId);
@@ -157,7 +213,7 @@ export function registerAudioIpc(): void {
         recording.lastStartedAtMs !== null &&
         chunk.startedAtMs < recording.lastStartedAtMs
       ) {
-        throw new Error('startedAtMs must be monotonic');
+        throw new Error("startedAtMs must be monotonic");
       }
       recording.lastStartedAtMs = chunk.startedAtMs;
       const seq = await recording.sender.send(chunk.bytes, chunk.startedAtMs);
@@ -165,35 +221,44 @@ export function registerAudioIpc(): void {
     },
   );
 
-  ipcMain.handle('audio:finish', async (_e, captureId: unknown): Promise<{ ok: boolean }> => {
-    const recording = requireActive(captureId);
-    finishing = true;
-    try {
-      await recording.sender.finish();
-    } finally {
-      finishing = false;
-      if (active?.captureId === recording.captureId) {
-        active = null;
-        setRecordingActive(false);
-      }
-    }
-    return { ok: true };
-  });
-
-  ipcMain.handle('audio:abort', async (_e, captureId: unknown): Promise<{ ok: boolean }> => {
-    const id = requireText(captureId, 'captureId');
-    if (active?.captureId === id) {
+  ipcMain.handle(
+    "audio:finish",
+    async (_e, captureId: unknown): Promise<{ ok: boolean }> => {
+      const recording = requireActive(captureId);
+      finishing = true;
       try {
-        if (active.sender.getState() === 'active') {
-          await active.sender.finish();
-        }
-      } catch {
-        // best-effort cleanup
+        await recording.sender.finish();
       } finally {
-        active = null;
-        setRecordingActive(false);
+        finishing = false;
+        if (active?.captureId === recording.captureId) {
+          active = null;
+          setRecordingActive(false);
+        }
       }
-    }
-    return { ok: true };
-  });
+      return { ok: true };
+    },
+  );
+
+  ipcMain.handle(
+    "audio:abort",
+    async (_e, captureId: unknown): Promise<{ ok: boolean }> => {
+      const id = requireText(captureId, "captureId");
+      if (active?.captureId === id) {
+        try {
+          if (active.sender.getState() === "active") {
+            await active.sender.finish();
+          }
+        } catch {
+          // best-effort cleanup
+        } finally {
+          active = null;
+          setRecordingActive(false);
+          clearCapturePermissionLease();
+        }
+      } else {
+        clearCapturePermissionLease();
+      }
+      return { ok: true };
+    },
+  );
 }
