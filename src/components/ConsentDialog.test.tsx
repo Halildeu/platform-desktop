@@ -15,8 +15,15 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import '@testing-library/jest-dom/vitest';
+import { createHash } from 'node:crypto';
 
-import { ConsentDialog, CONSENT_VERSION, CONSENT_TEXT_HASH, CONSENT_LOCALE } from './ConsentDialog';
+import {
+  ConsentDialog,
+  CONSENT_VERSION,
+  CONSENT_TEXT_HASH,
+  CONSENT_LOCALE,
+  CONSENT_TEXT_TR,
+} from './ConsentDialog';
 
 afterEach(() => {
   cleanup();
@@ -107,7 +114,10 @@ describe('ConsentDialog', () => {
 
   it('consent sabitleri ispat zinciri için sabit kalır', () => {
     expect(CONSENT_VERSION).toBe('1.0.0');
-    expect(CONSENT_TEXT_HASH).toMatch(/^sha256:/);
+    expect(CONSENT_TEXT_HASH).toMatch(/^sha256:[a-f0-9]{64}$/);
+    expect(CONSENT_TEXT_HASH).toBe(
+      `sha256:${createHash('sha256').update(CONSENT_TEXT_TR, 'utf8').digest('hex')}`,
+    );
     expect(CONSENT_LOCALE).toBe('tr-TR');
   });
 });

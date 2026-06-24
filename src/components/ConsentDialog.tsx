@@ -8,8 +8,20 @@
 import { useEffect, useRef, useCallback, type ReactElement } from 'react';
 
 export const CONSENT_VERSION = '1.0.0';
-export const CONSENT_TEXT_HASH = 'sha256:kvkk-ses-kaydi-rizasi-v1.0.0-tr';
 export const CONSENT_LOCALE = 'tr-TR';
+export const CONSENT_INTRO =
+  'Bu toplantının ses kaydı yapılacaktır. Kayıt, mikrofon ve varsa sistem sesi (toplantı uygulaması) verilerini içerir.';
+export const CONSENT_BULLETS = [
+  'Ses verileri şifreli olarak sunucuya iletilir.',
+  'Kayıt yalnızca toplantı süresince aktiftir.',
+  'Veriler KVKK kapsamında işlenir ve korunur.',
+  'Cihazınızda ses verisi saklanmaz.',
+] as const;
+export const CONSENT_LEGAL =
+  'Devam ederek ses kaydı yapılmasını ve verilerinizin yukarıda belirtilen amaçlarla işlenmesini kabul etmiş olursunuz (KVKK Md. 5).';
+export const CONSENT_TEXT_TR = [CONSENT_INTRO, ...CONSENT_BULLETS, CONSENT_LEGAL].join('\n');
+export const CONSENT_TEXT_HASH =
+  'sha256:23e2c410ce570d2827a1049e58b398b0e4440357f7217f2fb51cedca16df1c62';
 
 export interface ConsentDialogProps {
   onAccept: () => void;
@@ -71,20 +83,13 @@ export function ConsentDialog({ onAccept, onCancel }: ConsentDialogProps): React
       >
         <h2 id="consent-title">Ses Kaydı Onayı</h2>
         <div id="consent-body">
-          <p>
-            Bu toplantının ses kaydı yapılacaktır. Kayıt, mikrofon ve varsa sistem sesi (toplantı
-            uygulaması) verilerini içerir.
-          </p>
+          <p>{CONSENT_INTRO}</p>
           <ul>
-            <li>Ses verileri şifreli olarak sunucuya iletilir.</li>
-            <li>Kayıt yalnızca toplantı süresince aktiftir.</li>
-            <li>Veriler KVKK kapsamında işlenir ve korunur.</li>
-            <li>Cihazınızda ses verisi saklanmaz.</li>
+            {CONSENT_BULLETS.map((item) => (
+              <li key={item}>{item}</li>
+            ))}
           </ul>
-          <p className="consent-legal">
-            Devam ederek ses kaydı yapılmasını ve verilerinizin yukarıda belirtilen amaçlarla
-            işlenmesini kabul etmiş olursunuz (KVKK Md. 5).
-          </p>
+          <p className="consent-legal">{CONSENT_LEGAL}</p>
           <p className="consent-version">Rıza metni sürümü: {CONSENT_VERSION}</p>
         </div>
         <div className="consent-actions">

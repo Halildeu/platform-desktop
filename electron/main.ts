@@ -21,6 +21,10 @@ import { fileURLToPath } from 'node:url';
 
 import { registerAudioIpc } from './ipc/audio';
 import { registerAuthIpc } from './ipc/auth';
+import {
+  canGrantDisplayMedia,
+  shouldGrantDisplayMediaRequest,
+} from './services/display-media-lease';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -71,19 +75,14 @@ ipcMain.handle('audio:permission-status', async () => {
   return { granted: true };
 });
 
-let recordingActive = false;
-
-export function setRecordingActive(active: boolean): void {
-  recordingActive = active;
-}
-
 void app.whenReady().then(() => {
   session.defaultSession.setDisplayMediaRequestHandler(async (req, callback) => {
-    if (!recordingActive) {
-      callback({});
-      return;
-    }
-    if (mainWindow && req.frame?.processId !== mainWindow.webContents.mainFrame.processId) {
+    const allowed = shouldGrantDisplayMediaRequest({
+      canGrantLease: canGrantDisplayMedia(),
+      requestProcessId: req.frame?.processId,
+      mainFrameProcessId: mainWindow?.webContents.mainFrame.processId ?? null,
+    });
+    if (!allowed) {
       callback({});
       return;
     }
