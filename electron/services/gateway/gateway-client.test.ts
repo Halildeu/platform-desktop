@@ -3,10 +3,12 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   chunkHeaders,
   chunksUrl,
+  consentsUrl,
   finishSession,
   finishUrl,
   loadGatewayConfig,
   newIdempotencyKey,
+  recordConsent,
   sendChunk,
   sessionsUrl,
   startSession,
@@ -14,6 +16,8 @@ import {
 
 const cfg = loadGatewayConfig({ GATEWAY_BASE_URL: 'https://gw.example.com/' });
 const meetingId = '22222222-2222-4222-8222-222222222222';
+const captureId = '33333333-3333-4333-8333-333333333333';
+const consentTextHash = 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -43,6 +47,7 @@ describe('gateway-client pure helpers', () => {
 
   it('URL builders use contract-v1 paths', () => {
     const base = 'https://gw.example.com/api/v1/audio-gateway';
+    expect(consentsUrl(cfg)).toBe(`${base}/consents`);
     expect(sessionsUrl(cfg)).toBe(`${base}/sessions`);
     expect(chunksUrl(cfg, 'SES-1')).toBe(`${base}/sessions/SES-1/chunks`);
     expect(finishUrl(cfg, 'SES-1')).toBe(`${base}/sessions/SES-1/finish`);
@@ -91,6 +96,46 @@ describe('gateway-client pure helpers', () => {
 });
 
 describe('gateway-client HTTP fetch wrapper', () => {
+  it('recordConsent posts consent proof without client clock or raw text', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        meetingId,
+        captureId,
+        consentVersion: '1.0.0',
+        consentTextHash,
+        locale: 'tr-TR',
+        correlationId: 'corr-1',
+        acceptedAtMs: 1781820000123,
+      }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const info = await recordConsent(cfg, 'JWT', {
+      meetingId,
+      captureId,
+      consentVersion: '1.0.0',
+      consentTextHash,
+      locale: 'tr-TR',
+    });
+
+    expect(info.acceptedAtMs).toBe(1781820000123);
+    const [url, opts] = fetchMock.mock.calls[0];
+    expect(url).toBe('https://gw.example.com/api/v1/audio-gateway/consents');
+    expect(opts.headers.Authorization).toBe('Bearer JWT');
+    const body = JSON.parse(opts.body as string);
+    expect(body).toEqual({
+      meetingId,
+      captureId,
+      consentVersion: '1.0.0',
+      consentTextHash,
+      locale: 'tr-TR',
+    });
+    expect(body).not.toHaveProperty('acceptedAt');
+    expect(body).not.toHaveProperty('acceptedAtMs');
+    expect(body).not.toHaveProperty('consentText');
+  });
+
   it('startSession posts session metadata as PCM16/16k/mono', async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
