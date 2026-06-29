@@ -103,9 +103,9 @@ Tam liste: [CLAUDE.md](./CLAUDE.md) + global `~/.claude/CLAUDE.md` HARD RULE set
 | ----------------- | ---------------------------------------------------- | ----------- |
 | **PR-desktop-01** | Electron + React + Vite scaffold + Keycloak SSO PKCE | ⏳ planning |
 | **PR-desktop-02** | Audio capture + REST chunks → audio-gateway-service  | ✅ merged   |
-| **PR-desktop-03** | Live transcript UI + draft→final state machine       | ⏳          |
+| **PR-desktop-03** | Live transcript UI + draft→final state machine       | ✅ merged   |
 | **PR-desktop-04** | Speaker diarization render (timeline)                | ⏳          |
-| **PR-desktop-05** | Summary + actions panel + export                     | ⏳          |
+| **PR-desktop-05** | Summary + actions panel + export                     | 🟡 source surface |
 | **PR-desktop-06** | System tray + native notifications + auto-launch     | ⏳          |
 | **PR-desktop-07** | macOS code signing + notarization                    | ⏳          |
 | **PR-desktop-08** | Windows Authenticode + installer (NSIS)              | ⏳          |
@@ -156,6 +156,23 @@ Open acceptance boundaries before recorder can be called end-to-end production-r
 - Canonical meeting source is still a runtime/e2e gate: desktop currently expects a pre-created `RECORDER_MEETING_ID` from meeting-service `MeetingResponse.id`; it does not create or discover meetings itself yet.
 - Server-time consent audit persistence is a backend/API gate; the desktop slice records only local consent state before starting capture.
 - Real Electron loopback/audio e2e still needs runtime smoke with a live meeting/gateway/STT path.
+
+## Current Product Surface Scope
+
+The recorder now exposes two user-facing workspaces:
+
+- **Canlı Transkript**: recorder session metadata, lifecycle state, transcript timeline states
+  (`draft`, `stabilizing`, `final`, `revised`), and an honest empty state while no transcript
+  stream is connected.
+- **Toplantı Çıktısı**: typed meeting-intelligence result surface for summary, decisions,
+  action items, citation timestamps, Markdown export, CSV export, and native print/PDF flow.
+
+Boundaries:
+
+- No fake AI summary is rendered.
+- No raw audio or transcript is persisted to local disk by default.
+- Meeting-intelligence content is shown only when an approved result is supplied to the renderer
+  state model. Real provider/runtime acceptance remains tracked by `platform-ai#162`.
 
 ## Lisans
 

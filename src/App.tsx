@@ -7,6 +7,14 @@ import {
   CONSENT_TEXT_HASH,
   CONSENT_LOCALE,
 } from './components/ConsentDialog';
+import { SummaryPanel } from './components/SummaryPanel';
+import {
+  bindMeetingIntelligenceTarget,
+  failMeetingIntelligence,
+  initialMeetingIntelligence,
+  markIntelligenceRecording,
+  markIntelligenceWaiting,
+} from './intelligence/meeting-intelligence';
 import { TranscriptPanel } from './components/TranscriptPanel';
 import {
   failTranscriptSession,
@@ -48,6 +56,7 @@ function App() {
   const [showConsent, setShowConsent] = useState(false);
   const [recorderConfig, setRecorderConfig] = useState<RecorderRuntimeConfig | null>(null);
   const [transcriptSession, setTranscriptSession] = useState(initialTranscriptSession);
+  const [meetingIntelligence, setMeetingIntelligence] = useState(initialMeetingIntelligence);
   const [status, setStatus] = useState('');
   const [error, setError] = useState('');
   const recorderRef = useRef<Recorder | null>(null);
@@ -75,6 +84,9 @@ function App() {
                 reason: cfg.reason ?? MEETING_ID_MISSING_MESSAGE,
               }),
         );
+        setMeetingIntelligence((current) =>
+          bindMeetingIntelligenceTarget(current, { meetingId: cfg.meetingId }),
+        );
       })
       .catch(() => {
         const fallback = {
@@ -86,6 +98,9 @@ function App() {
         setRecorderConfig(fallback);
         setTranscriptSession((current) =>
           markTranscriptBlocked(current, { reason: fallback.reason }),
+        );
+        setMeetingIntelligence((current) =>
+          bindMeetingIntelligenceTarget(current, { meetingId: fallback.meetingId }),
         );
       });
   }, []);
@@ -111,6 +126,7 @@ function App() {
       setLoggedIn(s?.loggedIn ?? false);
       setClaims(null);
       setTranscriptSession(initialTranscriptSession());
+      setMeetingIntelligence(initialMeetingIntelligence());
       setStatus('Çıkış yapıldı; Keycloak logout/revoke isteği gönderildi.');
     } catch (e) {
       setError(`Çıkış başarısız: ${(e as Error).message}`);
@@ -124,6 +140,9 @@ function App() {
         markTranscriptBlocked(current, {
           reason: recorderConfig?.reason ?? MEETING_ID_MISSING_MESSAGE,
         }),
+      );
+      setMeetingIntelligence((current) =>
+        bindMeetingIntelligenceTarget(current, { meetingId: recorderConfig?.meetingId ?? null }),
       );
       return;
     }
@@ -139,6 +158,7 @@ function App() {
         const message = `Rıza kaydı başarısız: ${(e as Error).message}`;
         setError(message);
         setTranscriptSession((current) => failTranscriptSession(current, message));
+        setMeetingIntelligence((current) => failMeetingIntelligence(current, message));
         return;
       }
       await handleStart();
@@ -166,6 +186,7 @@ function App() {
         setError(message);
         setStatus('');
         setTranscriptSession((current) => failTranscriptSession(current, message));
+        setMeetingIntelligence((current) => failMeetingIntelligence(current, message));
       });
       recorderRef.current = rec;
       setRecording(true);
@@ -178,12 +199,16 @@ function App() {
           startedAtMs: Date.now(),
         }),
       );
+      setMeetingIntelligence((current) =>
+        markIntelligenceRecording(current, { meetingId, sessionId: rec.sessionId }),
+      );
       const mode = rec.hasLoopback ? 'mikrofon + sistem sesi' : 'yalnız mikrofon';
       setStatus(`Kayıt başladı (${mode}, oturum ${rec.sessionId})`);
     } catch (e) {
       const message = `Kayıt başlatılamadı: ${(e as Error).message}`;
       setError(message);
       setTranscriptSession((current) => failTranscriptSession(current, message));
+      setMeetingIntelligence((current) => failMeetingIntelligence(current, message));
     } finally {
       setStartPending(false);
     }
@@ -194,10 +219,12 @@ function App() {
       await recorderRef.current?.stop();
       setStatus('Kayıt tamamlandı, gönderildi.');
       setTranscriptSession((current) => finishTranscriptSession(current, Date.now()));
+      setMeetingIntelligence((current) => markIntelligenceWaiting(current));
     } catch (e) {
       const message = `Kayıt durdurulamadı: ${(e as Error).message}`;
       setError(message);
       setTranscriptSession((current) => failTranscriptSession(current, message));
+      setMeetingIntelligence((current) => failMeetingIntelligence(current, message));
     } finally {
       recorderRef.current = null;
       setRecording(false);
@@ -286,7 +313,10 @@ function App() {
               </section>
             ) : null}
           </div>
-          <TranscriptPanel session={transcriptSession} />
+          <div className="intelligence-workspace">
+            <TranscriptPanel session={transcriptSession} />
+            <SummaryPanel intelligence={meetingIntelligence} />
+          </div>
         </section>
       </main>
       {showConsent ? (
