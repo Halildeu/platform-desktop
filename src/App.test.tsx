@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import '@testing-library/jest-dom/vitest';
 
@@ -101,6 +101,40 @@ describe('App recorder readiness', () => {
     ).toBeInTheDocument();
     expect(screen.getByText('33333333-3333-4333-8333-333333333333')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Kaydet' })).toBeEnabled();
+  });
+
+  it('meeting contract olusturma cagrilarini hizli tekrar tiklamada tekillestirir', async () => {
+    installElectronApiMock({
+      meetingId: null,
+      deviceId: 'desktop-1',
+      ready: false,
+      reason: 'RECORDER_MEETING_ID tanimli degil.',
+    });
+    let resolveContract: (value: { id: string; title: string; status: string }) => void = () =>
+      undefined;
+    const pendingContract = new Promise<{ id: string; title: string; status: string }>(
+      (resolve) => {
+        resolveContract = resolve;
+      },
+    );
+    vi.mocked(window.electronAPI!.meeting.createContract).mockReturnValue(pendingContract);
+
+    render(<App />);
+
+    const button = await screen.findByRole('button', { name: 'Meeting contract oluştur' });
+    fireEvent.click(button);
+    fireEvent.click(button);
+
+    expect(window.electronAPI?.meeting.createContract).toHaveBeenCalledTimes(1);
+
+    resolveContract({
+      id: '33333333-3333-4333-8333-333333333333',
+      title: 'Faz 24 desktop recording',
+      status: 'SCHEDULED',
+    });
+    expect(
+      await screen.findByText('Meeting contract hazır: 33333333-3333-4333-8333-333333333333'),
+    ).toBeInTheDocument();
   });
 
   it('canonical meetingId geldiginde kayit butonunu acar', async () => {

@@ -67,6 +67,7 @@ function App() {
   const [status, setStatus] = useState('');
   const [error, setError] = useState('');
   const recorderRef = useRef<Recorder | null>(null);
+  const contractPendingRef = useRef(false);
 
   useEffect(() => {
     void window.electronAPI?.app
@@ -144,6 +145,10 @@ function App() {
   };
 
   const handleCreateMeetingContract = async (): Promise<void> => {
+    if (contractPendingRef.current) {
+      return;
+    }
+    contractPendingRef.current = true;
     setError('');
     setStatus('');
     setContractPending(true);
@@ -164,6 +169,7 @@ function App() {
       setTranscriptSession((current) => markTranscriptBlocked(current, { reason: message }));
       setMeetingIntelligence((current) => failMeetingIntelligence(current, message));
     } finally {
+      contractPendingRef.current = false;
       setContractPending(false);
     }
   };
