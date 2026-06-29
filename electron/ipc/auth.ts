@@ -7,7 +7,7 @@
 
 import { ipcMain, shell } from 'electron';
 
-import { loadKeycloakConfig } from '../services/auth/keycloak-config';
+import { assertKeycloakConfigReady, loadKeycloakConfig } from '../services/auth/keycloak-config';
 import { performLogin } from '../services/auth/login-service';
 import { safeJwtClaims, type SafeJwtClaims } from '../services/auth/jwt-claims';
 import { refreshAccessToken, revokeRefreshToken } from '../services/auth/oauth-flow';
@@ -42,7 +42,9 @@ export async function getValidAccessToken(): Promise<string> {
     throw new Error('not logged in (no refresh token)');
   }
 
-  const tokens = await refreshAccessToken(loadKeycloakConfig(), refreshToken);
+  const cfg = loadKeycloakConfig();
+  assertKeycloakConfigReady(cfg);
+  const tokens = await refreshAccessToken(cfg, refreshToken);
   store().setSession(tokens);
   return tokens.accessToken;
 }
@@ -50,6 +52,7 @@ export async function getValidAccessToken(): Promise<string> {
 export function registerAuthIpc(): void {
   ipcMain.handle('auth:login', async (): Promise<AuthStatus> => {
     const cfg = loadKeycloakConfig();
+    assertKeycloakConfigReady(cfg);
     const tokens = await performLogin(cfg, {
       openExternal: (url) => shell.openExternal(url),
     });
@@ -67,7 +70,9 @@ export function registerAuthIpc(): void {
       const refreshToken = store().getRefreshToken();
       if (refreshToken) {
         try {
-          const tokens = await refreshAccessToken(loadKeycloakConfig(), refreshToken);
+          const cfg = loadKeycloakConfig();
+          assertKeycloakConfigReady(cfg);
+          const tokens = await refreshAccessToken(cfg, refreshToken);
           store().setSession(tokens);
           return {
             loggedIn: true,
@@ -92,7 +97,9 @@ export function registerAuthIpc(): void {
     const refreshToken = store().getRefreshToken();
     try {
       if (refreshToken) {
-        await revokeRefreshToken(loadKeycloakConfig(), refreshToken);
+        const cfg = loadKeycloakConfig();
+        assertKeycloakConfigReady(cfg);
+        await revokeRefreshToken(cfg, refreshToken);
       }
       return { loggedIn: false };
     } finally {
