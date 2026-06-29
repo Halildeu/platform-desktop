@@ -1,10 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import {
-  createMeetingContract,
-  loadMeetingConfig,
-  meetingsUrl,
-} from './meeting-client';
+import { createMeetingContract, loadMeetingConfig, meetingsUrl } from './meeting-client';
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -84,8 +80,8 @@ describe('meeting-client', () => {
       }),
     );
 
-    await expect(createMeetingContract({ baseUrl: 'https://testai.acik.com' }, 'JWT')).rejects.toThrow(
-      'canonical UUID',
-    );
+    await expect(
+      createMeetingContract({ baseUrl: 'https://testai.acik.com' }, 'JWT'),
+    ).rejects.toThrow('canonical UUID');
   });
 });

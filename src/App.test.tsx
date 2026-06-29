@@ -65,7 +65,9 @@ describe('App recorder readiness', () => {
     ).toBeInTheDocument();
     expect(screen.getAllByText('Blokeli')).toHaveLength(2);
     expect(screen.getByText('RECORDER_MEETING_ID tanimli degil.')).toBeInTheDocument();
-    expect(screen.getByText('Meeting intelligence için canonical meetingId yok.')).toBeInTheDocument();
+    expect(
+      screen.getByText('Meeting intelligence için canonical meetingId yok.'),
+    ).toBeInTheDocument();
     expect(screen.getByText('Toplantı çıktısı bekleniyor')).toBeInTheDocument();
 
     const button = screen.getByRole('button', {

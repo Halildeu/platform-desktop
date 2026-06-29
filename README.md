@@ -99,18 +99,18 @@ Tam liste: [CLAUDE.md](./CLAUDE.md) + global `~/.claude/CLAUDE.md` HARD RULE set
 
 ## Faz Yol Haritası — Faz 24 M6 Integration
 
-| Slice             | Konu                                                 | Durum       |
-| ----------------- | ---------------------------------------------------- | ----------- |
-| **PR-desktop-01** | Electron + React + Vite scaffold + Keycloak SSO PKCE | ⏳ planning |
-| **PR-desktop-02** | Audio capture + REST chunks → audio-gateway-service  | ✅ merged   |
-| **PR-desktop-03** | Live transcript UI + draft→final state machine       | ✅ merged   |
-| **PR-desktop-04** | Speaker diarization render (timeline)                | ⏳          |
+| Slice             | Konu                                                 | Durum             |
+| ----------------- | ---------------------------------------------------- | ----------------- |
+| **PR-desktop-01** | Electron + React + Vite scaffold + Keycloak SSO PKCE | ⏳ planning       |
+| **PR-desktop-02** | Audio capture + REST chunks → audio-gateway-service  | ✅ merged         |
+| **PR-desktop-03** | Live transcript UI + draft→final state machine       | ✅ merged         |
+| **PR-desktop-04** | Speaker diarization render (timeline)                | ⏳                |
 | **PR-desktop-05** | Summary + actions panel + export                     | 🟡 source surface |
-| **PR-desktop-06** | System tray + native notifications + auto-launch     | ⏳          |
-| **PR-desktop-07** | macOS code signing + notarization                    | ⏳          |
-| **PR-desktop-08** | Windows Authenticode + installer (NSIS)              | ⏳          |
-| **PR-desktop-09** | Linux AppImage + Debian package                      | ⏳          |
-| **PR-desktop-10** | Auto-updater (Squirrel/Sparkle/AppImage)             | ⏳          |
+| **PR-desktop-06** | System tray + native notifications + auto-launch     | ⏳                |
+| **PR-desktop-07** | macOS code signing + notarization                    | ⏳                |
+| **PR-desktop-08** | Windows Authenticode + installer (NSIS)              | ⏳                |
+| **PR-desktop-09** | Linux AppImage + Debian package                      | ⏳                |
+| **PR-desktop-10** | Auto-updater (Squirrel/Sparkle/AppImage)             | ⏳                |
 
 ## Hızlı Başlangıç
 

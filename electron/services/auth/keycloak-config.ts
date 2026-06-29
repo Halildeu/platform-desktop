@@ -56,7 +56,10 @@ export function keycloakConfigError(cfg: KeycloakConfig): string | null {
     if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
       return 'KEYCLOAK_BASE_URL http/https mutlak URL olmali.';
     }
-    if (parsed.protocol === 'http:' && !['localhost', '127.0.0.1', '::1'].includes(parsed.hostname)) {
+    if (
+      parsed.protocol === 'http:' &&
+      !['localhost', '127.0.0.1', '::1'].includes(parsed.hostname)
+    ) {
       return 'KEYCLOAK_BASE_URL test/canli ortamda https kullanmali.';
     }
   } catch {

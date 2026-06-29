@@ -87,7 +87,9 @@ describe('SummaryPanel', () => {
 
     await userEvent.click(screen.getByRole('button', { name: 'Kopyala' }));
     await waitFor(() => {
-      expect(adapter.copyText).toHaveBeenCalledWith(expect.stringContaining('# Meeting Intelligence'));
+      expect(adapter.copyText).toHaveBeenCalledWith(
+        expect.stringContaining('# Meeting Intelligence'),
+      );
     });
     expect(screen.getByText('Markdown panoya kopyalandı.')).toBeInTheDocument();
 

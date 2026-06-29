@@ -81,9 +81,7 @@ describe('meeting intelligence state and exports', () => {
     );
     expect(bundle.markdown).toContain('# Meeting Intelligence');
     expect(bundle.markdown).toContain('Citation coverage: 100%');
-    expect(bundle.markdown).toContain(
-      'Desktop recorder fresh login ile tekrar denenecek',
-    );
+    expect(bundle.markdown).toContain('Desktop recorder fresh login ile tekrar denenecek');
     expect(bundle.markdown).toContain('[0:30-0:42]');
     expect(bundle.csv).toContain(
       'action,act-1,audio_record rolü yeni token claim özetinde doğrulanacak,Zeynep,2026-06-30,Açık,high,1:04',

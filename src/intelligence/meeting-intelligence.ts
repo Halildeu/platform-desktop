@@ -212,8 +212,8 @@ function buildMarkdown(state: MeetingIntelligenceState): string {
   } else {
     for (const decision of result.decisions) {
       lines.push(
-        `- **${decision.title}** (${decisionStatusLabel(decision.status)})`
-          + citationSuffix(decision.citations),
+        `- **${decision.title}** (${decisionStatusLabel(decision.status)})` +
+          citationSuffix(decision.citations),
       );
     }
   }
@@ -225,8 +225,8 @@ function buildMarkdown(state: MeetingIntelligenceState): string {
       const assignee = item.assignee ? ` @${item.assignee}` : '';
       const due = item.dueDate ? ` due:${item.dueDate}` : '';
       lines.push(
-        `- [${item.status === 'done' ? 'x' : ' '}] ${item.title}${assignee}${due} (${actionStatusLabel(item.status)})`
-          + citationSuffix(item.citations),
+        `- [${item.status === 'done' ? 'x' : ' '}] ${item.title}${assignee}${due} (${actionStatusLabel(item.status)})` +
+          citationSuffix(item.citations),
       );
     }
   }

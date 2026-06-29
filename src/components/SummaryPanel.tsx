@@ -104,7 +104,11 @@ export function SummaryPanel({
             >
               Markdown
             </button>
-            <button className="secondary-action" type="button" onClick={() => void runExport('csv')}>
+            <button
+              className="secondary-action"
+              type="button"
+              onClick={() => void runExport('csv')}
+            >
               CSV
             </button>
             <button

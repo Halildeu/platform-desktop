@@ -54,8 +54,11 @@ function parseCreateArgs(value: unknown): CreateMeetingContractArgs {
 }
 
 export function registerMeetingIpc(): void {
-  ipcMain.handle('meeting:create-contract', async (_e, payload: unknown): Promise<MeetingContract> => {
-    const args = parseCreateArgs(payload);
-    return createMeetingContract(loadMeetingConfig(), await getValidAccessToken(), args);
-  });
+  ipcMain.handle(
+    'meeting:create-contract',
+    async (_e, payload: unknown): Promise<MeetingContract> => {
+      const args = parseCreateArgs(payload);
+      return createMeetingContract(loadMeetingConfig(), await getValidAccessToken(), args);
+    },
+  );
 }

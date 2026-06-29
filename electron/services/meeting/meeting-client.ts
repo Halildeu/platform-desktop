@@ -29,12 +29,10 @@ function isLocalHttp(url: URL): boolean {
 }
 
 export function loadMeetingConfig(env: NodeJS.ProcessEnv = process.env): MeetingClientConfig {
-  const raw = (
-    env.MEETING_BASE_URL ??
-    env.GATEWAY_BASE_URL ??
-    env.KEYCLOAK_BASE_URL ??
-    ''
-  ).replace(/\/+$/, '');
+  const raw = (env.MEETING_BASE_URL ?? env.GATEWAY_BASE_URL ?? env.KEYCLOAK_BASE_URL ?? '').replace(
+    /\/+$/,
+    '',
+  );
   if (!raw) {
     throw new Error('MEETING_BASE_URL or GATEWAY_BASE_URL is required');
   }
