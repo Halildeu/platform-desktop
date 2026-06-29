@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  assertKeycloakConfigReady,
   authorizationEndpoint,
   isConfigReady,
+  keycloakConfigError,
   loadKeycloakConfig,
   logoutEndpoint,
   tokenEndpoint,
@@ -42,6 +44,17 @@ describe('keycloak-config', () => {
     expect(
       isConfigReady(loadKeycloakConfig({ KEYCLOAK_BASE_URL: 'https://a', KEYCLOAK_CLIENT_ID: '' })),
     ).toBe(false);
+  });
+
+  it('config hatasını browser açmadan önce açıklar', () => {
+    const missing = loadKeycloakConfig({});
+    expect(keycloakConfigError(missing)).toContain('KEYCLOAK_BASE_URL');
+    expect(() => assertKeycloakConfigReady(missing)).toThrow('KEYCLOAK_BASE_URL');
+
+    const invalid = loadKeycloakConfig({ KEYCLOAK_BASE_URL: 'testai.acik.com' });
+    expect(keycloakConfigError(invalid)).toBe(
+      'KEYCLOAK_BASE_URL mutlak URL olmali; ornek: https://testai.acik.com',
+    );
   });
 
   it('OIDC endpoint URL’lerini doğru kurar', () => {

@@ -52,6 +52,20 @@ const electronAPI = {
     status: (): Promise<AuthStatus> => ipcRenderer.invoke('auth:status'),
     logout: (): Promise<AuthStatus> => ipcRenderer.invoke('auth:logout'),
   },
+  meeting: {
+    createContract: (payload?: {
+      title?: string;
+      description?: string;
+      scheduledStart?: string;
+      scheduledEnd?: string;
+    }): Promise<{
+      id: string;
+      title: string;
+      status: string;
+      scheduledStart?: string | null;
+      scheduledEnd?: string | null;
+    }> => ipcRenderer.invoke('meeting:create-contract', payload),
+  },
 };
 
 contextBridge.exposeInMainWorld('electronAPI', electronAPI);

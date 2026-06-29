@@ -35,7 +35,45 @@ export function loadKeycloakConfig(env: NodeJS.ProcessEnv = process.env): Keyclo
 
 /** Login'i gerçekten başlatmak için zorunlu alanlar dolu mu? */
 export function isConfigReady(cfg: KeycloakConfig): boolean {
-  return Boolean(cfg.baseUrl) && Boolean(cfg.realm) && Boolean(cfg.clientId);
+  return keycloakConfigError(cfg) === null;
+}
+
+export function keycloakConfigError(cfg: KeycloakConfig): string | null {
+  const missing = [
+    ['KEYCLOAK_BASE_URL', cfg.baseUrl],
+    ['KEYCLOAK_REALM', cfg.realm],
+    ['KEYCLOAK_CLIENT_ID', cfg.clientId],
+  ]
+    .filter(([, value]) => !value)
+    .map(([key]) => key);
+
+  if (missing.length > 0) {
+    return `${missing.join(', ')} tanimli degil; .env icinde Keycloak test realm config'i gerekli.`;
+  }
+
+  try {
+    const parsed = new URL(cfg.baseUrl);
+    if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
+      return 'KEYCLOAK_BASE_URL http/https mutlak URL olmali.';
+    }
+    if (
+      parsed.protocol === 'http:' &&
+      !['localhost', '127.0.0.1', '::1'].includes(parsed.hostname)
+    ) {
+      return 'KEYCLOAK_BASE_URL test/canli ortamda https kullanmali.';
+    }
+  } catch {
+    return 'KEYCLOAK_BASE_URL mutlak URL olmali; ornek: https://testai.acik.com';
+  }
+
+  return null;
+}
+
+export function assertKeycloakConfigReady(cfg: KeycloakConfig): void {
+  const error = keycloakConfigError(cfg);
+  if (error) {
+    throw new Error(error);
+  }
 }
 
 /** OIDC authorization endpoint (login URL'inin tabanı). */
