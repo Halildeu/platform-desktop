@@ -145,7 +145,11 @@ npm run package:linux
 PR-desktop-02 is merged through the stacked PRs #17-#20. Current behavior:
 
 - Auth: Keycloak PKCE login stays in the Electron main process; renderer sees only safe status/claim summary.
-- Runtime config: recorder starts only when `RECORDER_MEETING_ID` is the canonical meeting-service UUID from `MeetingResponse.id`. Random desktop-generated meeting IDs and legacy `MTG-*` codes are forbidden.
+- Runtime config: recorder starts only with a canonical meeting-service UUID from
+  `MeetingResponse.id`. Local smoke can still pre-bind `RECORDER_MEETING_ID`, but a logged-in
+  desktop user can also create a meeting contract through meeting-service and bind the returned
+  UUID without exposing the JWT to the renderer. Random desktop-generated meeting IDs and legacy
+  `MTG-*` codes are forbidden.
 - Capture: renderer captures microphone plus best-effort system audio/loopback. The Electron display-media handler is fail-closed unless a bounded recorder capture lease is active and the request comes from the main renderer frame.
 - Encoding: AudioWorklet emits PCM16 / 16kHz / mono chunks.
 - Transport: main process sends REST chunks to `audio-gateway-service` (`POST /sessions` → `POST /sessions/{id}/chunks` → `POST /finish`) using the login JWT.
@@ -153,7 +157,9 @@ PR-desktop-02 is merged through the stacked PRs #17-#20. Current behavior:
 
 Open acceptance boundaries before recorder can be called end-to-end production-ready:
 
-- Canonical meeting source is still a runtime/e2e gate: desktop currently expects a pre-created `RECORDER_MEETING_ID` from meeting-service `MeetingResponse.id`; it does not create or discover meetings itself yet.
+- Canonical meeting contract creation now has a desktop path (`POST /api/v1/admin/meetings`
+  through the main process). Runtime acceptance still depends on the caller having meeting-service
+  create authorization and the returned UUID passing audio-gateway record authorization.
 - Server-time consent audit persistence is a backend/API gate; the desktop slice records only local consent state before starting capture.
 - Real Electron loopback/audio e2e still needs runtime smoke with a live meeting/gateway/STT path.
 

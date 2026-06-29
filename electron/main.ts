@@ -21,6 +21,7 @@ import { fileURLToPath } from 'node:url';
 
 import { registerAudioIpc } from './ipc/audio';
 import { registerAuthIpc } from './ipc/auth';
+import { registerMeetingIpc } from './ipc/meeting';
 import {
   canGrantDisplayMedia,
   shouldGrantDisplayMediaRequest,
@@ -96,6 +97,7 @@ void app.whenReady().then(() => {
   });
 
   registerAuthIpc(); // #1 auth:login / auth:status / auth:logout
+  registerMeetingIpc(); // Faz 24 meeting-service contract create
   registerAudioIpc(); // #2 audio:start / audio:chunk / audio:finish
   createMainWindow();
 

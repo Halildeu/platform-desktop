@@ -2,6 +2,7 @@
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import '@testing-library/jest-dom/vitest';
 
 import App from './App';
@@ -20,6 +21,13 @@ function installElectronApiMock(recorderConfig: {
       login: vi.fn(),
       logout: vi.fn().mockResolvedValue({ loggedIn: false, claims: null }),
       status: vi.fn().mockResolvedValue({ loggedIn: true, claims: null }),
+    },
+    meeting: {
+      createContract: vi.fn().mockResolvedValue({
+        id: '33333333-3333-4333-8333-333333333333',
+        title: 'Faz 24 desktop recording',
+        status: 'SCHEDULED',
+      }),
     },
     audio: {
       recorderConfig: vi.fn().mockResolvedValue(recorderConfig),
@@ -42,7 +50,7 @@ afterEach(() => {
 });
 
 describe('App recorder readiness', () => {
-  it('canonical meetingId yoksa kayıt butonunu fail-closed tutar', async () => {
+  it('canonical meetingId yoksa meeting contract oluşturma aksiyonunu açar', async () => {
     installElectronApiMock({
       meetingId: null,
       deviceId: 'desktop-1',
@@ -61,9 +69,36 @@ describe('App recorder readiness', () => {
     expect(screen.getByText('Toplantı çıktısı bekleniyor')).toBeInTheDocument();
 
     const button = screen.getByRole('button', {
-      name: 'Meeting contract bekleniyor',
+      name: 'Meeting contract oluştur',
     });
-    expect(button).toBeDisabled();
+    expect(button).toBeEnabled();
+  });
+
+  it('meeting-service contract olusturunca recorder config hazir olur', async () => {
+    installElectronApiMock({
+      meetingId: null,
+      deviceId: 'desktop-1',
+      ready: false,
+      reason: 'RECORDER_MEETING_ID tanimli degil.',
+    });
+
+    render(<App />);
+
+    await userEvent.click(await screen.findByRole('button', { name: 'Meeting contract oluştur' }));
+
+    await waitFor(() => {
+      expect(window.electronAPI?.meeting.createContract).toHaveBeenCalledWith(
+        expect.objectContaining({
+          title: expect.stringContaining('Faz 24 desktop recording'),
+          description: 'Faz 24 desktop recorder live contract.',
+        }),
+      );
+    });
+    expect(
+      await screen.findByText('Meeting contract hazır: 33333333-3333-4333-8333-333333333333'),
+    ).toBeInTheDocument();
+    expect(screen.getByText('33333333-3333-4333-8333-333333333333')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Kaydet' })).toBeEnabled();
   });
 
   it('canonical meetingId geldiginde kayit butonunu acar', async () => {

@@ -35,6 +35,12 @@ interface RecorderRuntimeConfig {
   reason: string | null;
 }
 
+interface MeetingContract {
+  id: string;
+  title: string;
+  status: string;
+}
+
 interface SafeJwtClaims {
   iss?: string;
   aud?: string | string[];
@@ -53,6 +59,7 @@ function App() {
   const [busy, setBusy] = useState(false);
   const [recording, setRecording] = useState(false);
   const [startPending, setStartPending] = useState(false);
+  const [contractPending, setContractPending] = useState(false);
   const [showConsent, setShowConsent] = useState(false);
   const [recorderConfig, setRecorderConfig] = useState<RecorderRuntimeConfig | null>(null);
   const [transcriptSession, setTranscriptSession] = useState(initialTranscriptSession);
@@ -116,6 +123,48 @@ function App() {
       setError(`Giriş başarısız: ${(e as Error).message}`);
     } finally {
       setBusy(false);
+    }
+  };
+
+  const bindReadyMeetingContract = (contract: MeetingContract): void => {
+    const cfg = {
+      meetingId: contract.id,
+      deviceId: recorderConfig?.deviceId ?? 'desktop-1',
+      ready: true,
+      reason: null,
+    };
+    setRecorderConfig(cfg);
+    setTranscriptSession((current) =>
+      markTranscriptReady(current, { meetingId: contract.id, deviceId: cfg.deviceId }),
+    );
+    setMeetingIntelligence((current) =>
+      bindMeetingIntelligenceTarget(current, { meetingId: contract.id }),
+    );
+    setStatus(`Meeting contract hazır: ${contract.id}`);
+  };
+
+  const handleCreateMeetingContract = async (): Promise<void> => {
+    setError('');
+    setStatus('');
+    setContractPending(true);
+    try {
+      const scheduledStart = new Date().toISOString();
+      const contract = await window.electronAPI?.meeting.createContract({
+        title: `Faz 24 desktop recording ${scheduledStart}`,
+        description: 'Faz 24 desktop recorder live contract.',
+        scheduledStart,
+      });
+      if (!contract) {
+        throw new Error('meeting-service response empty');
+      }
+      bindReadyMeetingContract(contract);
+    } catch (e) {
+      const message = `Meeting contract oluşturulamadı: ${(e as Error).message}`;
+      setError(message);
+      setTranscriptSession((current) => markTranscriptBlocked(current, { reason: message }));
+      setMeetingIntelligence((current) => failMeetingIntelligence(current, message));
+    } finally {
+      setContractPending(false);
     }
   };
 
@@ -272,14 +321,20 @@ function App() {
                   <button
                     className="primary-action"
                     type="button"
-                    onClick={handleRecordClick}
-                    disabled={startPending || !recorderConfig?.ready}
+                    onClick={
+                      recorderConfig?.ready
+                        ? handleRecordClick
+                        : () => void handleCreateMeetingContract()
+                    }
+                    disabled={startPending || contractPending}
                   >
                     {startPending
                       ? 'Başlatılıyor...'
-                      : recorderConfig?.ready
-                        ? 'Kaydet'
-                        : 'Meeting contract bekleniyor'}
+                      : contractPending
+                        ? 'Contract oluşturuluyor...'
+                        : recorderConfig?.ready
+                          ? 'Kaydet'
+                          : 'Meeting contract oluştur'}
                   </button>
                   <button
                     className="secondary-action"
