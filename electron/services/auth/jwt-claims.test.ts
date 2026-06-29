@@ -19,6 +19,8 @@ describe('safeJwtClaims', () => {
         scope: 'openid profile email',
         exp: 1_800_000_000,
         tenantId: 1,
+        userId: 4,
+        companyId: 35,
         preferred_username: 'zeynep@example.com',
       }),
       'signature',
@@ -31,6 +33,8 @@ describe('safeJwtClaims', () => {
       scope: 'openid profile email',
       exp: 1_800_000_000,
       tenantId: 1,
+      userId: 4,
+      companyId: 35,
     });
   });
 
