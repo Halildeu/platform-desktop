@@ -7,6 +7,8 @@ export interface SafeJwtClaims {
   scope?: string;
   exp?: number;
   tenantId?: number | string;
+  userId?: number | string;
+  companyId?: number | string;
 }
 
 function decodeBase64UrlJson(segment: string): unknown {
@@ -46,6 +48,12 @@ export function safeJwtClaims(token: string | null | undefined): SafeJwtClaims |
     if (typeof claims.exp === 'number') out.exp = claims.exp;
     if (typeof claims.tenantId === 'number' || typeof claims.tenantId === 'string') {
       out.tenantId = claims.tenantId;
+    }
+    if (typeof claims.userId === 'number' || typeof claims.userId === 'string') {
+      out.userId = claims.userId;
+    }
+    if (typeof claims.companyId === 'number' || typeof claims.companyId === 'string') {
+      out.companyId = claims.companyId;
     }
     return out;
   } catch {

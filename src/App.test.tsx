@@ -55,6 +55,8 @@ describe('App recorder readiness', () => {
     expect(
       await screen.findByText('Giriş yapıldı. Kayıt için canonical meetingId bekleniyor.'),
     ).toBeInTheDocument();
+    expect(screen.getByText('Blokeli')).toBeInTheDocument();
+    expect(screen.getByText('RECORDER_MEETING_ID tanimli degil.')).toBeInTheDocument();
 
     const button = screen.getByRole('button', {
       name: 'Meeting contract bekleniyor',
@@ -73,6 +75,9 @@ describe('App recorder readiness', () => {
     render(<App />);
 
     expect(await screen.findByText('Giriş yapıldı. Toplantı kaydına hazır.')).toBeInTheDocument();
+    expect(screen.getByText('Hazır')).toBeInTheDocument();
+    expect(screen.getByText('22222222-2222-4222-8222-222222222222')).toBeInTheDocument();
+    expect(screen.getByText('Transkript akışı bekleniyor')).toBeInTheDocument();
 
     await waitFor(() => {
       expect(screen.getByRole('button', { name: 'Kaydet' })).toBeEnabled();
