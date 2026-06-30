@@ -15,8 +15,9 @@ import { encodeChunk } from './pcm-encode';
 import { FrameBuffer } from './frame-buffer';
 
 const TARGET_RATE = 16000;
-const CHUNK_MS = 100;
-const MAX_PENDING_CHUNKS = 20;
+const CHUNK_MS = 1000;
+const MAX_PENDING_AUDIO_MS = 120_000;
+const MAX_PENDING_CHUNKS = Math.ceil(MAX_PENDING_AUDIO_MS / CHUNK_MS);
 const CAPTURE_PERMISSION_TIMEOUT_MS = 45_000;
 const CAPTURE_IPC_TIMEOUT_MS = 15_000;
 const LOOPBACK_CAPTURE_TIMEOUT_MS = 5_000;
