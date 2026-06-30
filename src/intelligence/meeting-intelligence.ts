@@ -74,6 +74,8 @@ const DECISION_LABELS: Record<DecisionStatus, string> = {
   revised: 'Revize',
 };
 
+const MISSING_MEETING_ID_ERROR = 'Meeting intelligence için canonical meetingId yok.';
+
 export function initialMeetingIntelligence(): MeetingIntelligenceState {
   return {
     status: 'idle',
@@ -88,12 +90,25 @@ export function bindMeetingIntelligenceTarget(
   state: MeetingIntelligenceState,
   args: { meetingId: string | null; sessionId?: string | null },
 ): MeetingIntelligenceState {
+  if (!args.meetingId) {
+    return {
+      ...state,
+      meetingId: null,
+      sessionId: args.sessionId ?? state.sessionId,
+      status: 'blocked',
+      error: MISSING_MEETING_ID_ERROR,
+    };
+  }
+
+  const wasBlockedOnlyByMissingMeetingId =
+    state.status === 'blocked' && state.error === MISSING_MEETING_ID_ERROR;
+
   return {
     ...state,
     meetingId: args.meetingId,
     sessionId: args.sessionId ?? state.sessionId,
-    status: args.meetingId ? state.status : 'blocked',
-    error: args.meetingId ? state.error : 'Meeting intelligence için canonical meetingId yok.',
+    status: wasBlockedOnlyByMissingMeetingId ? 'idle' : state.status,
+    error: wasBlockedOnlyByMissingMeetingId ? null : state.error,
   };
 }
 

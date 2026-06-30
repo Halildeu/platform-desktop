@@ -61,6 +61,22 @@ describe('meeting intelligence state and exports', () => {
     expect(failed).toMatchObject({ status: 'error', error: 'meeting-ai unavailable' });
   });
 
+  it('clears the missing meeting blocker when a canonical meetingId arrives', () => {
+    const blocked = bindMeetingIntelligenceTarget(initialMeetingIntelligence(), {
+      meetingId: null,
+    });
+
+    const bound = bindMeetingIntelligenceTarget(blocked, {
+      meetingId: '33333333-3333-4333-8333-333333333333',
+    });
+
+    expect(bound).toMatchObject({
+      status: 'idle',
+      error: null,
+      meetingId: '33333333-3333-4333-8333-333333333333',
+    });
+  });
+
   it('builds markdown and CSV exports from approved intelligence output', () => {
     const ready = setMeetingIntelligenceResult(
       {

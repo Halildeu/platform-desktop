@@ -13,6 +13,7 @@
 import { randomBytes } from 'node:crypto';
 
 const API = '/api/v1/audio-gateway';
+const HTTP_TIMEOUT_MS = 15_000;
 
 export interface GatewayConfig {
   baseUrl: string;
@@ -61,6 +62,33 @@ export function finishUrl(cfg: GatewayConfig, sessionId: string): string {
 /** Idempotency-Key (opaque 16-128 char). */
 export function newIdempotencyKey(): string {
   return randomBytes(16).toString('hex');
+}
+
+async function fetchWithTimeout(
+  input: string,
+  init: RequestInit,
+  label: string,
+): Promise<Response> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), HTTP_TIMEOUT_MS);
+  if (init.signal) {
+    if (init.signal.aborted) {
+      controller.abort();
+    } else {
+      init.signal.addEventListener('abort', () => controller.abort(), { once: true });
+    }
+  }
+  try {
+    return await fetch(input, { ...init, signal: controller.signal });
+  } catch (err) {
+    const name = err instanceof Error ? err.name : '';
+    if (name === 'AbortError' || name === 'TimeoutError') {
+      throw new Error(`${label} timed out after ${HTTP_TIMEOUT_MS}ms`);
+    }
+    throw err;
+  } finally {
+    clearTimeout(timeoutId);
+  }
 }
 
 /** Chunk admission header'ları (contract-v1: seq + started-at + byte-length + format/rate/channels). */
@@ -163,20 +191,24 @@ export async function recordConsent(
   jwt: string,
   args: RecordConsentArgs,
 ): Promise<RecordConsentInfo> {
-  const res = await fetch(consentsUrl(cfg), {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${jwt}`,
-      'Content-Type': 'application/json',
+  const res = await fetchWithTimeout(
+    consentsUrl(cfg),
+    {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${jwt}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        meetingId: args.meetingId,
+        captureId: args.captureId,
+        consentVersion: args.consentVersion,
+        consentTextHash: args.consentTextHash,
+        locale: args.locale,
+      }),
     },
-    body: JSON.stringify({
-      meetingId: args.meetingId,
-      captureId: args.captureId,
-      consentVersion: args.consentVersion,
-      consentTextHash: args.consentTextHash,
-      locale: args.locale,
-    }),
-  });
+    'recordConsent',
+  );
   if (!res.ok) {
     throw new Error(await httpErrorMessage(res, 'recordConsent'));
   }
@@ -190,22 +222,26 @@ export async function startSession(
   args: StartSessionArgs,
   idempotencyKey: string = newIdempotencyKey(),
 ): Promise<SessionInfo> {
-  const res = await fetch(sessionsUrl(cfg), {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${jwt}`,
-      'Idempotency-Key': idempotencyKey,
-      'Content-Type': 'application/json',
+  const res = await fetchWithTimeout(
+    sessionsUrl(cfg),
+    {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${jwt}`,
+        'Idempotency-Key': idempotencyKey,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        meetingId: args.meetingId,
+        deviceId: args.deviceId,
+        language: args.language,
+        audioFormat: 'PCM16',
+        sampleRateHz: 16000,
+        channels: 1,
+      }),
     },
-    body: JSON.stringify({
-      meetingId: args.meetingId,
-      deviceId: args.deviceId,
-      language: args.language,
-      audioFormat: 'PCM16',
-      sampleRateHz: 16000,
-      channels: 1,
-    }),
-  });
+    'startSession',
+  );
   if (!res.ok) {
     throw new Error(await httpErrorMessage(res, 'startSession'));
   }
@@ -220,17 +256,21 @@ export async function sendChunk(
   chunk: { seq: number; bytes: Uint8Array; startedAtMs: number },
   idempotencyKey: string = newIdempotencyKey(),
 ): Promise<void> {
-  const res = await fetch(chunksUrl(cfg, sessionId), {
-    method: 'POST',
-    headers: chunkHeaders({
-      jwt,
-      idempotencyKey,
-      seq: chunk.seq,
-      startedAtMs: chunk.startedAtMs,
-      byteLength: chunk.bytes.byteLength,
-    }),
-    body: chunk.bytes,
-  });
+  const res = await fetchWithTimeout(
+    chunksUrl(cfg, sessionId),
+    {
+      method: 'POST',
+      headers: chunkHeaders({
+        jwt,
+        idempotencyKey,
+        seq: chunk.seq,
+        startedAtMs: chunk.startedAtMs,
+        byteLength: chunk.bytes.byteLength,
+      }),
+      body: chunk.bytes,
+    },
+    'sendChunk',
+  );
   if (!res.ok) {
     throw new Error(`${await httpErrorMessage(res, 'sendChunk')} (seq=${chunk.seq})`);
   }
@@ -243,13 +283,17 @@ export async function finishSession(
   sessionId: string,
   idempotencyKey: string = newIdempotencyKey(),
 ): Promise<void> {
-  const res = await fetch(finishUrl(cfg, sessionId), {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${jwt}`,
-      'Idempotency-Key': idempotencyKey,
+  const res = await fetchWithTimeout(
+    finishUrl(cfg, sessionId),
+    {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${jwt}`,
+        'Idempotency-Key': idempotencyKey,
+      },
     },
-  });
+    'finishSession',
+  );
   if (!res.ok) {
     throw new Error(await httpErrorMessage(res, 'finishSession'));
   }
