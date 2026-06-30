@@ -18,6 +18,13 @@ interface TestTranscriptGatewayEvent {
   meetingId: string;
   chunkSeq: number;
   chunkStartedAtMs: number;
+  windowSeq?: number | null;
+  firstChunkSeq?: number | null;
+  lastChunkSeq?: number | null;
+  windowStartedAtMs?: number | null;
+  windowEndedAtMs?: number | null;
+  audioDurationMs?: number | null;
+  flushReason?: string | null;
   receivedAtMs?: number | null;
   text: string;
   textLength: number;
@@ -281,6 +288,73 @@ describe('App recorder readiness', () => {
 
     expect(await screen.findByText('merhaba halil')).toBeInTheDocument();
     expect(screen.getByText('Taslak')).toBeInTheDocument();
+  });
+
+  it('gateway window eventleri ayni canli satiri gunceller', async () => {
+    installElectronApiMock({
+      meetingId: '22222222-2222-4222-8222-222222222222',
+      deviceId: 'desktop-1',
+      ready: true,
+      reason: null,
+    });
+    vi.mocked(startRecording).mockResolvedValue({
+      sessionId: 'SES-1',
+      hasLoopback: false,
+      stop: vi.fn(),
+      onError: vi.fn(),
+    });
+
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Kaydet' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Onaylıyorum — Kaydı Başlat' }));
+
+    await screen.findByText('Kayıt başladı (yalnız mikrofon, oturum SES-1)');
+
+    act(() => {
+      transcriptEventHandler?.({
+        eventId: '1781820000000-0',
+        sessionId: 'SES-1',
+        meetingId: '22222222-2222-4222-8222-222222222222',
+        chunkSeq: 4,
+        chunkStartedAtMs: 1781820000400,
+        windowSeq: 0,
+        firstChunkSeq: 0,
+        lastChunkSeq: 4,
+        windowStartedAtMs: 1781820000000,
+        windowEndedAtMs: 1781820000500,
+        audioDurationMs: 500,
+        flushReason: 'partial',
+        text: 'Merhaba',
+        textLength: 7,
+        status: 'DRAFT',
+      });
+    });
+    expect(await screen.findByText('Merhaba')).toBeInTheDocument();
+
+    act(() => {
+      transcriptEventHandler?.({
+        eventId: '1781820001000-0',
+        sessionId: 'SES-1',
+        meetingId: '22222222-2222-4222-8222-222222222222',
+        chunkSeq: 8,
+        chunkStartedAtMs: 1781820000800,
+        windowSeq: 0,
+        firstChunkSeq: 0,
+        lastChunkSeq: 8,
+        windowStartedAtMs: 1781820000000,
+        windowEndedAtMs: 1781820001000,
+        audioDurationMs: 1000,
+        flushReason: 'partial',
+        text: 'Merhaba nasılsın',
+        textLength: 16,
+        status: 'DRAFT',
+      });
+    });
+
+    expect(await screen.findByText('Merhaba nasılsın')).toBeInTheDocument();
+    expect(screen.queryByText('Merhaba')).not.toBeInTheDocument();
+    expect(screen.getAllByRole('article')).toHaveLength(1);
   });
 
   it('direct live STT partial eventleri ayni satiri kelime kelime gunceller', async () => {

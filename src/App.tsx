@@ -130,17 +130,37 @@ function transcriptStatusFromLiveStream(
 
 function transcriptTimelineStartedAtMs(event: {
   chunkStartedAtMs: number;
+  windowStartedAtMs?: number | null;
   receivedAtMs?: number | null;
 }): number {
+  const eventStartedAtMs =
+    typeof event.windowStartedAtMs === 'number' && Number.isFinite(event.windowStartedAtMs)
+      ? event.windowStartedAtMs
+      : event.chunkStartedAtMs;
   const receivedAtMs = event.receivedAtMs;
   if (
     typeof receivedAtMs === 'number' &&
     Number.isFinite(receivedAtMs) &&
-    event.chunkStartedAtMs - receivedAtMs > TRANSCRIPT_CLIENT_CLOCK_SKEW_MS
+    eventStartedAtMs - receivedAtMs > TRANSCRIPT_CLIENT_CLOCK_SKEW_MS
   ) {
     return receivedAtMs;
   }
-  return event.chunkStartedAtMs;
+  return eventStartedAtMs;
+}
+
+function transcriptSegmentIdFromGateway(event: {
+  eventId: string;
+  sessionId: string;
+  windowSeq?: number | null;
+}): string {
+  if (
+    typeof event.windowSeq === 'number' &&
+    Number.isFinite(event.windowSeq) &&
+    event.windowSeq >= 0
+  ) {
+    return `gateway:${event.sessionId}:window:${event.windowSeq}`;
+  }
+  return event.eventId;
 }
 
 function App() {
@@ -220,7 +240,7 @@ function App() {
           return current;
         }
         return upsertTranscriptSegment(current, {
-          id: event.eventId,
+          id: transcriptSegmentIdFromGateway(event),
           speakerLabel: 'Konuşmacı',
           startedAtMs: transcriptTimelineStartedAtMs(event),
           status: transcriptStatusFromGateway(event.status),
