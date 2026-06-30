@@ -12,6 +12,8 @@
 
 import { randomBytes } from 'node:crypto';
 
+import { desktopFetch } from '../net/desktop-fetch';
+
 const API = '/api/v1/audio-gateway';
 const HTTP_TIMEOUT_MS = 15_000;
 
@@ -79,7 +81,7 @@ async function fetchWithTimeout(
     }
   }
   try {
-    return await fetch(input, { ...init, signal: controller.signal });
+    return await desktopFetch(input, { ...init, signal: controller.signal });
   } catch (err) {
     const name = err instanceof Error ? err.name : '';
     if (name === 'AbortError' || name === 'TimeoutError') {

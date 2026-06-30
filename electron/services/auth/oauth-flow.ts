@@ -13,6 +13,7 @@ import {
   tokenEndpoint,
 } from './keycloak-config';
 import { expiresAtFromExpiresIn, type TokenSet } from './token-utils';
+import { desktopFetch } from '../net/desktop-fetch';
 
 /** Loopback redirect URI (RFC 8252): http://127.0.0.1:<port>/callback */
 export function loopbackRedirectUri(port: number): string {
@@ -73,7 +74,7 @@ export async function exchangeCodeForTokens(
     code_verifier: args.codeVerifier,
     redirect_uri: args.redirectUri,
   });
-  const res = await fetch(tokenEndpoint(cfg), {
+  const res = await desktopFetch(tokenEndpoint(cfg), {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: body.toString(),
@@ -94,7 +95,7 @@ export async function refreshAccessToken(
     client_id: cfg.clientId,
     refresh_token: refreshToken,
   });
-  const res = await fetch(tokenEndpoint(cfg), {
+  const res = await desktopFetch(tokenEndpoint(cfg), {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: body.toString(),
@@ -111,7 +112,7 @@ export async function revokeRefreshToken(cfg: KeycloakConfig, refreshToken: stri
     client_id: cfg.clientId,
     refresh_token: refreshToken,
   });
-  const res = await fetch(logoutEndpoint(cfg), {
+  const res = await desktopFetch(logoutEndpoint(cfg), {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: body.toString(),
