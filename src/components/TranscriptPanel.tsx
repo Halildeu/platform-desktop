@@ -1,4 +1,4 @@
-import type { ReactElement } from 'react';
+import { useEffect, useRef, type ReactElement } from 'react';
 
 import {
   lifecycleLabel,
@@ -24,6 +24,14 @@ function captureMode(hasLoopback: boolean): string {
 
 export function TranscriptPanel({ session }: TranscriptPanelProps): ReactElement {
   const hasSegments = session.segments.length > 0;
+  const listRef = useRef<HTMLDivElement | null>(null);
+  const visibleSegments = [...session.segments].reverse();
+
+  useEffect(() => {
+    if (listRef.current) {
+      listRef.current.scrollTop = 0;
+    }
+  }, [session.segments]);
 
   return (
     <section className="transcript-panel" aria-labelledby="transcript-title">
@@ -60,9 +68,9 @@ export function TranscriptPanel({ session }: TranscriptPanelProps): ReactElement
 
       {session.error ? <p className="inline-error">{session.error}</p> : null}
 
-      <div className="transcript-list" aria-live="polite">
+      <div className="transcript-list" aria-live="polite" ref={listRef}>
         {hasSegments ? (
-          session.segments.map((segment) => (
+          visibleSegments.map((segment) => (
             <article className={`transcript-segment segment-${segment.status}`} key={segment.id}>
               <div className="segment-meta">
                 <span>{segment.speakerLabel}</span>

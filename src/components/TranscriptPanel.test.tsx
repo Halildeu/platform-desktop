@@ -35,7 +35,7 @@ describe('TranscriptPanel', () => {
     expect(screen.queryByText('örnek transcript')).not.toBeInTheDocument();
   });
 
-  it('renders draft and final transcript segment statuses in timeline order', () => {
+  it('renders newest transcript segment first while keeping statuses visible', () => {
     const recording = startTranscriptSession(initialTranscriptSession(), {
       sessionId: 'SES-1',
       meetingId: '22222222-2222-4222-8222-222222222222',
@@ -62,9 +62,9 @@ describe('TranscriptPanel', () => {
 
     const articles = screen.getAllByRole('article');
     expect(articles).toHaveLength(2);
-    expect(articles[0]).toHaveTextContent('İlk karar kaydedildi');
-    expect(articles[0]).toHaveTextContent('Final');
-    expect(articles[1]).toHaveTextContent('İkinci cümle işleniyor');
-    expect(articles[1]).toHaveTextContent('Taslak');
+    expect(articles[0]).toHaveTextContent('İkinci cümle işleniyor');
+    expect(articles[0]).toHaveTextContent('Taslak');
+    expect(articles[1]).toHaveTextContent('İlk karar kaydedildi');
+    expect(articles[1]).toHaveTextContent('Final');
   });
 });
