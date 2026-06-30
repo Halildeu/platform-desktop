@@ -16,6 +16,7 @@ import { desktopFetch } from '../net/desktop-fetch.js';
 
 const API = '/api/v1/audio-gateway';
 const HTTP_TIMEOUT_MS = 15_000;
+const SSE_DECODER_FATAL = false;
 
 export interface GatewayConfig {
   baseUrl: string;
@@ -73,6 +74,19 @@ export function transcriptEventsUrl(
   }
   if (typeof args.limit === 'number') {
     url.searchParams.set('limit', String(args.limit));
+  }
+  return url.toString();
+}
+export function transcriptEventsStreamUrl(
+  cfg: GatewayConfig,
+  sessionId: string,
+  args: { after?: string | null } = {},
+): string {
+  const url = new URL(
+    `${cfg.baseUrl}${API}/sessions/${encodeURIComponent(sessionId)}/transcript-events/stream`,
+  );
+  if (args.after) {
+    url.searchParams.set('after', args.after);
   }
   return url.toString();
 }
@@ -226,6 +240,13 @@ export interface TranscriptEventsPage {
   hasMore: boolean;
 }
 
+export interface TranscriptEventsStreamArgs {
+  after?: string | null;
+  signal?: AbortSignal;
+  onEvent: (event: TranscriptGatewayEvent) => void;
+  onCursor?: (cursor: string) => void;
+}
+
 /** POST /consents — server-time audit proof before local capture starts. */
 export async function recordConsent(
   cfg: GatewayConfig,
@@ -363,4 +384,131 @@ export async function readTranscriptEvents(
     throw new Error(await httpErrorMessage(res, 'readTranscriptEvents'));
   }
   return (await res.json()) as TranscriptEventsPage;
+}
+
+/** GET /sessions/{id}/transcript-events/stream — SSE live transcript delivery. */
+export async function streamTranscriptEvents(
+  cfg: GatewayConfig,
+  jwt: string,
+  sessionId: string,
+  args: TranscriptEventsStreamArgs,
+): Promise<void> {
+  const res = await desktopFetch(transcriptEventsStreamUrl(cfg, sessionId, { after: args.after }), {
+    method: 'GET',
+    headers: {
+      Authorization: `Bearer ${jwt}`,
+      Accept: 'text/event-stream',
+    },
+    signal: args.signal,
+  });
+  if (!res.ok) {
+    throw new Error(await httpErrorMessage(res, 'streamTranscriptEvents'));
+  }
+  if (!res.body) {
+    throw new Error('streamTranscriptEvents failed: response body is empty');
+  }
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder('utf-8', { fatal: SSE_DECODER_FATAL });
+  const parser = new SseTranscriptParser(args.onEvent, args.onCursor);
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) {
+        break;
+      }
+      parser.push(decoder.decode(value, { stream: true }));
+    }
+    parser.push(decoder.decode());
+    parser.flush();
+  } finally {
+    reader.releaseLock();
+  }
+}
+
+class SseTranscriptParser {
+  private buffer = '';
+  private eventId: string | null = null;
+  private eventName: string | null = null;
+  private dataLines: string[] = [];
+
+  constructor(
+    private readonly onEvent: (event: TranscriptGatewayEvent) => void,
+    private readonly onCursor?: (cursor: string) => void,
+  ) {}
+
+  push(chunk: string): void {
+    this.buffer += chunk;
+    while (true) {
+      const newlineIndex = this.buffer.search(/\r?\n/);
+      if (newlineIndex < 0) {
+        return;
+      }
+      const rawLine = this.buffer.slice(0, newlineIndex);
+      const newlineLength = this.buffer[newlineIndex] === '\r' ? 2 : 1;
+      this.buffer = this.buffer.slice(newlineIndex + newlineLength);
+      this.acceptLine(rawLine);
+    }
+  }
+
+  flush(): void {
+    if (this.buffer.length > 0) {
+      this.acceptLine(this.buffer);
+      this.buffer = '';
+    }
+    this.dispatch();
+  }
+
+  private acceptLine(rawLine: string): void {
+    const line = rawLine.endsWith('\r') ? rawLine.slice(0, -1) : rawLine;
+    if (line === '') {
+      this.dispatch();
+      return;
+    }
+    if (line.startsWith(':')) {
+      return;
+    }
+
+    const sep = line.indexOf(':');
+    const field = sep >= 0 ? line.slice(0, sep) : line;
+    const value = sep >= 0 ? line.slice(sep + 1).replace(/^ /, '') : '';
+    if (field === 'id') {
+      this.eventId = value;
+    } else if (field === 'event') {
+      this.eventName = value;
+    } else if (field === 'data') {
+      this.dataLines.push(value);
+    }
+  }
+
+  private dispatch(): void {
+    const data = this.dataLines.join('\n').trim();
+    if (this.eventId) {
+      this.onCursor?.(this.eventId);
+    }
+    if (!data) {
+      this.resetEvent();
+      return;
+    }
+    if (this.eventName && this.eventName !== 'transcript-chunk') {
+      this.resetEvent();
+      return;
+    }
+
+    try {
+      const event = JSON.parse(data) as TranscriptGatewayEvent;
+      if (typeof event.eventId === 'string' && typeof event.text === 'string') {
+        this.onEvent(event);
+        this.onCursor?.(event.eventId);
+      }
+    } finally {
+      this.resetEvent();
+    }
+  }
+
+  private resetEvent(): void {
+    this.eventId = null;
+    this.eventName = null;
+    this.dataLines = [];
+  }
 }

@@ -13,7 +13,9 @@ import {
   sendChunk,
   sessionsUrl,
   startSession,
+  streamTranscriptEvents,
   transcriptEventsUrl,
+  transcriptEventsStreamUrl,
 } from './gateway-client';
 
 const cfg = loadGatewayConfig({ GATEWAY_BASE_URL: 'https://gw.example.com/' });
@@ -54,8 +56,14 @@ describe('gateway-client pure helpers', () => {
     expect(chunksUrl(cfg, 'SES-1')).toBe(`${base}/sessions/SES-1/chunks`);
     expect(finishUrl(cfg, 'SES-1')).toBe(`${base}/sessions/SES-1/finish`);
     expect(transcriptEventsUrl(cfg, 'SES-1')).toBe(`${base}/sessions/SES-1/transcript-events`);
+    expect(transcriptEventsStreamUrl(cfg, 'SES-1')).toBe(
+      `${base}/sessions/SES-1/transcript-events/stream`,
+    );
     expect(transcriptEventsUrl(cfg, 'SES-1', { after: '1680000000000-0', limit: 25 })).toBe(
       `${base}/sessions/SES-1/transcript-events?after=1680000000000-0&limit=25`,
+    );
+    expect(transcriptEventsStreamUrl(cfg, 'SES-1', { after: '1680000000000-0' })).toBe(
+      `${base}/sessions/SES-1/transcript-events/stream?after=1680000000000-0`,
     );
   });
 
@@ -231,6 +239,52 @@ describe('gateway-client HTTP fetch wrapper', () => {
     );
     expect(opts.headers.Authorization).toBe('Bearer JWT');
     expect(opts.headers.Accept).toBe('application/json');
+  });
+
+  it('streamTranscriptEvents parses SSE transcript chunks and advances cursor', async () => {
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(
+          new TextEncoder().encode(
+            ': heartbeat\n\n' +
+              'id: 1680000000000-0\n' +
+              'event: transcript-chunk\n' +
+              `data: ${JSON.stringify({
+                eventId: '1680000000000-0',
+                sessionId: 'SES-9',
+                meetingId,
+                chunkSeq: 2,
+                chunkStartedAtMs: 1781820000200,
+                text: 'merhaba dunya',
+                textLength: 13,
+                status: 'DRAFT',
+              })}\n\n`,
+          ),
+        );
+        controller.close();
+      },
+    });
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, body });
+    vi.stubGlobal('fetch', fetchMock);
+    const onEvent = vi.fn();
+    const onCursor = vi.fn();
+
+    await streamTranscriptEvents(cfg, 'JWT', 'SES-9', {
+      after: '1679999999999-0',
+      onEvent,
+      onCursor,
+    });
+
+    expect(onEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ eventId: '1680000000000-0', text: 'merhaba dunya' }),
+    );
+    expect(onCursor).toHaveBeenCalledWith('1680000000000-0');
+    const [url, opts] = fetchMock.mock.calls[0];
+    expect(url).toBe(
+      'https://gw.example.com/api/v1/audio-gateway/sessions/SES-9/transcript-events/stream?after=1679999999999-0',
+    );
+    expect(opts.headers.Authorization).toBe('Bearer JWT');
+    expect(opts.headers.Accept).toBe('text/event-stream');
   });
 
   it('throws status on non-ok response', async () => {
