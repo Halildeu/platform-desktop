@@ -68,6 +68,38 @@ class FakeAudioWorkletNode extends FakeAudioNode {
   }
 }
 
+class FakeWebSocket extends EventTarget {
+  static CONNECTING = 0;
+  static OPEN = 1;
+  static CLOSED = 3;
+  static instances: FakeWebSocket[] = [];
+
+  readyState = FakeWebSocket.CONNECTING;
+  sent: unknown[] = [];
+
+  constructor(readonly url: string) {
+    super();
+    FakeWebSocket.instances.push(this);
+  }
+
+  send(data: unknown): void {
+    this.sent.push(data);
+  }
+
+  close(): void {
+    this.readyState = FakeWebSocket.CLOSED;
+    this.dispatchEvent(new Event('close'));
+  }
+
+  open(): void {
+    this.readyState = FakeWebSocket.OPEN;
+  }
+
+  message(payload: unknown): void {
+    this.dispatchEvent(new MessageEvent('message', { data: JSON.stringify(payload) }));
+  }
+}
+
 function installBrowserAudioMocks(): {
   micTrack: FakeTrack;
   getDisplayMedia: ReturnType<typeof vi.fn>;
@@ -126,6 +158,7 @@ function installElectronApiMock(): void {
 
 afterEach(() => {
   FakeAudioWorkletNode.lastInstance = null;
+  FakeWebSocket.instances = [];
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
   delete window.electronAPI;
@@ -186,5 +219,35 @@ describe('startRecording', () => {
       bytes: expect.objectContaining({ byteLength: 64_000 }),
       startedAtMs: expect.any(Number),
     });
+  });
+
+  it('streams 100ms Float32 frames to Direct-STT while keeping REST chunks at two seconds', async () => {
+    installElectronApiMock();
+    setUserAgent('Mozilla/5.0 (Macintosh; Intel Mac OS X 15_5)');
+    installBrowserAudioMocks();
+    vi.stubGlobal('WebSocket', FakeWebSocket);
+
+    const recorder = await startRecording('meeting-1', 'desktop-1', {
+      liveSttStreamUrl: 'ws://127.0.0.1:18220/ws/stream',
+    });
+    const captureNode = FakeAudioWorkletNode.lastInstance;
+    const ws = FakeWebSocket.instances[0];
+
+    expect(ws?.url).toBe('ws://127.0.0.1:18220/ws/stream');
+    ws?.open();
+    ws?.message({ type: 'ready' });
+
+    captureNode?.port.onmessage?.({
+      data: new Float32Array(48_000),
+    } as MessageEvent<Float32Array>);
+
+    expect(ws?.sent).toHaveLength(10);
+    for (const frame of ws?.sent ?? []) {
+      expect(frame).toBeInstanceOf(ArrayBuffer);
+      expect((frame as ArrayBuffer).byteLength).toBe(6_400);
+    }
+    expect(window.electronAPI?.audio.sendChunk).not.toHaveBeenCalled();
+
+    await recorder.stop();
   });
 });
