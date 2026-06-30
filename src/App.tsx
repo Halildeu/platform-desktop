@@ -23,6 +23,8 @@ import {
   markTranscriptBlocked,
   markTranscriptReady,
   startTranscriptSession,
+  type TranscriptSegmentStatus,
+  upsertTranscriptSegment,
 } from './transcript/session-transcript';
 
 const MEETING_ID_MISSING_MESSAGE =
@@ -99,6 +101,19 @@ async function startRecordingWithTimeout(meetingId: string, deviceId: string): P
   }
 }
 
+function transcriptStatusFromGateway(status: string): TranscriptSegmentStatus {
+  switch (status.toUpperCase()) {
+    case 'FINAL':
+      return 'final';
+    case 'REVISED':
+      return 'revised';
+    case 'STABILIZING':
+      return 'stabilizing';
+    default:
+      return 'draft';
+  }
+}
+
 function App() {
   const [version, setVersion] = useState('');
   const [loggedIn, setLoggedIn] = useState(false);
@@ -158,6 +173,46 @@ function App() {
           bindMeetingIntelligenceTarget(current, { meetingId: fallback.meetingId }),
         );
       });
+  }, []);
+
+  useEffect(() => {
+    const offTranscriptEvent = window.electronAPI?.audio.onTranscriptEvent?.((event) => {
+      setTranscriptSession((current) => {
+        if (!current.sessionId || event.sessionId !== current.sessionId) {
+          return current;
+        }
+        if (!event.text.trim() || !Number.isFinite(event.chunkStartedAtMs)) {
+          return current;
+        }
+        return upsertTranscriptSegment(current, {
+          id: event.eventId,
+          speakerLabel: 'Konuşmacı',
+          startedAtMs: event.chunkStartedAtMs,
+          status: transcriptStatusFromGateway(event.status),
+          text: event.text,
+        });
+      });
+    });
+    const offTranscriptError = window.electronAPI?.audio.onTranscriptError?.((event) => {
+      setTranscriptSession((current) => {
+        if (!current.sessionId || event.sessionId !== current.sessionId) {
+          return current;
+        }
+        return { ...current, error: event.message };
+      });
+    });
+    const notifyRendererUnload = (): void => {
+      window.electronAPI?.audio.rendererUnloaded?.();
+    };
+
+    window.addEventListener('beforeunload', notifyRendererUnload);
+
+    return () => {
+      notifyRendererUnload();
+      offTranscriptEvent?.();
+      offTranscriptError?.();
+      window.removeEventListener('beforeunload', notifyRendererUnload);
+    };
   }, []);
 
   const handleLogin = async (): Promise<void> => {

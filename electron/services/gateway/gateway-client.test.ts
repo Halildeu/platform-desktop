@@ -8,10 +8,12 @@ import {
   finishUrl,
   loadGatewayConfig,
   newIdempotencyKey,
+  readTranscriptEvents,
   recordConsent,
   sendChunk,
   sessionsUrl,
   startSession,
+  transcriptEventsUrl,
 } from './gateway-client';
 
 const cfg = loadGatewayConfig({ GATEWAY_BASE_URL: 'https://gw.example.com/' });
@@ -51,6 +53,10 @@ describe('gateway-client pure helpers', () => {
     expect(sessionsUrl(cfg)).toBe(`${base}/sessions`);
     expect(chunksUrl(cfg, 'SES-1')).toBe(`${base}/sessions/SES-1/chunks`);
     expect(finishUrl(cfg, 'SES-1')).toBe(`${base}/sessions/SES-1/finish`);
+    expect(transcriptEventsUrl(cfg, 'SES-1')).toBe(`${base}/sessions/SES-1/transcript-events`);
+    expect(transcriptEventsUrl(cfg, 'SES-1', { after: '1680000000000-0', limit: 25 })).toBe(
+      `${base}/sessions/SES-1/transcript-events?after=1680000000000-0&limit=25`,
+    );
   });
 
   it('chunkHeaders include seq, started-at, byte-length, format/rate/channels and octet-stream', () => {
@@ -187,6 +193,44 @@ describe('gateway-client HTTP fetch wrapper', () => {
     expect(fetchMock.mock.calls[0][0]).toBe(
       'https://gw.example.com/api/v1/audio-gateway/sessions/SES-9/finish',
     );
+  });
+
+  it('readTranscriptEvents sends bearer token and cursor params', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        sessionId: 'SES-9',
+        correlationId: 'corr-1',
+        events: [
+          {
+            eventId: '1680000000000-0',
+            sessionId: 'SES-9',
+            meetingId,
+            chunkSeq: 1,
+            chunkStartedAtMs: 1781820000000,
+            text: 'merhaba',
+            textLength: 7,
+            status: 'DRAFT',
+          },
+        ],
+        nextCursor: '1680000000000-0',
+        hasMore: false,
+      }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const page = await readTranscriptEvents(cfg, 'JWT', 'SES-9', {
+      after: '1679999999999-0',
+      limit: 10,
+    });
+
+    expect(page.events[0].text).toBe('merhaba');
+    const [url, opts] = fetchMock.mock.calls[0];
+    expect(url).toBe(
+      'https://gw.example.com/api/v1/audio-gateway/sessions/SES-9/transcript-events?after=1679999999999-0&limit=10',
+    );
+    expect(opts.headers.Authorization).toBe('Bearer JWT');
+    expect(opts.headers.Accept).toBe('application/json');
   });
 
   it('throws status on non-ok response', async () => {

@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   handlers: new Map<string, (...args: unknown[]) => Promise<unknown>>(),
+  listeners: new Map<string, (...args: unknown[]) => unknown>(),
   loadGatewayConfig: vi.fn(() => ({ baseUrl: 'https://gw.example.com' })),
   recordConsent: vi.fn(),
   getValidAccessToken: vi.fn(async () => 'JWT'),
@@ -12,12 +13,18 @@ const mocks = vi.hoisted(() => ({
   beginCapturePermissionLease: vi.fn(() => 1781820000123),
   clearCapturePermissionLease: vi.fn(),
   setRecordingActive: vi.fn(),
+  transcriptSubscriptionCtor: vi.fn(),
+  transcriptSubscriptionStart: vi.fn(),
+  transcriptSubscriptionStop: vi.fn(),
 }));
 
 vi.mock('electron', () => ({
   ipcMain: {
     handle: vi.fn((channel: string, handler: (...args: unknown[]) => Promise<unknown>) => {
       mocks.handlers.set(channel, handler);
+    }),
+    on: vi.fn((channel: string, listener: (...args: unknown[]) => unknown) => {
+      mocks.listeners.set(channel, listener);
     }),
   },
 }));
@@ -33,6 +40,17 @@ vi.mock('../services/gateway/chunk-sender', () => ({
     start = mocks.senderStart;
     send = mocks.senderSend;
     finish = mocks.senderFinish;
+  },
+}));
+
+vi.mock('../services/gateway/transcript-event-subscription', () => ({
+  TranscriptEventSubscription: class MockTranscriptEventSubscription {
+    constructor(args: unknown) {
+      mocks.transcriptSubscriptionCtor(args);
+    }
+
+    start = mocks.transcriptSubscriptionStart;
+    stop = mocks.transcriptSubscriptionStop;
   },
 }));
 
@@ -62,6 +80,7 @@ const consentTextHash = 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 async function registerFreshAudioIpc(): Promise<void> {
   vi.resetModules();
   mocks.handlers.clear();
+  mocks.listeners.clear();
   mocks.loadGatewayConfig.mockClear();
   mocks.recordConsent.mockReset();
   mocks.recordConsent.mockImplementation(async (_cfg, _jwt, args) => ({
@@ -79,6 +98,9 @@ async function registerFreshAudioIpc(): Promise<void> {
   mocks.beginCapturePermissionLease.mockClear();
   mocks.clearCapturePermissionLease.mockClear();
   mocks.setRecordingActive.mockClear();
+  mocks.transcriptSubscriptionCtor.mockClear();
+  mocks.transcriptSubscriptionStart.mockClear();
+  mocks.transcriptSubscriptionStop.mockClear();
 
   const audio = await import('./audio');
   audio.registerAudioIpc();
@@ -100,6 +122,24 @@ function chunkHandler(): (...args: unknown[]) => Promise<unknown> {
   const chunk = mocks.handlers.get('audio:chunk');
   if (!chunk) throw new Error('audio:chunk handler not registered');
   return chunk;
+}
+
+function finishHandler(): (...args: unknown[]) => Promise<unknown> {
+  const finish = mocks.handlers.get('audio:finish');
+  if (!finish) throw new Error('audio:finish handler not registered');
+  return finish;
+}
+
+function abortHandler(): (...args: unknown[]) => Promise<unknown> {
+  const abort = mocks.handlers.get('audio:abort');
+  if (!abort) throw new Error('audio:abort handler not registered');
+  return abort;
+}
+
+function rendererUnloadedListener(): (...args: unknown[]) => unknown {
+  const listener = mocks.listeners.get('audio:renderer-unloaded');
+  if (!listener) throw new Error('audio:renderer-unloaded listener not registered');
+  return listener;
 }
 
 beforeEach(async () => {
@@ -134,6 +174,7 @@ describe('audio IPC recorder consent gate', () => {
     );
     expect(mocks.recordConsent).toHaveBeenCalledTimes(1);
     expect(mocks.senderStart).toHaveBeenCalledTimes(1);
+    expect(mocks.transcriptSubscriptionStart).toHaveBeenCalledTimes(1);
 
     const consentArgs = mocks.recordConsent.mock.calls[0][2] as {
       meetingId: string;
@@ -199,5 +240,57 @@ describe('audio IPC recorder consent gate', () => {
     ).rejects.toThrow('audio chunk byte length out of bounds: 32001');
 
     expect(mocks.senderSend).not.toHaveBeenCalled();
+  });
+
+  it('stops transcript polling when the recording is finished', async () => {
+    await acceptConsent();
+    const started = (await startHandler()({}, meetingId, deviceId)) as { captureId: string };
+
+    await expect(finishHandler()({}, started.captureId)).resolves.toEqual({ ok: true });
+
+    expect(mocks.senderFinish).toHaveBeenCalledTimes(1);
+    expect(mocks.transcriptSubscriptionStop).toHaveBeenCalledTimes(1);
+    expect(mocks.setRecordingActive).toHaveBeenLastCalledWith(false);
+  });
+
+  it('maps transcript endpoint 404 to an operator-readable renderer error', async () => {
+    const send = vi.fn();
+    await acceptConsent();
+    await startHandler()({ sender: { id: 7, send } }, meetingId, deviceId);
+
+    const args = mocks.transcriptSubscriptionCtor.mock.calls[0][0] as {
+      onError: (error: Error) => void;
+    };
+    args.onError(new Error('readTranscriptEvents failed: 404'));
+
+    expect(send).toHaveBeenCalledWith('audio:transcript-error', {
+      sessionId: 'SES-1',
+      message:
+        'Transkript teslim endpointi bu audio-gateway imageinda yok; gateway rollout bekleniyor.',
+    });
+  });
+
+  it('cleans the active recorder state when its renderer unloads', async () => {
+    await acceptConsent();
+    await startHandler()({ sender: { id: 7, send: vi.fn() } }, meetingId, deviceId);
+    mocks.senderGetState.mockReturnValue('active');
+
+    rendererUnloadedListener()({ sender: { id: 7 } });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(mocks.senderFinish).toHaveBeenCalledTimes(1);
+    expect(mocks.transcriptSubscriptionStop).toHaveBeenCalledTimes(1);
+    expect(mocks.setRecordingActive).toHaveBeenLastCalledWith(false);
+  });
+
+  it('stops transcript polling when the recording is aborted', async () => {
+    await acceptConsent();
+    const started = (await startHandler()({}, meetingId, deviceId)) as { captureId: string };
+
+    await expect(abortHandler()({}, started.captureId)).resolves.toEqual({ ok: true });
+
+    expect(mocks.transcriptSubscriptionStop).toHaveBeenCalledTimes(1);
+    expect(mocks.clearCapturePermissionLease).toHaveBeenCalledTimes(1);
   });
 });

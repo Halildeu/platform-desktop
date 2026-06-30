@@ -10,7 +10,12 @@ import { ipcMain } from 'electron';
 import { randomUUID } from 'node:crypto';
 
 import { ChunkSender } from '../services/gateway/chunk-sender';
-import { loadGatewayConfig, recordConsent } from '../services/gateway/gateway-client';
+import {
+  loadGatewayConfig,
+  recordConsent,
+  type TranscriptGatewayEvent,
+} from '../services/gateway/gateway-client';
+import { TranscriptEventSubscription } from '../services/gateway/transcript-event-subscription';
 import {
   beginCapturePermissionLease,
   clearCapturePermissionLease,
@@ -27,6 +32,8 @@ const ID_PATTERN = /^[A-Za-z0-9._:-]{1,128}$/;
 const CONSENT_VERSION_PATTERN = /^[A-Za-z0-9._:-]{1,64}$/;
 const CONSENT_HASH_PATTERN = /^sha256:[a-f0-9]{64}$/;
 const LOCALE_PATTERN = /^[a-z]{2}(-[A-Z]{2})?$/;
+const STALE_ACTIVE_NO_CHUNK_MS = 45_000;
+const STALE_ACTIVE_NO_PROGRESS_MS = 15_000;
 
 interface ConsentRecord {
   acceptedAt: string;
@@ -38,7 +45,10 @@ interface ConsentRecord {
 interface ActiveRecording {
   captureId: string;
   sender: ChunkSender;
+  transcriptSubscription: TranscriptEventSubscription;
+  startedAtMs: number;
   lastStartedAtMs: number | null;
+  rendererWebContentsId: number | null;
   consent: ConsentRecord;
 }
 
@@ -97,6 +107,83 @@ function requireActive(captureId: unknown): ActiveRecording {
   return active;
 }
 
+type RendererSend = (channel: string, payload: unknown) => void;
+
+function rendererSend(event: unknown): RendererSend | null {
+  const sender = (event as { sender?: { send?: unknown } } | null)?.sender;
+  if (typeof sender?.send !== 'function') {
+    return null;
+  }
+  return sender.send.bind(sender) as RendererSend;
+}
+
+function rendererWebContentsId(event: unknown): number | null {
+  const id = (event as { sender?: { id?: unknown } } | null)?.sender?.id;
+  return typeof id === 'number' ? id : null;
+}
+
+function emitTranscriptEvent(send: RendererSend | null, event: TranscriptGatewayEvent): void {
+  if (!send) {
+    console.warn('Transcript event dropped because renderer sender is unavailable', {
+      sessionId: event.sessionId,
+      eventId: event.eventId,
+    });
+    return;
+  }
+  send('audio:transcript-event', event);
+}
+
+function transcriptErrorMessage(error: Error): string {
+  if (error.message.includes('readTranscriptEvents failed: 404')) {
+    return 'Transkript teslim endpointi bu audio-gateway imageinda yok; gateway rollout bekleniyor.';
+  }
+  return `Transkript akışı alınamadı: ${error.message}`;
+}
+
+function emitTranscriptError(send: RendererSend | null, sessionId: string, error: Error): void {
+  send?.('audio:transcript-error', {
+    sessionId,
+    message: transcriptErrorMessage(error),
+  });
+}
+
+function activeRecordingIsStale(recording: ActiveRecording, nowMs = Date.now()): boolean {
+  const lastProgressMs = recording.lastStartedAtMs ?? recording.startedAtMs;
+  const thresholdMs =
+    recording.lastStartedAtMs === null ? STALE_ACTIVE_NO_CHUNK_MS : STALE_ACTIVE_NO_PROGRESS_MS;
+  return nowMs - lastProgressMs > thresholdMs;
+}
+
+async function disposeActiveRecording(recording: ActiveRecording): Promise<void> {
+  try {
+    if (recording.sender.getState() === 'active') {
+      await recording.sender.finish();
+    }
+  } catch {
+    // Best-effort temizlik; stale renderer state'i uygulamayi kilitlememeli.
+  } finally {
+    recording.transcriptSubscription.stop();
+    if (active?.captureId === recording.captureId) {
+      active = null;
+    }
+    setRecordingActive(false);
+    clearCapturePermissionLease();
+  }
+}
+
+async function ensureNoActiveRecording(): Promise<void> {
+  if (!active) {
+    return;
+  }
+  const recording = active;
+  const state = recording.sender.getState();
+  if (state !== 'active' || activeRecordingIsStale(recording)) {
+    await disposeActiveRecording(recording);
+    return;
+  }
+  throw new Error('recording session already active');
+}
+
 function requireChunkPayload(payload: unknown): {
   captureId: string;
   bytes: Uint8Array;
@@ -130,6 +217,14 @@ function requireChunkPayload(payload: unknown): {
 }
 
 export function registerAudioIpc(): void {
+  ipcMain.on('audio:renderer-unloaded', (event): void => {
+    const recording = active;
+    if (!recording || recording.rendererWebContentsId !== event.sender.id) {
+      return;
+    }
+    void disposeActiveRecording(recording);
+  });
+
   ipcMain.handle('audio:recorder-config', async (): Promise<RecorderRuntimeConfig> => {
     return loadRecorderRuntimeConfig();
   });
@@ -161,9 +256,10 @@ export function registerAudioIpc(): void {
       if (!pendingConsent) {
         throw new Error('consent required before capture permission');
       }
-      if (starting || active?.sender.getState() === 'active') {
+      if (starting) {
         throw new Error('recording session already active');
       }
+      await ensureNoActiveRecording();
       return { ok: true, expiresAtMs: beginCapturePermissionLease() };
     },
   );
@@ -178,20 +274,24 @@ export function registerAudioIpc(): void {
   ipcMain.handle(
     'audio:start',
     async (
-      _e,
+      event,
       meetingId: unknown,
       deviceId: unknown,
     ): Promise<{ sessionId: string; captureId: string }> => {
       if (!pendingConsent) {
         throw new Error('consent required before recording');
       }
-      if (starting || active?.sender.getState() === 'active') {
+      if (starting) {
         throw new Error('recording session already active');
       }
-      const consent = pendingConsent;
-      pendingConsent = null;
       starting = true;
       try {
+        await ensureNoActiveRecording();
+        const consent = pendingConsent;
+        if (!consent) {
+          throw new Error('consent required before recording');
+        }
+        pendingConsent = null;
         const normalizedMeetingId = requireIdentifier(meetingId, 'meetingId');
         const normalizedDeviceId = requireIdentifier(deviceId, 'deviceId');
         const captureId = randomUUID();
@@ -205,7 +305,24 @@ export function registerAudioIpc(): void {
         });
         const sender = new ChunkSender(cfg, () => getValidAccessToken());
         const sessionId = await sender.start(normalizedMeetingId, normalizedDeviceId);
-        active = { captureId, sender, lastStartedAtMs: null, consent };
+        const send = rendererSend(event);
+        const transcriptSubscription = new TranscriptEventSubscription({
+          cfg,
+          sessionId,
+          getJwt: () => getValidAccessToken(),
+          onEvent: (transcriptEvent) => emitTranscriptEvent(send, transcriptEvent),
+          onError: (error) => emitTranscriptError(send, sessionId, error),
+        });
+        transcriptSubscription.start();
+        active = {
+          captureId,
+          sender,
+          transcriptSubscription,
+          startedAtMs: Date.now(),
+          lastStartedAtMs: null,
+          rendererWebContentsId: rendererWebContentsId(event),
+          consent,
+        };
         setRecordingActive(true);
         return { sessionId, captureId };
       } catch (err) {
@@ -237,6 +354,7 @@ export function registerAudioIpc(): void {
     try {
       await recording.sender.finish();
     } finally {
+      recording.transcriptSubscription.stop();
       finishing = false;
       if (active?.captureId === recording.captureId) {
         active = null;
@@ -249,17 +367,8 @@ export function registerAudioIpc(): void {
   ipcMain.handle('audio:abort', async (_e, captureId: unknown): Promise<{ ok: boolean }> => {
     const id = requireText(captureId, 'captureId');
     if (active?.captureId === id) {
-      try {
-        if (active.sender.getState() === 'active') {
-          await active.sender.finish();
-        }
-      } catch {
-        // best-effort cleanup
-      } finally {
-        active = null;
-        setRecordingActive(false);
-        clearCapturePermissionLease();
-      }
+      const recording = active;
+      await disposeActiveRecording(recording);
     } else {
       clearCapturePermissionLease();
     }
