@@ -1,3 +1,5 @@
+import { desktopFetch } from '../net/desktop-fetch';
+
 const API = '/api/v1/admin/meetings';
 const MEETING_ID_PATTERN =
   /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
@@ -138,7 +140,7 @@ export async function createMeetingContract(
     scheduledEnd: args.scheduledEnd,
   };
 
-  const res = await fetch(meetingsUrl(cfg), {
+  const res = await desktopFetch(meetingsUrl(cfg), {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${jwt}`,
