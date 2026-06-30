@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import '@testing-library/jest-dom/vitest';
 
@@ -12,12 +12,31 @@ vi.mock('./audio/capture', () => ({
 import { startRecording } from './audio/capture';
 import App from './App';
 
+interface TestTranscriptGatewayEvent {
+  eventId: string;
+  sessionId: string;
+  meetingId: string;
+  chunkSeq: number;
+  chunkStartedAtMs: number;
+  text: string;
+  textLength: number;
+  status: string;
+}
+
+interface TestTranscriptGatewayError {
+  sessionId: string;
+  message: string;
+}
+
+let transcriptEventHandler: ((event: TestTranscriptGatewayEvent) => void) | null = null;
+
 function installElectronApiMock(recorderConfig: {
   meetingId: string | null;
   deviceId: string;
   ready: boolean;
   reason: string | null;
 }): void {
+  transcriptEventHandler = null;
   window.electronAPI = {
     app: {
       getVersion: vi.fn().mockResolvedValue('0.1.0-test'),
@@ -44,6 +63,14 @@ function installElectronApiMock(recorderConfig: {
       sendChunk: vi.fn(),
       finish: vi.fn(),
       abort: vi.fn(),
+      rendererUnloaded: vi.fn(),
+      onTranscriptEvent: vi.fn((callback: (event: TestTranscriptGatewayEvent) => void) => {
+        transcriptEventHandler = callback;
+        return vi.fn();
+      }),
+      onTranscriptError: vi.fn((_callback: (event: TestTranscriptGatewayError) => void) => {
+        return vi.fn();
+      }),
     },
   };
 }
@@ -203,5 +230,46 @@ describe('App recorder readiness', () => {
     );
     expect(timeoutErrors.length).toBeGreaterThan(0);
     expect(screen.getByRole('button', { name: 'Kaydet' })).toBeEnabled();
+  });
+
+  it('gateway transcript eventlerini canli transcript zaman cizelgesine yazar', async () => {
+    installElectronApiMock({
+      meetingId: '22222222-2222-4222-8222-222222222222',
+      deviceId: 'desktop-1',
+      ready: true,
+      reason: null,
+    });
+    vi.mocked(startRecording).mockResolvedValue({
+      sessionId: 'SES-1',
+      hasLoopback: false,
+      stop: vi.fn(),
+      onError: vi.fn(),
+    });
+
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Kaydet' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Onaylıyorum — Kaydı Başlat' }));
+
+    expect(
+      await screen.findByText('Kayıt başladı (yalnız mikrofon, oturum SES-1)'),
+    ).toBeInTheDocument();
+    expect(transcriptEventHandler).not.toBeNull();
+
+    act(() => {
+      transcriptEventHandler?.({
+        eventId: '1781820000000-0',
+        sessionId: 'SES-1',
+        meetingId: '22222222-2222-4222-8222-222222222222',
+        chunkSeq: 0,
+        chunkStartedAtMs: 1781820000000,
+        text: 'merhaba halil',
+        textLength: 13,
+        status: 'DRAFT',
+      });
+    });
+
+    expect(await screen.findByText('merhaba halil')).toBeInTheDocument();
+    expect(screen.getByText('Taslak')).toBeInTheDocument();
   });
 });

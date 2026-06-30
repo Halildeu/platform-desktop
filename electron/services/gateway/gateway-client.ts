@@ -60,6 +60,22 @@ export function chunksUrl(cfg: GatewayConfig, sessionId: string): string {
 export function finishUrl(cfg: GatewayConfig, sessionId: string): string {
   return `${cfg.baseUrl}${API}/sessions/${sessionId}/finish`;
 }
+export function transcriptEventsUrl(
+  cfg: GatewayConfig,
+  sessionId: string,
+  args: { after?: string | null; limit?: number } = {},
+): string {
+  const url = new URL(
+    `${cfg.baseUrl}${API}/sessions/${encodeURIComponent(sessionId)}/transcript-events`,
+  );
+  if (args.after) {
+    url.searchParams.set('after', args.after);
+  }
+  if (typeof args.limit === 'number') {
+    url.searchParams.set('limit', String(args.limit));
+  }
+  return url.toString();
+}
 
 /** Idempotency-Key (opaque 16-128 char). */
 export function newIdempotencyKey(): string {
@@ -187,6 +203,29 @@ export interface SessionInfo {
   finishUrl?: string;
 }
 
+export interface TranscriptGatewayEvent {
+  eventId: string;
+  sessionId: string;
+  meetingId: string;
+  chunkSeq: number;
+  chunkStartedAtMs: number;
+  text: string;
+  textLength: number;
+  status: string;
+  receivedAtMs?: number | null;
+  sttLanguage?: string | null;
+  durationSeconds?: number | null;
+  correlationId?: string | null;
+}
+
+export interface TranscriptEventsPage {
+  sessionId: string;
+  correlationId: string;
+  events: TranscriptGatewayEvent[];
+  nextCursor: string | null;
+  hasMore: boolean;
+}
+
 /** POST /consents — server-time audit proof before local capture starts. */
 export async function recordConsent(
   cfg: GatewayConfig,
@@ -299,4 +338,29 @@ export async function finishSession(
   if (!res.ok) {
     throw new Error(await httpErrorMessage(res, 'finishSession'));
   }
+}
+
+/** GET /sessions/{id}/transcript-events — cursor-paged live transcript delivery. */
+export async function readTranscriptEvents(
+  cfg: GatewayConfig,
+  jwt: string,
+  sessionId: string,
+  args: { after?: string | null; limit?: number; signal?: AbortSignal } = {},
+): Promise<TranscriptEventsPage> {
+  const res = await fetchWithTimeout(
+    transcriptEventsUrl(cfg, sessionId, { after: args.after, limit: args.limit }),
+    {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${jwt}`,
+        Accept: 'application/json',
+      },
+      signal: args.signal,
+    },
+    'readTranscriptEvents',
+  );
+  if (!res.ok) {
+    throw new Error(await httpErrorMessage(res, 'readTranscriptEvents'));
+  }
+  return (await res.json()) as TranscriptEventsPage;
 }

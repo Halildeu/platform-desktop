@@ -5,9 +5,29 @@
  * erişemez. Bu dosya whitelist'li IPC methods sunar.
  */
 
-import { contextBridge, ipcRenderer } from 'electron';
+import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron';
 
 import type { AuthStatus } from './ipc/auth';
+
+export interface TranscriptGatewayEvent {
+  eventId: string;
+  sessionId: string;
+  meetingId: string;
+  chunkSeq: number;
+  chunkStartedAtMs: number;
+  text: string;
+  textLength: number;
+  status: string;
+  receivedAtMs?: number | null;
+  sttLanguage?: string | null;
+  durationSeconds?: number | null;
+  correlationId?: string | null;
+}
+
+export interface TranscriptGatewayError {
+  sessionId: string;
+  message: string;
+}
 
 const electronAPI = {
   app: {
@@ -45,6 +65,23 @@ const electronAPI = {
       ipcRenderer.invoke('audio:finish', captureId),
     abort: (captureId: string): Promise<{ ok: boolean }> =>
       ipcRenderer.invoke('audio:abort', captureId),
+    rendererUnloaded: (): void => {
+      ipcRenderer.send('audio:renderer-unloaded');
+    },
+    onTranscriptEvent: (callback: (event: TranscriptGatewayEvent) => void): (() => void) => {
+      const listener = (_event: IpcRendererEvent, payload: TranscriptGatewayEvent): void => {
+        callback(payload);
+      };
+      ipcRenderer.on('audio:transcript-event', listener);
+      return () => ipcRenderer.removeListener('audio:transcript-event', listener);
+    },
+    onTranscriptError: (callback: (event: TranscriptGatewayError) => void): (() => void) => {
+      const listener = (_event: IpcRendererEvent, payload: TranscriptGatewayError): void => {
+        callback(payload);
+      };
+      ipcRenderer.on('audio:transcript-error', listener);
+      return () => ipcRenderer.removeListener('audio:transcript-error', listener);
+    },
   },
   auth: {
     // Token RENDERER'a verilmez — yalnız durum (loggedIn/expiresAt) döner.

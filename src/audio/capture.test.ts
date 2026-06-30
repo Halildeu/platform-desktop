@@ -117,6 +117,9 @@ function installElectronApiMock(): void {
       sendChunk: vi.fn(),
       finish: vi.fn().mockResolvedValue({ ok: true }),
       abort: vi.fn().mockResolvedValue({ ok: true }),
+      rendererUnloaded: vi.fn(),
+      onTranscriptEvent: vi.fn(() => vi.fn()),
+      onTranscriptError: vi.fn(() => vi.fn()),
     },
   };
 }
