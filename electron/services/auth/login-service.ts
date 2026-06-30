@@ -9,11 +9,11 @@
  * Caller (IPC handler) dönen TokenSet'i TokenStore.setSession ile keychain'e yazar.
  */
 
-import { type KeycloakConfig } from './keycloak-config';
-import { buildAuthorizationUrl, exchangeCodeForTokens, loopbackRedirectUri } from './oauth-flow';
-import { codeChallengeS256, generateCodeVerifier, generateState } from './pkce';
-import { type CallbackResult, waitForCallback } from './loopback-server';
-import { type TokenSet } from './token-utils';
+import { type KeycloakConfig } from './keycloak-config.js';
+import { buildAuthorizationUrl, exchangeCodeForTokens, loopbackRedirectUri } from './oauth-flow.js';
+import { codeChallengeS256, generateCodeVerifier, generateState } from './pkce.js';
+import { type CallbackResult, waitForCallback } from './loopback-server.js';
+import { type TokenSet } from './token-utils.js';
 
 export interface LoginDeps {
   /** System default browser'da URL aç (Electron shell.openExternal). */

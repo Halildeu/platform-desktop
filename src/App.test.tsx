@@ -36,6 +36,8 @@ function installElectronApiMock(recorderConfig: {
   deviceId: string;
   ready: boolean;
   reason: string | null;
+  liveSttStreamUrl?: string | null;
+  liveSttStreamReason?: string | null;
 }): void {
   transcriptEventHandler = null;
   window.electronAPI = {
@@ -55,7 +57,11 @@ function installElectronApiMock(recorderConfig: {
       }),
     },
     audio: {
-      recorderConfig: vi.fn().mockResolvedValue(recorderConfig),
+      recorderConfig: vi.fn().mockResolvedValue({
+        liveSttStreamUrl: null,
+        liveSttStreamReason: null,
+        ...recorderConfig,
+      }),
       permissionStatus: vi.fn(),
       prepareCapture: vi.fn(),
       cancelCapture: vi.fn(),
@@ -223,6 +229,9 @@ describe('App recorder readiness', () => {
     expect(startRecording).toHaveBeenCalledWith(
       '22222222-2222-4222-8222-222222222222',
       'desktop-1',
+      expect.objectContaining({
+        liveSttStreamUrl: null,
+      }),
     );
     timeoutSpy.mockRestore();
 
@@ -272,6 +281,70 @@ describe('App recorder readiness', () => {
 
     expect(await screen.findByText('merhaba halil')).toBeInTheDocument();
     expect(screen.getByText('Taslak')).toBeInTheDocument();
+  });
+
+  it('direct live STT partial eventleri ayni satiri kelime kelime gunceller', async () => {
+    installElectronApiMock({
+      meetingId: '22222222-2222-4222-8222-222222222222',
+      deviceId: 'desktop-1',
+      ready: true,
+      reason: null,
+      liveSttStreamUrl: 'ws://127.0.0.1:18220/ws/stream',
+      liveSttStreamReason: null,
+    });
+    vi.mocked(startRecording).mockResolvedValue({
+      sessionId: 'SES-1',
+      hasLoopback: false,
+      stop: vi.fn(),
+      onError: vi.fn(),
+    });
+
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Kaydet' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Onaylıyorum — Kaydı Başlat' }));
+
+    await screen.findByText('Kayıt başladı (yalnız mikrofon, oturum SES-1)');
+    const options = vi.mocked(startRecording).mock.calls[0]?.[2];
+    expect(options?.liveSttStreamUrl).toBe('ws://127.0.0.1:18220/ws/stream');
+
+    act(() => {
+      options?.onLiveTranscriptEvent?.({
+        id: 'stream:0',
+        startedAtMs: 1781820000000,
+        text: 'Merhaba',
+        status: 'draft',
+      });
+    });
+    expect(await screen.findByText('Merhaba')).toBeInTheDocument();
+
+    act(() => {
+      options?.onLiveTranscriptEvent?.({
+        id: 'stream:0',
+        startedAtMs: 1781820000000,
+        text: 'Merhaba nasılsın',
+        status: 'draft',
+      });
+    });
+    expect(await screen.findByText('Merhaba nasılsın')).toBeInTheDocument();
+    expect(screen.queryByText('Merhaba')).not.toBeInTheDocument();
+    expect(screen.getAllByRole('article')).toHaveLength(1);
+
+    act(() => {
+      transcriptEventHandler?.({
+        eventId: '1781820000000-0',
+        sessionId: 'SES-1',
+        meetingId: '22222222-2222-4222-8222-222222222222',
+        chunkSeq: 0,
+        chunkStartedAtMs: 1781820000000,
+        text: 'gateway cümle paketi',
+        textLength: 19,
+        status: 'DRAFT',
+      });
+    });
+
+    expect(screen.queryByText('gateway cümle paketi')).not.toBeInTheDocument();
+    expect(screen.getAllByRole('article')).toHaveLength(1);
   });
 
   it('client saati serverdan ilerideyse transcript satirinda server zamanini kullanir', async () => {

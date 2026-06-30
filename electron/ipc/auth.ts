@@ -7,11 +7,11 @@
 
 import { ipcMain, shell } from 'electron';
 
-import { assertKeycloakConfigReady, loadKeycloakConfig } from '../services/auth/keycloak-config';
-import { performLogin } from '../services/auth/login-service';
-import { safeJwtClaims, type SafeJwtClaims } from '../services/auth/jwt-claims';
-import { refreshAccessToken, revokeRefreshToken } from '../services/auth/oauth-flow';
-import { TokenStore } from '../services/auth/token-store';
+import { assertKeycloakConfigReady, loadKeycloakConfig } from '../services/auth/keycloak-config.js';
+import { performLogin } from '../services/auth/login-service.js';
+import { safeJwtClaims, type SafeJwtClaims } from '../services/auth/jwt-claims.js';
+import { refreshAccessToken, revokeRefreshToken } from '../services/auth/oauth-flow.js';
+import { TokenStore } from '../services/auth/token-store.js';
 
 export interface AuthStatus {
   loggedIn: boolean;

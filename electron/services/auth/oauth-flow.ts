@@ -11,9 +11,9 @@ import {
   logoutEndpoint,
   type KeycloakConfig,
   tokenEndpoint,
-} from './keycloak-config';
-import { expiresAtFromExpiresIn, type TokenSet } from './token-utils';
-import { desktopFetch } from '../net/desktop-fetch';
+} from './keycloak-config.js';
+import { expiresAtFromExpiresIn, type TokenSet } from './token-utils.js';
+import { desktopFetch } from '../net/desktop-fetch.js';
 
 /** Loopback redirect URI (RFC 8252): http://127.0.0.1:<port>/callback */
 export function loopbackRedirectUri(port: number): string {

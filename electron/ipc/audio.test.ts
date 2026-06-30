@@ -66,6 +66,8 @@ vi.mock('../services/recorder-runtime-config', () => ({
     deviceId: 'dev1',
     ready: true,
     reason: null,
+    liveSttStreamUrl: null,
+    liveSttStreamReason: null,
   })),
 }));
 

@@ -7,7 +7,7 @@
 
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron';
 
-import type { AuthStatus } from './ipc/auth';
+import type { AuthStatus } from './ipc/auth.js';
 
 export interface TranscriptGatewayEvent {
   eventId: string;
@@ -39,6 +39,8 @@ const electronAPI = {
       deviceId: string;
       ready: boolean;
       reason: string | null;
+      liveSttStreamUrl: string | null;
+      liveSttStreamReason: string | null;
     }> => ipcRenderer.invoke('audio:recorder-config'),
     permissionStatus: (): Promise<{ granted: boolean }> =>
       ipcRenderer.invoke('audio:permission-status'),

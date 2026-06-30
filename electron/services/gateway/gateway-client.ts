@@ -12,7 +12,7 @@
 
 import { randomBytes } from 'node:crypto';
 
-import { desktopFetch } from '../net/desktop-fetch';
+import { desktopFetch } from '../net/desktop-fetch.js';
 
 const API = '/api/v1/audio-gateway';
 const HTTP_TIMEOUT_MS = 15_000;

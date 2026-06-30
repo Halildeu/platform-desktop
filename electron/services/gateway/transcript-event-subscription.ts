@@ -2,7 +2,7 @@ import {
   readTranscriptEvents,
   type GatewayConfig,
   type TranscriptGatewayEvent,
-} from './gateway-client';
+} from './gateway-client.js';
 
 const DEFAULT_POLL_INTERVAL_MS = 500;
 const DEFAULT_ERROR_RETRY_MS = 3_000;

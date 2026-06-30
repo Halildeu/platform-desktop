@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 
 import { type Recorder, startRecording } from './audio/capture';
+import type { LiveSttTranscriptEvent } from './audio/live-stt-stream';
 import {
   ConsentDialog,
   CONSENT_VERSION,
@@ -37,6 +38,8 @@ interface RecorderRuntimeConfig {
   deviceId: string;
   ready: boolean;
   reason: string | null;
+  liveSttStreamUrl: string | null;
+  liveSttStreamReason: string | null;
 }
 
 interface MeetingContract {
@@ -56,10 +59,14 @@ interface SafeJwtClaims {
   companyId?: number | string;
 }
 
-async function startRecordingWithTimeout(meetingId: string, deviceId: string): Promise<Recorder> {
+async function startRecordingWithTimeout(
+  meetingId: string,
+  deviceId: string,
+  options?: Parameters<typeof startRecording>[2],
+): Promise<Recorder> {
   let timeoutId: ReturnType<typeof setTimeout> | null = null;
   let didTimeout = false;
-  const pendingRecorder = startRecording(meetingId, deviceId);
+  const pendingRecorder = startRecording(meetingId, deviceId, options);
 
   void pendingRecorder
     .then((rec) => {
@@ -115,6 +122,10 @@ function transcriptStatusFromGateway(status: string): TranscriptSegmentStatus {
   }
 }
 
+function transcriptStatusFromLiveStream(status: LiveSttTranscriptEvent['status']): TranscriptSegmentStatus {
+  return status === 'final' ? 'final' : 'draft';
+}
+
 function transcriptTimelineStartedAtMs(event: {
   chunkStartedAtMs: number;
   receivedAtMs?: number | null;
@@ -146,6 +157,7 @@ function App() {
   const [error, setError] = useState('');
   const recorderRef = useRef<Recorder | null>(null);
   const contractPendingRef = useRef(false);
+  const liveStreamHasEventsRef = useRef(false);
 
   useEffect(() => {
     void window.electronAPI?.app
@@ -180,6 +192,8 @@ function App() {
           deviceId: 'desktop-1',
           ready: false,
           reason: 'Recorder runtime config okunamadi.',
+          liveSttStreamUrl: null,
+          liveSttStreamReason: null,
         };
         setRecorderConfig(fallback);
         setTranscriptSession((current) =>
@@ -195,6 +209,9 @@ function App() {
     const offTranscriptEvent = window.electronAPI?.audio.onTranscriptEvent?.((event) => {
       setTranscriptSession((current) => {
         if (!current.sessionId || event.sessionId !== current.sessionId) {
+          return current;
+        }
+        if (liveStreamHasEventsRef.current) {
           return current;
         }
         if (!event.text.trim() || !Number.isFinite(event.chunkStartedAtMs)) {
@@ -246,11 +263,13 @@ function App() {
   };
 
   const bindReadyMeetingContract = (contract: MeetingContract): void => {
-    const cfg = {
+    const cfg: RecorderRuntimeConfig = {
       meetingId: contract.id,
       deviceId: recorderConfig?.deviceId ?? 'desktop-1',
       ready: true,
       reason: null,
+      liveSttStreamUrl: recorderConfig?.liveSttStreamUrl ?? null,
+      liveSttStreamReason: recorderConfig?.liveSttStreamReason ?? null,
     };
     setRecorderConfig(cfg);
     setTranscriptSession((current) =>
@@ -351,7 +370,36 @@ function App() {
       }
       const meetingId = recorderConfig.meetingId;
       const deviceId = recorderConfig.deviceId;
-      const rec = await startRecordingWithTimeout(meetingId, deviceId);
+      liveStreamHasEventsRef.current = false;
+      const rec = await startRecordingWithTimeout(meetingId, deviceId, {
+        liveSttStreamUrl: recorderConfig.liveSttStreamUrl,
+        onLiveTranscriptEvent: (event) => {
+          liveStreamHasEventsRef.current = true;
+          setTranscriptSession((current) => {
+            if (!current.sessionId) {
+              return current;
+            }
+            return upsertTranscriptSegment(current, {
+              id: event.id,
+              speakerLabel: 'Konuşmacı',
+              startedAtMs: event.startedAtMs,
+              status: transcriptStatusFromLiveStream(event.status),
+              text: event.text,
+            });
+          });
+        },
+        onLiveTranscriptError: (err) => {
+          setTranscriptSession((current) => {
+            if (!current.sessionId) {
+              return current;
+            }
+            return {
+              ...current,
+              error: `Live STT stream: ${err.message}`,
+            };
+          });
+        },
+      });
       rec.onError((err) => {
         recorderRef.current = null;
         setRecording(false);

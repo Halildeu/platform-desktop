@@ -11,11 +11,17 @@
  * tek AudioWorkletNode ile capture edilir (frame-loss riski yok).
  */
 
-import { encodeChunk } from './pcm-encode';
+import {
+  connectLiveSttStream,
+  type LiveSttTranscriptEvent,
+  type LiveSttStreamConnection,
+} from './live-stt-stream';
+import { encodeChunk, resampleLinear } from './pcm-encode';
 import { FrameBuffer } from './frame-buffer';
 
 const TARGET_RATE = 16000;
 const CHUNK_MS = 2000;
+const LIVE_STREAM_FRAME_MS = 100;
 const MAX_PENDING_AUDIO_MS = 120_000;
 const MAX_PENDING_CHUNKS = Math.ceil(MAX_PENDING_AUDIO_MS / CHUNK_MS);
 const CAPTURE_PERMISSION_TIMEOUT_MS = 45_000;
@@ -28,6 +34,12 @@ export interface Recorder {
   hasLoopback: boolean;
   stop: () => Promise<void>;
   onError: (handler: (err: Error) => void) => void;
+}
+
+export interface StartRecordingOptions {
+  liveSttStreamUrl?: string | null;
+  onLiveTranscriptEvent?: (event: LiveSttTranscriptEvent) => void;
+  onLiveTranscriptError?: (err: Error) => void;
 }
 
 function canAttemptLoopbackCapture(): boolean {
@@ -103,7 +115,11 @@ function withTimeout<T>(
   });
 }
 
-export async function startRecording(meetingId: string, deviceId: string): Promise<Recorder> {
+export async function startRecording(
+  meetingId: string,
+  deviceId: string,
+  options: StartRecordingOptions = {},
+): Promise<Recorder> {
   const api = window.electronAPI;
   if (!api) {
     throw new Error('electronAPI yok (preload yuklenmedi)');
@@ -210,6 +226,16 @@ export async function startRecording(meetingId: string, deviceId: string): Promi
   const frameSamples = Math.round((audioContext.sampleRate * CHUNK_MS) / 1000);
   const fb = new FrameBuffer(frameSamples);
   const empty = new Float32Array(0);
+  const liveStreamFrameSamples = Math.round((TARGET_RATE * LIVE_STREAM_FRAME_MS) / 1000);
+  const liveStreamBuffer = new FrameBuffer(liveStreamFrameSamples);
+  let liveStream: LiveSttStreamConnection | null = null;
+
+  if (options.liveSttStreamUrl) {
+    liveStream = connectLiveSttStream(options.liveSttStreamUrl, {
+      onTranscriptEvent: options.onLiveTranscriptEvent,
+      onError: options.onLiveTranscriptError,
+    });
+  }
 
   let pendingChunks = 0;
   let uploadError: Error | null = null;
@@ -220,6 +246,7 @@ export async function startRecording(meetingId: string, deviceId: string): Promi
     captureNode.port.onmessage = null;
     captureNode.disconnect();
     sink.disconnect();
+    liveStream?.close();
     stopAllTracks(micStream, loopbackStream);
     void audioContext.close();
     void api.audio.abort(captureId).catch(() => {});
@@ -258,6 +285,12 @@ export async function startRecording(meetingId: string, deviceId: string): Promi
   };
 
   captureNode.port.onmessage = (ev: MessageEvent<Float32Array>): void => {
+    if (liveStream) {
+      const liveFrame = resampleLinear(ev.data, audioContext.sampleRate, TARGET_RATE);
+      for (const frame of liveStreamBuffer.push(liveFrame)) {
+        liveStream.send(frame);
+      }
+    }
     for (const chunk of fb.push(ev.data)) {
       const bytes = encodeChunk(chunk, empty, audioContext.sampleRate, TARGET_RATE);
       enqueueChunk(bytes, Date.now());
@@ -279,6 +312,12 @@ export async function startRecording(meetingId: string, deviceId: string): Promi
       captureNode.port.onmessage = null;
 
       if (!uploadError) {
+        if (liveStream) {
+          const restLiveFrame = liveStreamBuffer.flush();
+          if (restLiveFrame) {
+            liveStream.send(restLiveFrame);
+          }
+        }
         const rest = fb.flush();
         if (rest) {
           const bytes = encodeChunk(rest, empty, audioContext.sampleRate, TARGET_RATE);
@@ -292,6 +331,7 @@ export async function startRecording(meetingId: string, deviceId: string): Promi
       if (!uploadError) {
         captureNode.disconnect();
         sink.disconnect();
+        liveStream?.close();
         stopAllTracks(micStream, loopbackStream);
         await audioContext.close();
       }

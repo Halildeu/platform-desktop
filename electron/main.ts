@@ -19,13 +19,13 @@ import { app, BrowserWindow, desktopCapturer, ipcMain, session, shell } from 'el
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { registerAudioIpc } from './ipc/audio';
-import { registerAuthIpc } from './ipc/auth';
-import { registerMeetingIpc } from './ipc/meeting';
+import { registerAudioIpc } from './ipc/audio.js';
+import { registerAuthIpc } from './ipc/auth.js';
+import { registerMeetingIpc } from './ipc/meeting.js';
 import {
   canGrantDisplayMedia,
   shouldGrantDisplayMediaRequest,
-} from './services/display-media-lease';
+} from './services/display-media-lease.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 

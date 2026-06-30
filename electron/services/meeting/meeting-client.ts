@@ -1,4 +1,4 @@
-import { desktopFetch } from '../net/desktop-fetch';
+import { desktopFetch } from '../net/desktop-fetch.js';
 
 const API = '/api/v1/admin/meetings';
 const MEETING_ID_PATTERN =

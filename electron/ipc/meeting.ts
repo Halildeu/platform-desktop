@@ -5,8 +5,8 @@ import {
   loadMeetingConfig,
   type CreateMeetingContractArgs,
   type MeetingContract,
-} from '../services/meeting/meeting-client';
-import { getValidAccessToken } from './auth';
+} from '../services/meeting/meeting-client.js';
+import { getValidAccessToken } from './auth.js';
 
 function optionalText(value: unknown, label: string, maxLength: number): string | undefined {
   if (value === undefined || value === null) {

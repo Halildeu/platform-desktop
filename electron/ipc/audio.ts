@@ -9,23 +9,23 @@
 import { ipcMain } from 'electron';
 import { randomUUID } from 'node:crypto';
 
-import { ChunkSender } from '../services/gateway/chunk-sender';
+import { ChunkSender } from '../services/gateway/chunk-sender.js';
 import {
   loadGatewayConfig,
   recordConsent,
   type TranscriptGatewayEvent,
-} from '../services/gateway/gateway-client';
-import { TranscriptEventSubscription } from '../services/gateway/transcript-event-subscription';
+} from '../services/gateway/gateway-client.js';
+import { TranscriptEventSubscription } from '../services/gateway/transcript-event-subscription.js';
 import {
   beginCapturePermissionLease,
   clearCapturePermissionLease,
   setRecordingActive,
-} from '../services/display-media-lease';
+} from '../services/display-media-lease.js';
 import {
   loadRecorderRuntimeConfig,
   type RecorderRuntimeConfig,
-} from '../services/recorder-runtime-config';
-import { getValidAccessToken } from './auth';
+} from '../services/recorder-runtime-config.js';
+import { getValidAccessToken } from './auth.js';
 
 const MAX_CHUNK_BYTES = 16_000 * 2 * 2; // 2s @ 16kHz PCM16 mono.
 const ID_PATTERN = /^[A-Za-z0-9._:-]{1,128}$/;
