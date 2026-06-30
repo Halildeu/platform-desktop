@@ -4,8 +4,8 @@
  * Main process attaches the JWT and sends chunks to audio-gateway.
  * Audio is kept in memory only (KVKK).
  *
- * Loopback: getDisplayMedia({audio:true}) ile sistem sesi yakalanır.
- * Kullanıcı reddederse veya platform desteklemiyorsa mic-only fallback.
+ * Loopback: Electron only supports loopback device capture on Windows.
+ * Unsupported platforms and denied source selection use mic-only fallback.
  *
  * Mix: ChannelMerger + GainNode ile Web Audio graph'ta toplandıktan sonra
  * tek AudioWorkletNode ile capture edilir (frame-loss riski yok).
@@ -20,6 +20,7 @@ const MAX_PENDING_CHUNKS = 20;
 const CAPTURE_PERMISSION_TIMEOUT_MS = 45_000;
 const CAPTURE_IPC_TIMEOUT_MS = 15_000;
 const LOOPBACK_CAPTURE_TIMEOUT_MS = 5_000;
+const WINDOWS_USER_AGENT_RE = /\bWindows NT\b/i;
 
 export interface Recorder {
   sessionId: string;
@@ -28,7 +29,15 @@ export interface Recorder {
   onError: (handler: (err: Error) => void) => void;
 }
 
+function canAttemptLoopbackCapture(): boolean {
+  return WINDOWS_USER_AGENT_RE.test(navigator.userAgent);
+}
+
 async function tryLoopbackStream(): Promise<MediaStream | null> {
+  if (!canAttemptLoopbackCapture()) {
+    return null;
+  }
+
   try {
     const stream = await navigator.mediaDevices.getDisplayMedia({
       audio: true,
