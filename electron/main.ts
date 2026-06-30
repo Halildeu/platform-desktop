@@ -87,13 +87,17 @@ void app.whenReady().then(() => {
       callback({});
       return;
     }
-    const sources = await desktopCapturer.getSources({ types: ['screen'] });
-    const primary = sources[0];
-    if (!primary) {
+    try {
+      const sources = await desktopCapturer.getSources({ types: ['screen'] });
+      const primary = sources[0];
+      if (!primary) {
+        callback({});
+        return;
+      }
+      callback({ video: primary, audio: 'loopback', enableLocalEcho: false });
+    } catch {
       callback({});
-      return;
     }
-    callback({ video: primary, audio: 'loopback', enableLocalEcho: false });
   });
 
   registerAuthIpc(); // #1 auth:login / auth:status / auth:logout

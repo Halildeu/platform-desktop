@@ -19,6 +19,7 @@ const CHUNK_MS = 100;
 const MAX_PENDING_CHUNKS = 20;
 const CAPTURE_PERMISSION_TIMEOUT_MS = 45_000;
 const CAPTURE_IPC_TIMEOUT_MS = 15_000;
+const LOOPBACK_CAPTURE_TIMEOUT_MS = 5_000;
 
 export interface Recorder {
   sessionId: string;
@@ -123,10 +124,10 @@ export async function startRecording(meetingId: string, deviceId: string): Promi
     );
     loopback = await withTimeout(
       tryLoopbackStream(),
-      CAPTURE_PERMISSION_TIMEOUT_MS,
-      'Sistem sesi seçimi zaman aşımına uğradı.',
+      LOOPBACK_CAPTURE_TIMEOUT_MS,
+      'Sistem sesi seçimi zaman aşımına uğradı; mikrofonla devam ediliyor.',
       (stream) => stopAllTracks(stream),
-    );
+    ).catch(() => null);
     ctx = new AudioContext();
     await withTimeout(
       ctx.audioWorklet.addModule('/pcm-worklet.js'),
