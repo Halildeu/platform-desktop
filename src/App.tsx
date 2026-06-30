@@ -30,6 +30,7 @@ import {
 const MEETING_ID_MISSING_MESSAGE =
   'Geçerli meetingId bulunamadı; kayıt başlatılamaz. (meetingId kaynağı henüz belirlenmedi)';
 const RECORDER_START_TIMEOUT_MS = 45_000;
+const TRANSCRIPT_CLIENT_CLOCK_SKEW_MS = 30_000;
 
 interface RecorderRuntimeConfig {
   meetingId: string | null;
@@ -114,6 +115,21 @@ function transcriptStatusFromGateway(status: string): TranscriptSegmentStatus {
   }
 }
 
+function transcriptTimelineStartedAtMs(event: {
+  chunkStartedAtMs: number;
+  receivedAtMs?: number | null;
+}): number {
+  const receivedAtMs = event.receivedAtMs;
+  if (
+    typeof receivedAtMs === 'number' &&
+    Number.isFinite(receivedAtMs) &&
+    event.chunkStartedAtMs - receivedAtMs > TRANSCRIPT_CLIENT_CLOCK_SKEW_MS
+  ) {
+    return receivedAtMs;
+  }
+  return event.chunkStartedAtMs;
+}
+
 function App() {
   const [version, setVersion] = useState('');
   const [loggedIn, setLoggedIn] = useState(false);
@@ -187,7 +203,7 @@ function App() {
         return upsertTranscriptSegment(current, {
           id: event.eventId,
           speakerLabel: 'Konuşmacı',
-          startedAtMs: event.chunkStartedAtMs,
+          startedAtMs: transcriptTimelineStartedAtMs(event),
           status: transcriptStatusFromGateway(event.status),
           text: event.text,
         });

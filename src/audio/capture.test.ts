@@ -164,7 +164,7 @@ describe('startRecording', () => {
     await recorder.stop();
   });
 
-  it('uploads one-second PCM16 chunks to reduce REST backpressure', async () => {
+  it('uploads two-second PCM16 chunks for a balanced latency/accuracy window', async () => {
     installElectronApiMock();
     setUserAgent('Mozilla/5.0 (Macintosh; Intel Mac OS X 15_5)');
     installBrowserAudioMocks();
@@ -174,7 +174,7 @@ describe('startRecording', () => {
     expect(captureNode?.port.onmessage).toBeTypeOf('function');
 
     captureNode?.port.onmessage?.({
-      data: new Float32Array(48_000),
+      data: new Float32Array(96_000),
     } as MessageEvent<Float32Array>);
 
     await Promise.resolve();
@@ -183,7 +183,7 @@ describe('startRecording', () => {
     expect(window.electronAPI?.audio.sendChunk).toHaveBeenCalledTimes(1);
     expect(window.electronAPI?.audio.sendChunk).toHaveBeenCalledWith({
       captureId: 'CAP-1',
-      bytes: expect.objectContaining({ byteLength: 32_000 }),
+      bytes: expect.objectContaining({ byteLength: 64_000 }),
       startedAtMs: expect.any(Number),
     });
   });

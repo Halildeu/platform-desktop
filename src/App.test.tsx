@@ -18,6 +18,7 @@ interface TestTranscriptGatewayEvent {
   meetingId: string;
   chunkSeq: number;
   chunkStartedAtMs: number;
+  receivedAtMs?: number | null;
   text: string;
   textLength: number;
   status: string;
@@ -271,5 +272,58 @@ describe('App recorder readiness', () => {
 
     expect(await screen.findByText('merhaba halil')).toBeInTheDocument();
     expect(screen.getByText('Taslak')).toBeInTheDocument();
+  });
+
+  it('client saati serverdan ilerideyse transcript satirinda server zamanini kullanir', async () => {
+    installElectronApiMock({
+      meetingId: '22222222-2222-4222-8222-222222222222',
+      deviceId: 'desktop-1',
+      ready: true,
+      reason: null,
+    });
+    vi.mocked(startRecording).mockResolvedValue({
+      sessionId: 'SES-1',
+      hasLoopback: false,
+      stop: vi.fn(),
+      onError: vi.fn(),
+    });
+
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Kaydet' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Onaylıyorum — Kaydı Başlat' }));
+
+    await screen.findByText('Kayıt başladı (yalnız mikrofon, oturum SES-1)');
+
+    const receivedAtMs = 1781820000000;
+    const futureClientStartedAtMs = receivedAtMs + 95_000;
+    const serverClockLabel = new Date(receivedAtMs).toLocaleTimeString('tr-TR', {
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+    });
+    const clientClockLabel = new Date(futureClientStartedAtMs).toLocaleTimeString('tr-TR', {
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+    });
+
+    act(() => {
+      transcriptEventHandler?.({
+        eventId: '1781820000000-0',
+        sessionId: 'SES-1',
+        meetingId: '22222222-2222-4222-8222-222222222222',
+        chunkSeq: 0,
+        chunkStartedAtMs: futureClientStartedAtMs,
+        receivedAtMs,
+        text: 'clock skew segment',
+        textLength: 18,
+        status: 'DRAFT',
+      });
+    });
+
+    expect(await screen.findByText('clock skew segment')).toBeInTheDocument();
+    expect(screen.getByText(serverClockLabel)).toBeInTheDocument();
+    expect(screen.queryByText(clientClockLabel)).not.toBeInTheDocument();
   });
 });

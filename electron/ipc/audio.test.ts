@@ -212,10 +212,10 @@ describe('audio IPC recorder consent gate', () => {
     expect(mocks.clearCapturePermissionLease).toHaveBeenCalledTimes(1);
   });
 
-  it('accepts one-second PCM16 mono chunks from the renderer', async () => {
+  it('accepts two-second PCM16 mono chunks from the renderer', async () => {
     await acceptConsent();
     const started = (await startHandler()({}, meetingId, deviceId)) as { captureId: string };
-    const bytes = new Uint8Array(32_000);
+    const bytes = new Uint8Array(64_000);
 
     await expect(
       chunkHandler()({}, { captureId: started.captureId, bytes, startedAtMs: 1781820000000 }),
@@ -224,7 +224,7 @@ describe('audio IPC recorder consent gate', () => {
     expect(mocks.senderSend).toHaveBeenCalledWith(bytes, 1781820000000);
   });
 
-  it('rejects chunks larger than the bounded one-second PCM16 contract', async () => {
+  it('rejects chunks larger than the bounded two-second PCM16 contract', async () => {
     await acceptConsent();
     const started = (await startHandler()({}, meetingId, deviceId)) as { captureId: string };
 
@@ -233,11 +233,11 @@ describe('audio IPC recorder consent gate', () => {
         {},
         {
           captureId: started.captureId,
-          bytes: new Uint8Array(32_001),
+          bytes: new Uint8Array(64_001),
           startedAtMs: 1781820000000,
         },
       ),
-    ).rejects.toThrow('audio chunk byte length out of bounds: 32001');
+    ).rejects.toThrow('audio chunk byte length out of bounds: 64001');
 
     expect(mocks.senderSend).not.toHaveBeenCalled();
   });

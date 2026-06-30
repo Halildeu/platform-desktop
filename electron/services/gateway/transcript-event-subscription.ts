@@ -4,7 +4,7 @@ import {
   type TranscriptGatewayEvent,
 } from './gateway-client';
 
-const DEFAULT_POLL_INTERVAL_MS = 1_000;
+const DEFAULT_POLL_INTERVAL_MS = 500;
 const DEFAULT_ERROR_RETRY_MS = 3_000;
 const DEFAULT_LIMIT = 50;
 const MAX_IMMEDIATE_DRAIN_POLLS = 20;
