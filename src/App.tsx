@@ -27,6 +27,7 @@ import {
 
 const MEETING_ID_MISSING_MESSAGE =
   'Geçerli meetingId bulunamadı; kayıt başlatılamaz. (meetingId kaynağı henüz belirlenmedi)';
+const RECORDER_START_TIMEOUT_MS = 45_000;
 
 interface RecorderRuntimeConfig {
   meetingId: string | null;
@@ -50,6 +51,52 @@ interface SafeJwtClaims {
   tenantId?: number | string;
   userId?: number | string;
   companyId?: number | string;
+}
+
+async function startRecordingWithTimeout(meetingId: string, deviceId: string): Promise<Recorder> {
+  let timeoutId: ReturnType<typeof setTimeout> | null = null;
+  let didTimeout = false;
+  const pendingRecorder = startRecording(meetingId, deviceId);
+
+  void pendingRecorder
+    .then((rec) => {
+      if (didTimeout) {
+        void rec.stop().catch(() => undefined);
+      }
+    })
+    .catch(() => undefined);
+
+  try {
+    return await new Promise<Recorder>((resolve, reject) => {
+      timeoutId = setTimeout(() => {
+        didTimeout = true;
+        reject(
+          new Error(
+            `Recorder başlatma ${Math.round(
+              RECORDER_START_TIMEOUT_MS / 1000,
+            )} sn içinde yanıt vermedi; izin/gateway zinciri kontrol edilmeli.`,
+          ),
+        );
+      }, RECORDER_START_TIMEOUT_MS);
+
+      pendingRecorder.then(
+        (rec) => {
+          if (!didTimeout) {
+            resolve(rec);
+          }
+        },
+        (err: unknown) => {
+          if (!didTimeout) {
+            reject(err instanceof Error ? err : new Error(String(err)));
+          }
+        },
+      );
+    });
+  } finally {
+    if (timeoutId !== null) {
+      clearTimeout(timeoutId);
+    }
+  }
 }
 
 function App() {
@@ -233,7 +280,7 @@ function App() {
       }
       const meetingId = recorderConfig.meetingId;
       const deviceId = recorderConfig.deviceId;
-      const rec = await startRecording(meetingId, deviceId);
+      const rec = await startRecordingWithTimeout(meetingId, deviceId);
       rec.onError((err) => {
         recorderRef.current = null;
         setRecording(false);

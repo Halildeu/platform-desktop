@@ -17,6 +17,8 @@ import { FrameBuffer } from './frame-buffer';
 const TARGET_RATE = 16000;
 const CHUNK_MS = 100;
 const MAX_PENDING_CHUNKS = 20;
+const CAPTURE_PERMISSION_TIMEOUT_MS = 45_000;
+const CAPTURE_IPC_TIMEOUT_MS = 15_000;
 
 export interface Recorder {
   sessionId: string;
@@ -48,36 +50,104 @@ function stopAllTracks(...streams: (MediaStream | null)[]): void {
   }
 }
 
+function withTimeout<T>(
+  operation: Promise<T>,
+  timeoutMs: number,
+  message: string,
+  onLateResolve?: (value: T) => void,
+): Promise<T> {
+  let timeoutId: ReturnType<typeof setTimeout> | null = null;
+  let didTimeout = false;
+
+  void operation
+    .then((value) => {
+      if (didTimeout) {
+        onLateResolve?.(value);
+      }
+    })
+    .catch(() => undefined);
+
+  return new Promise<T>((resolve, reject) => {
+    timeoutId = setTimeout(() => {
+      didTimeout = true;
+      reject(new Error(message));
+    }, timeoutMs);
+
+    operation.then(
+      (value) => {
+        if (!didTimeout) {
+          resolve(value);
+        }
+      },
+      (err: unknown) => {
+        if (!didTimeout) {
+          reject(err instanceof Error ? err : new Error(String(err)));
+        }
+      },
+    );
+  }).finally(() => {
+    if (timeoutId !== null) {
+      clearTimeout(timeoutId);
+    }
+  });
+}
+
 export async function startRecording(meetingId: string, deviceId: string): Promise<Recorder> {
   const api = window.electronAPI;
   if (!api) {
     throw new Error('electronAPI yok (preload yuklenmedi)');
   }
 
-  await api.audio.prepareCapture();
-
   let mic: MediaStream | null = null;
   let loopback: MediaStream | null = null;
   let ctx: AudioContext | null = null;
+  let captureLeasePrepared = false;
 
   try {
-    mic = await navigator.mediaDevices.getUserMedia({
-      audio: { channelCount: 1 },
-    });
-    loopback = await tryLoopbackStream();
+    await withTimeout(
+      api.audio.prepareCapture(),
+      CAPTURE_IPC_TIMEOUT_MS,
+      'Recorder izin hazırlığı zaman aşımına uğradı.',
+      () => {
+        void api.audio.cancelCapture().catch(() => undefined);
+      },
+    );
+    captureLeasePrepared = true;
+    mic = await withTimeout(
+      navigator.mediaDevices.getUserMedia({
+        audio: { channelCount: 1 },
+      }),
+      CAPTURE_PERMISSION_TIMEOUT_MS,
+      'Mikrofon izni zaman aşımına uğradı.',
+      (stream) => stopAllTracks(stream),
+    );
+    loopback = await withTimeout(
+      tryLoopbackStream(),
+      CAPTURE_PERMISSION_TIMEOUT_MS,
+      'Sistem sesi seçimi zaman aşımına uğradı.',
+      (stream) => stopAllTracks(stream),
+    );
     ctx = new AudioContext();
-    await ctx.audioWorklet.addModule('/pcm-worklet.js');
+    await withTimeout(
+      ctx.audioWorklet.addModule('/pcm-worklet.js'),
+      CAPTURE_IPC_TIMEOUT_MS,
+      'Audio worklet yükleme zaman aşımına uğradı.',
+    );
   } catch (err) {
     stopAllTracks(mic, loopback);
     if (ctx) {
       await ctx.close();
     }
-    await api.audio.cancelCapture().catch(() => {});
+    if (captureLeasePrepared) {
+      void api.audio.cancelCapture().catch(() => undefined);
+    }
     throw err;
   }
 
   if (!mic || !ctx) {
-    await api.audio.cancelCapture().catch(() => {});
+    if (captureLeasePrepared) {
+      void api.audio.cancelCapture().catch(() => undefined);
+    }
     throw new Error('audio capture setup failed');
   }
 
@@ -110,11 +180,18 @@ export async function startRecording(meetingId: string, deviceId: string): Promi
 
   let session: { sessionId: string; captureId: string };
   try {
-    session = await api.audio.start(meetingId, deviceId);
+    session = await withTimeout(
+      api.audio.start(meetingId, deviceId),
+      CAPTURE_IPC_TIMEOUT_MS,
+      'Audio gateway oturumu zaman aşımına uğradı.',
+      (lateSession) => {
+        void api.audio.abort(lateSession.captureId).catch(() => undefined);
+      },
+    );
   } catch (err) {
     stopAllTracks(micStream, loopbackStream);
     await audioContext.close();
-    await api.audio.cancelCapture().catch(() => {});
+    void api.audio.cancelCapture().catch(() => undefined);
     throw err;
   }
   const { sessionId, captureId } = session;

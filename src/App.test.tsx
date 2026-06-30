@@ -5,6 +5,11 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import userEvent from '@testing-library/user-event';
 import '@testing-library/jest-dom/vitest';
 
+vi.mock('./audio/capture', () => ({
+  startRecording: vi.fn(),
+}));
+
+import { startRecording } from './audio/capture';
 import App from './App';
 
 function installElectronApiMock(recorderConfig: {
@@ -45,7 +50,9 @@ function installElectronApiMock(recorderConfig: {
 
 afterEach(() => {
   cleanup();
+  vi.useRealTimers();
   vi.restoreAllMocks();
+  vi.clearAllMocks();
   delete window.electronAPI;
 });
 
@@ -100,6 +107,10 @@ describe('App recorder readiness', () => {
       await screen.findByText('Meeting contract hazır: 33333333-3333-4333-8333-333333333333'),
     ).toBeInTheDocument();
     expect(screen.getByText('33333333-3333-4333-8333-333333333333')).toBeInTheDocument();
+    expect(
+      screen.queryByText('Meeting intelligence için canonical meetingId yok.'),
+    ).not.toBeInTheDocument();
+    expect(screen.getByText('Beklemede')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Kaydet' })).toBeEnabled();
   });
 
@@ -157,5 +168,40 @@ describe('App recorder readiness', () => {
     await waitFor(() => {
       expect(screen.getByRole('button', { name: 'Kaydet' })).toBeEnabled();
     });
+  });
+
+  it('kayit baslatma cevapsiz kalirsa butonu serbest birakir', async () => {
+    installElectronApiMock({
+      meetingId: '22222222-2222-4222-8222-222222222222',
+      deviceId: 'desktop-1',
+      ready: true,
+      reason: null,
+    });
+    vi.mocked(startRecording).mockReturnValue(new Promise<never>(() => undefined));
+
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Kaydet' }));
+    const timeoutSpy = vi.spyOn(globalThis, 'setTimeout').mockImplementation((handler) => {
+      if (typeof handler === 'function') {
+        queueMicrotask(() => handler());
+      }
+      return 1 as unknown as ReturnType<typeof setTimeout>;
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Onaylıyorum — Kaydı Başlat' }));
+
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(startRecording).toHaveBeenCalledWith(
+      '22222222-2222-4222-8222-222222222222',
+      'desktop-1',
+    );
+    timeoutSpy.mockRestore();
+
+    const timeoutErrors = await screen.findAllByText(
+      'Kayıt başlatılamadı: Recorder başlatma 45 sn içinde yanıt vermedi; izin/gateway zinciri kontrol edilmeli.',
+    );
+    expect(timeoutErrors.length).toBeGreaterThan(0);
+    expect(screen.getByRole('button', { name: 'Kaydet' })).toBeEnabled();
   });
 });
