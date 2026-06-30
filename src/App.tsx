@@ -122,7 +122,9 @@ function transcriptStatusFromGateway(status: string): TranscriptSegmentStatus {
   }
 }
 
-function transcriptStatusFromLiveStream(status: LiveSttTranscriptEvent['status']): TranscriptSegmentStatus {
+function transcriptStatusFromLiveStream(
+  status: LiveSttTranscriptEvent['status'],
+): TranscriptSegmentStatus {
   return status === 'final' ? 'final' : 'draft';
 }
 

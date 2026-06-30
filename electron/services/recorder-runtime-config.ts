@@ -44,7 +44,8 @@ function normalizeLiveSttStreamUrl(raw: string): {
   if (parsed.protocol !== 'wss:' && !isLocalWs(parsed)) {
     return {
       liveSttStreamUrl: null,
-      liveSttStreamReason: 'LIVE_STT_STREAM_URL wss olmali; local dev icin ws localhost kabul edilir.',
+      liveSttStreamReason:
+        'LIVE_STT_STREAM_URL wss olmali; local dev icin ws localhost kabul edilir.',
     };
   }
 
