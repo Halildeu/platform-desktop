@@ -80,6 +80,13 @@ function installBrowserAudioMocks(): {
   return { micTrack, getDisplayMedia };
 }
 
+function setUserAgent(userAgent: string): void {
+  Object.defineProperty(navigator, 'userAgent', {
+    configurable: true,
+    value: userAgent,
+  });
+}
+
 function installElectronApiMock(): void {
   window.electronAPI = {
     app: {
@@ -114,13 +121,14 @@ afterEach(() => {
 });
 
 describe('startRecording', () => {
-  it('continues mic-only when system audio source capture fails', async () => {
+  it('skips loopback capture on macOS and starts mic-only recording', async () => {
     installElectronApiMock();
+    setUserAgent('Mozilla/5.0 (Macintosh; Intel Mac OS X 15_5)');
     const { micTrack, getDisplayMedia } = installBrowserAudioMocks();
 
     const recorder = await startRecording('meeting-1', 'desktop-1');
 
-    expect(getDisplayMedia).toHaveBeenCalledWith({ audio: true, video: true });
+    expect(getDisplayMedia).not.toHaveBeenCalled();
     expect(window.electronAPI?.audio.start).toHaveBeenCalledWith('meeting-1', 'desktop-1');
     expect(recorder.hasLoopback).toBe(false);
     expect(window.electronAPI?.audio.cancelCapture).not.toHaveBeenCalled();
@@ -129,5 +137,19 @@ describe('startRecording', () => {
 
     expect(micTrack.stop).toHaveBeenCalled();
     expect(window.electronAPI?.audio.finish).toHaveBeenCalledWith('CAP-1');
+  });
+
+  it('continues mic-only on Windows when system audio source capture fails', async () => {
+    installElectronApiMock();
+    setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64)');
+    const { getDisplayMedia } = installBrowserAudioMocks();
+
+    const recorder = await startRecording('meeting-1', 'desktop-1');
+
+    expect(getDisplayMedia).toHaveBeenCalledWith({ audio: true, video: true });
+    expect(window.electronAPI?.audio.start).toHaveBeenCalledWith('meeting-1', 'desktop-1');
+    expect(recorder.hasLoopback).toBe(false);
+
+    await recorder.stop();
   });
 });
