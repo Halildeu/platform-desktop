@@ -96,6 +96,12 @@ function startHandler(): (...args: unknown[]) => Promise<unknown> {
   return start;
 }
 
+function chunkHandler(): (...args: unknown[]) => Promise<unknown> {
+  const chunk = mocks.handlers.get('audio:chunk');
+  if (!chunk) throw new Error('audio:chunk handler not registered');
+  return chunk;
+}
+
 beforeEach(async () => {
   await registerFreshAudioIpc();
 });
@@ -163,5 +169,35 @@ describe('audio IPC recorder consent gate', () => {
     expect(mocks.senderStart).not.toHaveBeenCalled();
     expect(mocks.setRecordingActive).not.toHaveBeenCalledWith(true);
     expect(mocks.clearCapturePermissionLease).toHaveBeenCalledTimes(1);
+  });
+
+  it('accepts one-second PCM16 mono chunks from the renderer', async () => {
+    await acceptConsent();
+    const started = (await startHandler()({}, meetingId, deviceId)) as { captureId: string };
+    const bytes = new Uint8Array(32_000);
+
+    await expect(
+      chunkHandler()({}, { captureId: started.captureId, bytes, startedAtMs: 1781820000000 }),
+    ).resolves.toEqual({ seq: 0 });
+
+    expect(mocks.senderSend).toHaveBeenCalledWith(bytes, 1781820000000);
+  });
+
+  it('rejects chunks larger than the bounded one-second PCM16 contract', async () => {
+    await acceptConsent();
+    const started = (await startHandler()({}, meetingId, deviceId)) as { captureId: string };
+
+    await expect(
+      chunkHandler()(
+        {},
+        {
+          captureId: started.captureId,
+          bytes: new Uint8Array(32_001),
+          startedAtMs: 1781820000000,
+        },
+      ),
+    ).rejects.toThrow('audio chunk byte length out of bounds: 32001');
+
+    expect(mocks.senderSend).not.toHaveBeenCalled();
   });
 });

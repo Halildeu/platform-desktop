@@ -56,9 +56,16 @@ class FakeAudioContext {
 }
 
 class FakeAudioWorkletNode extends FakeAudioNode {
+  static lastInstance: FakeAudioWorkletNode | null = null;
+
   port: { onmessage: ((ev: MessageEvent<Float32Array>) => void) | null } = {
     onmessage: null,
   };
+
+  constructor() {
+    super();
+    FakeAudioWorkletNode.lastInstance = this;
+  }
 }
 
 function installBrowserAudioMocks(): {
@@ -115,6 +122,7 @@ function installElectronApiMock(): void {
 }
 
 afterEach(() => {
+  FakeAudioWorkletNode.lastInstance = null;
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
   delete window.electronAPI;
@@ -151,5 +159,29 @@ describe('startRecording', () => {
     expect(recorder.hasLoopback).toBe(false);
 
     await recorder.stop();
+  });
+
+  it('uploads one-second PCM16 chunks to reduce REST backpressure', async () => {
+    installElectronApiMock();
+    setUserAgent('Mozilla/5.0 (Macintosh; Intel Mac OS X 15_5)');
+    installBrowserAudioMocks();
+
+    await startRecording('meeting-1', 'desktop-1');
+    const captureNode = FakeAudioWorkletNode.lastInstance;
+    expect(captureNode?.port.onmessage).toBeTypeOf('function');
+
+    captureNode?.port.onmessage?.({
+      data: new Float32Array(48_000),
+    } as MessageEvent<Float32Array>);
+
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(window.electronAPI?.audio.sendChunk).toHaveBeenCalledTimes(1);
+    expect(window.electronAPI?.audio.sendChunk).toHaveBeenCalledWith({
+      captureId: 'CAP-1',
+      bytes: expect.objectContaining({ byteLength: 32_000 }),
+      startedAtMs: expect.any(Number),
+    });
   });
 });

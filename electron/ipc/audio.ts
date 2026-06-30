@@ -22,7 +22,7 @@ import {
 } from '../services/recorder-runtime-config';
 import { getValidAccessToken } from './auth';
 
-const MAX_CHUNK_BYTES = 6_400;
+const MAX_CHUNK_BYTES = 16_000 * 2; // 1s @ 16kHz PCM16 mono.
 const ID_PATTERN = /^[A-Za-z0-9._:-]{1,128}$/;
 const CONSENT_VERSION_PATTERN = /^[A-Za-z0-9._:-]{1,64}$/;
 const CONSENT_HASH_PATTERN = /^sha256:[a-f0-9]{64}$/;
