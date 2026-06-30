@@ -32,6 +32,7 @@ const MEETING_ID_MISSING_MESSAGE =
   'Geçerli meetingId bulunamadı; kayıt başlatılamaz. (meetingId kaynağı henüz belirlenmedi)';
 const RECORDER_START_TIMEOUT_MS = 45_000;
 const TRANSCRIPT_CLIENT_CLOCK_SKEW_MS = 30_000;
+const MAX_PENDING_LIVE_TRANSCRIPT_EVENTS = 50;
 
 interface RecorderRuntimeConfig {
   meetingId: string | null;
@@ -163,6 +164,19 @@ function transcriptSegmentIdFromGateway(event: {
   return event.eventId;
 }
 
+function applyLiveTranscriptEvent(
+  current: ReturnType<typeof initialTranscriptSession>,
+  event: LiveSttTranscriptEvent,
+): ReturnType<typeof initialTranscriptSession> {
+  return upsertTranscriptSegment(current, {
+    id: event.id,
+    speakerLabel: 'Konuşmacı',
+    startedAtMs: event.startedAtMs,
+    status: transcriptStatusFromLiveStream(event.status),
+    text: event.text,
+  });
+}
+
 function App() {
   const [version, setVersion] = useState('');
   const [loggedIn, setLoggedIn] = useState(false);
@@ -180,6 +194,38 @@ function App() {
   const recorderRef = useRef<Recorder | null>(null);
   const contractPendingRef = useRef(false);
   const liveStreamHasEventsRef = useRef(false);
+  const transcriptSessionIdRef = useRef<string | null>(null);
+  const pendingLiveTranscriptEventsRef = useRef<LiveSttTranscriptEvent[]>([]);
+
+  const enqueuePendingLiveTranscriptEvent = (event: LiveSttTranscriptEvent): void => {
+    pendingLiveTranscriptEventsRef.current = [
+      ...pendingLiveTranscriptEventsRef.current,
+      event,
+    ].slice(-MAX_PENDING_LIVE_TRANSCRIPT_EVENTS);
+  };
+
+  useEffect(() => {
+    transcriptSessionIdRef.current = transcriptSession.sessionId;
+  }, [transcriptSession.sessionId]);
+
+  useEffect(() => {
+    if (!transcriptSession.sessionId || pendingLiveTranscriptEventsRef.current.length === 0) {
+      return;
+    }
+
+    const pending = pendingLiveTranscriptEventsRef.current;
+    pendingLiveTranscriptEventsRef.current = [];
+    setTranscriptSession((current) => {
+      if (!current.sessionId) {
+        pendingLiveTranscriptEventsRef.current = [
+          ...pending,
+          ...pendingLiveTranscriptEventsRef.current,
+        ].slice(-MAX_PENDING_LIVE_TRANSCRIPT_EVENTS);
+        return current;
+      }
+      return pending.reduce(applyLiveTranscriptEvent, current);
+    });
+  }, [transcriptSession.sessionId]);
 
   useEffect(() => {
     void window.electronAPI?.app
@@ -339,6 +385,8 @@ function App() {
       const s = await window.electronAPI?.auth.logout();
       setLoggedIn(s?.loggedIn ?? false);
       setClaims(null);
+      transcriptSessionIdRef.current = null;
+      pendingLiveTranscriptEventsRef.current = [];
       setTranscriptSession(initialTranscriptSession());
       setMeetingIntelligence(initialMeetingIntelligence());
       setStatus('Çıkış yapıldı; Keycloak logout/revoke isteği gönderildi.');
@@ -393,21 +441,22 @@ function App() {
       const meetingId = recorderConfig.meetingId;
       const deviceId = recorderConfig.deviceId;
       liveStreamHasEventsRef.current = false;
+      transcriptSessionIdRef.current = null;
+      pendingLiveTranscriptEventsRef.current = [];
       const rec = await startRecordingWithTimeout(meetingId, deviceId, {
         liveSttStreamUrl: recorderConfig.liveSttStreamUrl,
         onLiveTranscriptEvent: (event) => {
           liveStreamHasEventsRef.current = true;
+          if (!transcriptSessionIdRef.current) {
+            enqueuePendingLiveTranscriptEvent(event);
+            return;
+          }
           setTranscriptSession((current) => {
             if (!current.sessionId) {
+              enqueuePendingLiveTranscriptEvent(event);
               return current;
             }
-            return upsertTranscriptSegment(current, {
-              id: event.id,
-              speakerLabel: 'Konuşmacı',
-              startedAtMs: event.startedAtMs,
-              status: transcriptStatusFromLiveStream(event.status),
-              text: event.text,
-            });
+            return applyLiveTranscriptEvent(current, event);
           });
         },
         onLiveTranscriptError: (err) => {
@@ -424,6 +473,8 @@ function App() {
       });
       rec.onError((err) => {
         recorderRef.current = null;
+        transcriptSessionIdRef.current = null;
+        pendingLiveTranscriptEventsRef.current = [];
         setRecording(false);
         const message = `Kayıt hatası (ses kaybı): ${err.message}`;
         setError(message);
@@ -433,14 +484,19 @@ function App() {
       });
       recorderRef.current = rec;
       setRecording(true);
+      const pendingLiveTranscriptEvents = pendingLiveTranscriptEventsRef.current;
+      pendingLiveTranscriptEventsRef.current = [];
       setTranscriptSession((current) =>
-        startTranscriptSession(current, {
-          sessionId: rec.sessionId,
-          meetingId,
-          deviceId,
-          hasLoopback: rec.hasLoopback,
-          startedAtMs: Date.now(),
-        }),
+        pendingLiveTranscriptEvents.reduce(
+          applyLiveTranscriptEvent,
+          startTranscriptSession(current, {
+            sessionId: rec.sessionId,
+            meetingId,
+            deviceId,
+            hasLoopback: rec.hasLoopback,
+            startedAtMs: Date.now(),
+          }),
+        ),
       );
       setMeetingIntelligence((current) =>
         markIntelligenceRecording(current, { meetingId, sessionId: rec.sessionId }),
@@ -449,6 +505,8 @@ function App() {
       setStatus(`Kayıt başladı (${mode}, oturum ${rec.sessionId})`);
     } catch (e) {
       const message = `Kayıt başlatılamadı: ${(e as Error).message}`;
+      transcriptSessionIdRef.current = null;
+      pendingLiveTranscriptEventsRef.current = [];
       setError(message);
       setTranscriptSession((current) => failTranscriptSession(current, message));
       setMeetingIntelligence((current) => failMeetingIntelligence(current, message));
@@ -460,6 +518,8 @@ function App() {
   const handleStop = async (): Promise<void> => {
     try {
       await recorderRef.current?.stop();
+      transcriptSessionIdRef.current = null;
+      pendingLiveTranscriptEventsRef.current = [];
       setStatus('Kayıt tamamlandı, gönderildi.');
       setTranscriptSession((current) => finishTranscriptSession(current, Date.now()));
       setMeetingIntelligence((current) => markIntelligenceWaiting(current));

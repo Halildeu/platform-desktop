@@ -421,6 +421,42 @@ describe('App recorder readiness', () => {
     expect(screen.getAllByRole('article')).toHaveLength(1);
   });
 
+  it('direct live STT ilk partial eventini recorder session hazirlanana kadar tamponlar', async () => {
+    installElectronApiMock({
+      meetingId: '22222222-2222-4222-8222-222222222222',
+      deviceId: 'desktop-1',
+      ready: true,
+      reason: null,
+      liveSttStreamUrl: 'ws://127.0.0.1:18220/ws/stream',
+      liveSttStreamReason: null,
+    });
+    vi.mocked(startRecording).mockImplementation(async (_meetingId, _deviceId, options) => {
+      options?.onLiveTranscriptEvent?.({
+        id: 'stream:0',
+        startedAtMs: 1781820000000,
+        text: 'Merhaba',
+        status: 'draft',
+      });
+      return {
+        sessionId: 'SES-1',
+        hasLoopback: false,
+        stop: vi.fn(),
+        onError: vi.fn(),
+      };
+    });
+
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Kaydet' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Onaylıyorum — Kaydı Başlat' }));
+
+    expect(
+      await screen.findByText('Kayıt başladı (yalnız mikrofon, oturum SES-1)'),
+    ).toBeInTheDocument();
+    expect(await screen.findByText('Merhaba')).toBeInTheDocument();
+    expect(screen.getAllByRole('article')).toHaveLength(1);
+  });
+
   it('client saati serverdan ilerideyse transcript satirinda server zamanini kullanir', async () => {
     installElectronApiMock({
       meetingId: '22222222-2222-4222-8222-222222222222',
