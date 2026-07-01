@@ -203,6 +203,10 @@ function segmentMetricLabel(segment: TranscriptSessionState['segments'][number])
   return null;
 }
 
+function isLiveDirectDraft(segment: TranscriptSessionState['segments'][number]): boolean {
+  return segment.source === 'direct-stream' && segment.status === 'draft';
+}
+
 export function TranscriptPanel({ session, stream }: TranscriptPanelProps): ReactElement {
   const hasSegments = session.segments.length > 0;
   const listRef = useRef<HTMLDivElement | null>(null);
@@ -282,9 +286,15 @@ export function TranscriptPanel({ session, stream }: TranscriptPanelProps): Reac
         {hasSegments ? (
           visibleSegments.map((segment) => {
             const metricLabel = segmentMetricLabel(segment);
+            const liveDirectDraft = isLiveDirectDraft(segment);
 
             return (
-              <article className={`transcript-segment segment-${segment.status}`} key={segment.id}>
+              <article
+                className={`transcript-segment segment-${segment.status}${
+                  liveDirectDraft ? ' segment-live' : ''
+                }`}
+                key={segment.id}
+              >
                 <div className="segment-meta">
                   <span>{segment.speakerLabel}</span>
                   <time dateTime={new Date(segment.startedAtMs).toISOString()}>
@@ -293,8 +303,16 @@ export function TranscriptPanel({ session, stream }: TranscriptPanelProps): Reac
                   <span>{transcriptStatusLabel(segment.status)}</span>
                   <span>{segmentSourceLabel(segment.source)}</span>
                   {metricLabel ? <span>{metricLabel}</span> : null}
+                  {liveDirectDraft ? <span>Canlı</span> : null}
                 </div>
-                <p>{segment.text}</p>
+                <p>
+                  {segment.text}
+                  {liveDirectDraft ? (
+                    <span className="live-caret" aria-hidden="true">
+                      |
+                    </span>
+                  ) : null}
+                </p>
               </article>
             );
           })

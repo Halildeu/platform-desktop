@@ -90,10 +90,13 @@ describe('TranscriptPanel', () => {
     expect(articles[0]).toHaveTextContent('İkinci cümle işleniyor');
     expect(articles[0]).toHaveTextContent('Taslak');
     expect(articles[0]).toHaveTextContent('Direct STT');
+    expect(articles[0]).toHaveTextContent('Canlı');
+    expect(articles[0]).toHaveClass('segment-live');
     expect(articles[0]).toHaveTextContent('180 ms');
     expect(articles[1]).toHaveTextContent('İlk karar kaydedildi');
     expect(articles[1]).toHaveTextContent('Final');
     expect(articles[1]).toHaveTextContent('Gateway');
+    expect(articles[1]).not.toHaveClass('segment-live');
   });
 
   it('distinguishes direct stream ready from first transcript event', () => {

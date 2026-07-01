@@ -340,6 +340,11 @@ button:disabled {
   border-left-color: #9ca3af;
 }
 
+.segment-live {
+  border-left-color: #0f766e;
+  background: #f0fdfa;
+}
+
 .segment-stabilizing {
   border-left-color: #f59e0b;
 }
@@ -365,6 +370,20 @@ button:disabled {
   margin: 8px 0 0;
   color: #17202a;
   line-height: 1.55;
+}
+
+.live-caret {
+  display: inline-block;
+  margin-left: 2px;
+  color: #0f766e;
+  font-weight: 700;
+  animation: live-caret-blink 1s steps(2, start) infinite;
+}
+
+@keyframes live-caret-blink {
+  50% {
+    opacity: 0;
+  }
 }
 
 .summary-toolbar {
