@@ -43,6 +43,7 @@ describe('TranscriptPanel', () => {
     expect(screen.getByText('Batch/poll akışı')).toBeInTheDocument();
     expect(screen.getByText('Son ses')).toBeInTheDocument();
     expect(screen.getByText('Son metin')).toBeInTheDocument();
+    expect(screen.getByText('Gecikme')).toBeInTheDocument();
     expect(screen.getByText('Transkript akışı bekleniyor')).toBeInTheDocument();
     expect(screen.queryByText('örnek transcript')).not.toBeInTheDocument();
   });
@@ -113,7 +114,7 @@ describe('TranscriptPanel', () => {
           directActive: false,
           audioRms: 0.021,
           audioActive: true,
-          lastAudioAtMs: 1781820009123,
+          lastAudioAtMs: 1781820004123,
           disabledReason: null,
         }}
       />,
@@ -122,7 +123,8 @@ describe('TranscriptPanel', () => {
     expect(screen.getByText('Direct stream')).toBeInTheDocument();
     expect(screen.getByText('Ses alınıyor, kelime bekleniyor')).toBeInTheDocument();
     expect(screen.getByText('Alınıyor · RMS 0.021')).toBeInTheDocument();
-    expect(screen.getByText(clock(1781820009123))).toBeInTheDocument();
+    expect(screen.getByText(clock(1781820004123))).toBeInTheDocument();
+    expect(screen.getByText('İlk metin bekleniyor')).toBeInTheDocument();
   });
 
   it('surfaces direct stream reconnect state for operator triage', () => {
@@ -159,5 +161,42 @@ describe('TranscriptPanel', () => {
     expect(screen.getByText('Direct stream')).toBeInTheDocument();
     expect(screen.getByText('Yeniden bağlanıyor (2/8)')).toBeInTheDocument();
     expect(screen.getByText('Alınıyor · RMS 0.018')).toBeInTheDocument();
+  });
+
+  it('highlights transcript lag when audio is active but text is stale', () => {
+    const recording = startTranscriptSession(initialTranscriptSession(), {
+      sessionId: 'SES-1',
+      meetingId: '22222222-2222-4222-8222-222222222222',
+      deviceId: 'desktop-1',
+      hasLoopback: false,
+      startedAtMs: 1781820000123,
+    });
+    const withTranscript = upsertTranscriptSegment(recording, {
+      id: 'seg-1',
+      speakerLabel: 'Konuşmacı',
+      startedAtMs: 1781820001000,
+      status: 'draft',
+      text: 'İlk canlı metin geldi',
+      source: 'direct-stream',
+      receivedAtMs: 1781820002000,
+    });
+
+    render(
+      <TranscriptPanel
+        session={withTranscript}
+        stream={{
+          directConfigured: true,
+          directReady: true,
+          directActive: false,
+          audioRms: 0.024,
+          audioActive: true,
+          lastAudioAtMs: 1781820009000,
+          disabledReason: null,
+        }}
+      />,
+    );
+
+    expect(screen.getByText('Metin gecikiyor (7 sn)')).toBeInTheDocument();
+    expect(screen.getByText('Gecikiyor · 7 sn')).toHaveClass('stream-lag-warning');
   });
 });

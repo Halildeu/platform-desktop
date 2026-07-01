@@ -284,6 +284,10 @@ button:disabled {
   overflow-wrap: anywhere;
 }
 
+.stream-lag-warning {
+  color: #b91c1c;
+}
+
 .stream-strip {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));

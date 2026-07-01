@@ -7,6 +7,8 @@ import {
 } from '../transcript/session-transcript';
 import type { LiveSttStreamStatusEvent } from '../audio/live-stt-stream';
 
+const TRANSCRIPT_LAG_WARN_MS = 5_000;
+
 export interface TranscriptPanelProps {
   session: TranscriptSessionState;
   stream?: {
@@ -62,7 +64,64 @@ function streamLoadingStageLabel(stage: string | undefined): string {
   return 'model';
 }
 
-function streamModeDetail(stream: TranscriptPanelProps['stream']): string {
+function streamLagMs(
+  stream: TranscriptPanelProps['stream'],
+  lastTranscriptAtMs: number | null,
+): number | null {
+  if (
+    !stream?.audioActive ||
+    typeof stream.lastAudioAtMs !== 'number' ||
+    !Number.isFinite(stream.lastAudioAtMs) ||
+    typeof lastTranscriptAtMs !== 'number' ||
+    !Number.isFinite(lastTranscriptAtMs)
+  ) {
+    return null;
+  }
+
+  return Math.max(0, stream.lastAudioAtMs - lastTranscriptAtMs);
+}
+
+function formatDuration(ms: number): string {
+  if (ms < 1000) {
+    return '<1 sn';
+  }
+  return `${Math.round(ms / 1000)} sn`;
+}
+
+function transcriptLagLabel(
+  stream: TranscriptPanelProps['stream'],
+  lastTranscriptAtMs: number | null,
+): string {
+  if (
+    !stream?.directConfigured ||
+    typeof stream.lastAudioAtMs !== 'number' ||
+    !Number.isFinite(stream.lastAudioAtMs)
+  ) {
+    return '-';
+  }
+  if (typeof lastTranscriptAtMs !== 'number' || !Number.isFinite(lastTranscriptAtMs)) {
+    return stream.audioActive ? 'İlk metin bekleniyor' : '-';
+  }
+
+  const lagMs = Math.max(0, stream.lastAudioAtMs - lastTranscriptAtMs);
+  if (lagMs >= TRANSCRIPT_LAG_WARN_MS) {
+    return `Gecikiyor · ${formatDuration(lagMs)}`;
+  }
+  return formatDuration(lagMs);
+}
+
+function transcriptLagClass(
+  stream: TranscriptPanelProps['stream'],
+  lastTranscriptAtMs: number | null,
+): string {
+  const lagMs = streamLagMs(stream, lastTranscriptAtMs);
+  return lagMs !== null && lagMs >= TRANSCRIPT_LAG_WARN_MS ? 'stream-lag-warning' : '';
+}
+
+function streamModeDetail(
+  stream: TranscriptPanelProps['stream'],
+  lastTranscriptAtMs: number | null,
+): string {
   const status = stream?.directStatus;
   if (status?.status === 'reconnecting') {
     const attempt =
@@ -87,6 +146,10 @@ function streamModeDetail(stream: TranscriptPanelProps['stream']): string {
     return 'Kelime akışı aktif';
   }
   if (stream?.directReady) {
+    const lagMs = streamLagMs(stream, lastTranscriptAtMs);
+    if (lagMs !== null && lagMs >= TRANSCRIPT_LAG_WARN_MS) {
+      return `Metin gecikiyor (${formatDuration(lagMs)})`;
+    }
     return stream.audioActive ? 'Ses alınıyor, kelime bekleniyor' : 'Bağlı, ses bekleniyor';
   }
   if (stream?.directConfigured) {
@@ -145,6 +208,7 @@ export function TranscriptPanel({ session, stream }: TranscriptPanelProps): Reac
   const listRef = useRef<HTMLDivElement | null>(null);
   const visibleSegments = [...session.segments].reverse();
   const lastTranscriptAtMs = latestTranscriptReceivedAtMs(session);
+  const lagClass = transcriptLagClass(stream, lastTranscriptAtMs);
 
   useEffect(() => {
     if (listRef.current) {
@@ -192,7 +256,7 @@ export function TranscriptPanel({ session, stream }: TranscriptPanelProps): Reac
         </div>
         <div>
           <span>Durum</span>
-          <strong>{streamModeDetail(stream)}</strong>
+          <strong>{streamModeDetail(stream, lastTranscriptAtMs)}</strong>
         </div>
         <div>
           <span>Ses</span>
@@ -205,6 +269,10 @@ export function TranscriptPanel({ session, stream }: TranscriptPanelProps): Reac
         <div>
           <span>Son metin</span>
           <strong>{streamTimestampLabel(lastTranscriptAtMs)}</strong>
+        </div>
+        <div>
+          <span>Gecikme</span>
+          <strong className={lagClass}>{transcriptLagLabel(stream, lastTranscriptAtMs)}</strong>
         </div>
       </div>
 
