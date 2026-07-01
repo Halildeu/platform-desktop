@@ -70,6 +70,38 @@ describe('meeting-client', () => {
     );
   });
 
+  it('retries transient socket failures before failing the meeting contract flow', async () => {
+    const retryableError = Object.assign(new TypeError('fetch failed'), {
+      cause: { code: 'UND_ERR_SOCKET' },
+    });
+    const fetchMock = vi
+      .fn()
+      .mockRejectedValueOnce(retryableError)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          id: '44444444-4444-4444-8444-444444444444',
+          title: 'Desktop contract',
+          status: 'SCHEDULED',
+        }),
+        headers: new Headers({ 'content-type': 'application/json' }),
+      });
+    vi.stubGlobal('fetch', fetchMock);
+    vi.spyOn(globalThis, 'setTimeout').mockImplementation((handler) => {
+      if (typeof handler === 'function') {
+        queueMicrotask(() => handler());
+      }
+      return 1 as unknown as ReturnType<typeof setTimeout>;
+    });
+
+    const contract = await createMeetingContract({ baseUrl: 'https://testai.acik.com' }, 'JWT', {
+      title: 'Desktop contract',
+    });
+
+    expect(contract.id).toBe('44444444-4444-4444-8444-444444444444');
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
   it('rejects non-canonical meeting-service responses', async () => {
     vi.stubGlobal(
       'fetch',

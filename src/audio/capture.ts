@@ -22,6 +22,7 @@ import { FrameBuffer } from './frame-buffer';
 const TARGET_RATE = 16000;
 const CHUNK_MS = 2000;
 const LIVE_STREAM_FRAME_MS = 100;
+const AUDIO_ACTIVITY_EVENT_MS = 500;
 const MAX_PENDING_AUDIO_MS = 120_000;
 const MAX_PENDING_CHUNKS = Math.ceil(MAX_PENDING_AUDIO_MS / CHUNK_MS);
 const CAPTURE_PERMISSION_TIMEOUT_MS = 45_000;
@@ -38,6 +39,8 @@ export interface Recorder {
 
 export interface StartRecordingOptions {
   liveSttStreamUrl?: string | null;
+  onLiveStreamReady?: () => void;
+  onAudioActivity?: (activity: { rms: number; capturedAtMs: number }) => void;
   onLiveTranscriptEvent?: (event: LiveSttTranscriptEvent) => void;
   onLiveTranscriptError?: (err: Error) => void;
 }
@@ -113,6 +116,17 @@ function withTimeout<T>(
       clearTimeout(timeoutId);
     }
   });
+}
+
+function rms(samples: Float32Array): number {
+  if (samples.length === 0) {
+    return 0;
+  }
+  let sum = 0;
+  for (const sample of samples) {
+    sum += sample * sample;
+  }
+  return Math.sqrt(sum / samples.length);
 }
 
 export async function startRecording(
@@ -232,6 +246,7 @@ export async function startRecording(
 
   if (options.liveSttStreamUrl) {
     liveStream = connectLiveSttStream(options.liveSttStreamUrl, {
+      onReady: options.onLiveStreamReady,
       onTranscriptEvent: options.onLiveTranscriptEvent,
       onError: options.onLiveTranscriptError,
     });
@@ -241,6 +256,7 @@ export async function startRecording(
   let uploadError: Error | null = null;
   let uploadTail: Promise<void> = Promise.resolve();
   let errorHandler: ((err: Error) => void) | null = null;
+  let lastAudioActivityEventAtMs = 0;
 
   const stopCapture = (): void => {
     captureNode.port.onmessage = null;
@@ -285,6 +301,14 @@ export async function startRecording(
   };
 
   captureNode.port.onmessage = (ev: MessageEvent<Float32Array>): void => {
+    const capturedAtMs = Date.now();
+    if (
+      options.onAudioActivity &&
+      capturedAtMs - lastAudioActivityEventAtMs >= AUDIO_ACTIVITY_EVENT_MS
+    ) {
+      lastAudioActivityEventAtMs = capturedAtMs;
+      options.onAudioActivity({ rms: rms(ev.data), capturedAtMs });
+    }
     if (liveStream) {
       const liveFrame = resampleLinear(ev.data, audioContext.sampleRate, TARGET_RATE);
       for (const frame of liveStreamBuffer.push(liveFrame)) {
@@ -293,7 +317,7 @@ export async function startRecording(
     }
     for (const chunk of fb.push(ev.data)) {
       const bytes = encodeChunk(chunk, empty, audioContext.sampleRate, TARGET_RATE);
-      enqueueChunk(bytes, Date.now());
+      enqueueChunk(bytes, capturedAtMs);
     }
   };
 

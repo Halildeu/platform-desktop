@@ -286,7 +286,7 @@ button:disabled {
 
 .stream-strip {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   padding: 10px 18px;
   border-bottom: 1px solid #e2e8f0;
   background: #ffffff;
@@ -517,7 +517,8 @@ button:disabled {
     min-width: 0;
   }
 
-  .session-strip {
+  .session-strip,
+  .stream-strip {
     grid-template-columns: 1fr;
   }
 

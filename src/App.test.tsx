@@ -382,6 +382,19 @@ describe('App recorder readiness', () => {
     const options = vi.mocked(startRecording).mock.calls[0]?.[2];
     expect(options?.liveSttStreamUrl).toBe('ws://127.0.0.1:18220/ws/stream');
     expect(screen.getByText('Direct stream bekleniyor')).toBeInTheDocument();
+    expect(screen.getByText('Bağlantı kuruluyor')).toBeInTheDocument();
+
+    act(() => {
+      options?.onLiveStreamReady?.();
+    });
+    expect(screen.getByText('Direct stream')).toBeInTheDocument();
+    expect(screen.getByText('Bağlı, ses bekleniyor')).toBeInTheDocument();
+
+    act(() => {
+      options?.onAudioActivity?.({ rms: 0.02, capturedAtMs: 1781820000000 });
+    });
+    expect(screen.getByText('Ses alınıyor, kelime bekleniyor')).toBeInTheDocument();
+    expect(screen.getByText('Alınıyor · RMS 0.020')).toBeInTheDocument();
 
     act(() => {
       transcriptEventHandler?.({

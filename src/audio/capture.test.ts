@@ -226,9 +226,13 @@ describe('startRecording', () => {
     setUserAgent('Mozilla/5.0 (Macintosh; Intel Mac OS X 15_5)');
     installBrowserAudioMocks();
     vi.stubGlobal('WebSocket', FakeWebSocket);
+    const onLiveStreamReady = vi.fn();
+    const onAudioActivity = vi.fn();
 
     const recorder = await startRecording('meeting-1', 'desktop-1', {
       liveSttStreamUrl: 'ws://127.0.0.1:18220/ws/stream',
+      onLiveStreamReady,
+      onAudioActivity,
     });
     const captureNode = FakeAudioWorkletNode.lastInstance;
     const ws = FakeWebSocket.instances[0];
@@ -236,11 +240,16 @@ describe('startRecording', () => {
     expect(ws?.url).toBe('ws://127.0.0.1:18220/ws/stream');
     ws?.open();
     ws?.message({ type: 'ready' });
+    expect(onLiveStreamReady).toHaveBeenCalledTimes(1);
 
     captureNode?.port.onmessage?.({
       data: new Float32Array(48_000),
     } as MessageEvent<Float32Array>);
 
+    expect(onAudioActivity).toHaveBeenCalledWith({
+      rms: 0,
+      capturedAtMs: expect.any(Number),
+    });
     expect(ws?.sent).toHaveLength(10);
     for (const frame of ws?.sent ?? []) {
       expect(frame).toBeInstanceOf(ArrayBuffer);

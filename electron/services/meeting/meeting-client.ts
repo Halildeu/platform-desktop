@@ -1,6 +1,19 @@
 import { desktopFetch } from '../net/desktop-fetch.js';
 
 const API = '/api/v1/admin/meetings';
+const CREATE_CONTRACT_MAX_ATTEMPTS = 3;
+const CREATE_CONTRACT_RETRY_DELAY_MS = 250;
+const RETRYABLE_HTTP_STATUS = new Set([502, 503, 504]);
+const RETRYABLE_NETWORK_CODES = new Set([
+  'UND_ERR_SOCKET',
+  'UND_ERR_CONNECT_TIMEOUT',
+  'UND_ERR_HEADERS_TIMEOUT',
+  'UND_ERR_BODY_TIMEOUT',
+  'ECONNRESET',
+  'ECONNREFUSED',
+  'ETIMEDOUT',
+  'EPIPE',
+]);
 const MEETING_ID_PATTERN =
   /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
 
@@ -55,6 +68,43 @@ export function loadMeetingConfig(env: NodeJS.ProcessEnv = process.env): Meeting
 
 export function meetingsUrl(cfg: MeetingClientConfig): string {
   return `${cfg.baseUrl}${API}`;
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+function errorCode(error: unknown): string | null {
+  let current: unknown = error;
+  for (let depth = 0; depth < 4; depth += 1) {
+    if (!current || typeof current !== 'object') {
+      return null;
+    }
+    const record = current as { code?: unknown; cause?: unknown };
+    if (typeof record.code === 'string' && /^[A-Z0-9_]{2,64}$/.test(record.code)) {
+      return record.code;
+    }
+    current = record.cause;
+  }
+  return null;
+}
+
+function isRetryableNetworkError(error: unknown): boolean {
+  const code = errorCode(error);
+  if (code && RETRYABLE_NETWORK_CODES.has(code)) {
+    return true;
+  }
+  return error instanceof TypeError && error.message === 'fetch failed';
+}
+
+function retryableNetworkLabel(error: unknown): string {
+  return errorCode(error) ?? 'FETCH_FAILED';
+}
+
+async function retryDelay(attempt: number): Promise<void> {
+  await delay(CREATE_CONTRACT_RETRY_DELAY_MS * attempt);
 }
 
 async function httpErrorMessage(res: Response): Promise<string> {
@@ -140,16 +190,43 @@ export async function createMeetingContract(
     scheduledEnd: args.scheduledEnd,
   };
 
-  const res = await desktopFetch(meetingsUrl(cfg), {
+  const requestInit = {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${jwt}`,
       'Content-Type': 'application/json',
     },
     body: JSON.stringify(body),
-  });
-  if (!res.ok) {
-    throw new Error(await httpErrorMessage(res));
+  };
+
+  for (let attempt = 1; attempt <= CREATE_CONTRACT_MAX_ATTEMPTS; attempt += 1) {
+    let res: Response;
+    try {
+      res = await desktopFetch(meetingsUrl(cfg), requestInit);
+    } catch (error) {
+      if (attempt < CREATE_CONTRACT_MAX_ATTEMPTS && isRetryableNetworkError(error)) {
+        await retryDelay(attempt);
+        continue;
+      }
+      if (isRetryableNetworkError(error)) {
+        throw new Error(
+          `createMeetingContract failed before response after ${attempt} attempts: network=${retryableNetworkLabel(
+            error,
+          )}`,
+        );
+      }
+      throw error instanceof Error ? error : new Error(String(error));
+    }
+
+    if (!res.ok) {
+      if (attempt < CREATE_CONTRACT_MAX_ATTEMPTS && RETRYABLE_HTTP_STATUS.has(res.status)) {
+        await retryDelay(attempt);
+        continue;
+      }
+      throw new Error(await httpErrorMessage(res));
+    }
+    return parseMeetingContract(await res.json());
   }
-  return parseMeetingContract(await res.json());
+
+  throw new Error('createMeetingContract failed: retry loop exhausted');
 }

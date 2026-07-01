@@ -82,4 +82,29 @@ describe('TranscriptPanel', () => {
     expect(articles[1]).toHaveTextContent('Final');
     expect(articles[1]).toHaveTextContent('Gateway');
   });
+
+  it('distinguishes direct stream ready from first transcript event', () => {
+    const session = startTranscriptSession(initialTranscriptSession(), {
+      sessionId: 'SES-1',
+      meetingId: '22222222-2222-4222-8222-222222222222',
+      deviceId: 'desktop-1',
+      hasLoopback: false,
+      startedAtMs: 1781820000123,
+    });
+
+    render(
+      <TranscriptPanel
+        session={session}
+        stream={{
+          directConfigured: true,
+          directReady: true,
+          directActive: false,
+          disabledReason: null,
+        }}
+      />,
+    );
+
+    expect(screen.getByText('Direct stream')).toBeInTheDocument();
+    expect(screen.getByText('Bağlı, ses bekleniyor')).toBeInTheDocument();
+  });
 });

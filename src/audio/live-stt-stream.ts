@@ -11,6 +11,7 @@ export interface LiveSttTranscriptEvent {
 }
 
 export interface LiveSttStreamCallbacks {
+  onReady?: () => void;
   onTranscriptEvent?: (event: LiveSttTranscriptEvent) => void;
   onError?: (error: Error) => void;
 }
@@ -217,6 +218,7 @@ export function connectLiveSttStream(
 
     if (event.type === 'ready') {
       ready = true;
+      callbacks.onReady?.();
       flushPending();
       return;
     }

@@ -46,8 +46,10 @@ describe('connectLiveSttStream', () => {
   it('buffers audio until ready and emits same-id partial/final transcript updates', () => {
     vi.stubGlobal('WebSocket', FakeWebSocket);
     const events: LiveSttTranscriptEvent[] = [];
+    const onReady = vi.fn();
 
     const stream = connectLiveSttStream('ws://127.0.0.1:18220/ws/stream', {
+      onReady,
       onTranscriptEvent: (event) => events.push(event),
     });
     const ws = FakeWebSocket.instances[0];
@@ -58,6 +60,7 @@ describe('connectLiveSttStream', () => {
 
     ws?.open();
     ws?.message({ type: 'ready' });
+    expect(onReady).toHaveBeenCalledTimes(1);
     expect(ws?.sent).toHaveLength(1);
 
     ws?.message({

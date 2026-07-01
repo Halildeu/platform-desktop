@@ -10,7 +10,10 @@ export interface TranscriptPanelProps {
   session: TranscriptSessionState;
   stream?: {
     directConfigured: boolean;
+    directReady?: boolean;
     directActive: boolean;
+    audioRms?: number | null;
+    audioActive?: boolean;
     disabledReason: string | null;
   };
 }
@@ -31,6 +34,9 @@ function streamModeLabel(stream: TranscriptPanelProps['stream']): string {
   if (stream?.directActive) {
     return 'Direct stream';
   }
+  if (stream?.directReady) {
+    return 'Direct stream';
+  }
   if (stream?.directConfigured) {
     return 'Direct stream bekleniyor';
   }
@@ -44,10 +50,21 @@ function streamModeDetail(stream: TranscriptPanelProps['stream']): string {
   if (stream?.directActive) {
     return 'Kelime akışı aktif';
   }
+  if (stream?.directReady) {
+    return stream.audioActive ? 'Ses alınıyor, kelime bekleniyor' : 'Bağlı, ses bekleniyor';
+  }
   if (stream?.directConfigured) {
-    return 'İlk partial bekleniyor';
+    return 'Bağlantı kuruluyor';
   }
   return 'Batch/poll akışı';
+}
+
+function audioStatusLabel(stream: TranscriptPanelProps['stream']): string {
+  if (typeof stream?.audioRms !== 'number' || !Number.isFinite(stream.audioRms)) {
+    return '-';
+  }
+  const level = stream.audioActive ? 'Alınıyor' : 'Sessiz';
+  return `${level} · RMS ${stream.audioRms.toFixed(3)}`;
 }
 
 function segmentSourceLabel(source: string | undefined): string {
@@ -122,6 +139,10 @@ export function TranscriptPanel({ session, stream }: TranscriptPanelProps): Reac
         <div>
           <span>Durum</span>
           <strong>{streamModeDetail(stream)}</strong>
+        </div>
+        <div>
+          <span>Ses</span>
+          <strong>{audioStatusLabel(stream)}</strong>
         </div>
       </div>
 
