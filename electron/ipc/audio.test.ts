@@ -275,6 +275,20 @@ describe('audio IPC recorder consent gate', () => {
     });
   });
 
+  it('does not surface transcript long-poll timeouts as renderer errors', async () => {
+    const send = vi.fn();
+    await acceptConsent();
+    await startHandler()({ sender: { id: 7, send } }, meetingId, deviceId);
+
+    const args = mocks.transcriptSubscriptionCtor.mock.calls[0][0] as {
+      onError: (error: Error) => void;
+    };
+    args.onError(new Error('readTranscriptEvents timed out after 15000ms'));
+    args.onError(new Error('readTranscriptEvents timed out after 25000ms'));
+
+    expect(send).not.toHaveBeenCalledWith('audio:transcript-error', expect.anything());
+  });
+
   it('cleans the active recorder state when its renderer unloads', async () => {
     await acceptConsent();
     await startHandler()({ sender: { id: 7, send: vi.fn() } }, meetingId, deviceId);

@@ -140,7 +140,14 @@ function transcriptErrorMessage(error: Error): string {
   return `Transkript akışı alınamadı: ${error.message}`;
 }
 
+function isTranscriptReadTimeout(error: Error): boolean {
+  return /^readTranscriptEvents timed out after \d+ms$/.test(error.message);
+}
+
 function emitTranscriptError(send: RendererSend | null, sessionId: string, error: Error): void {
+  if (isTranscriptReadTimeout(error)) {
+    return;
+  }
   send?.('audio:transcript-error', {
     sessionId,
     message: transcriptErrorMessage(error),
