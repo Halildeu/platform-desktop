@@ -401,6 +401,49 @@ button:disabled {
   line-height: 1.55;
 }
 
+.source-metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+  gap: 10px;
+}
+
+.source-metrics div {
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  background: #f8fafc;
+}
+
+.source-metrics span,
+.source-preview span {
+  display: block;
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.source-metrics strong {
+  display: block;
+  margin-top: 4px;
+  color: #17202a;
+  font-size: 14px;
+  overflow-wrap: anywhere;
+}
+
+.source-preview {
+  margin-top: 12px;
+  padding: 12px;
+  border-left: 3px solid #14b8a6;
+  border-radius: 6px;
+  background: #f8fafc;
+}
+
+.source-preview p {
+  margin-top: 6px;
+  overflow-wrap: anywhere;
+}
+
 .summary-empty {
   display: flex;
   min-height: 180px;

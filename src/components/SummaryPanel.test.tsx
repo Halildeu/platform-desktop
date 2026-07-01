@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import '@testing-library/jest-dom/vitest';
 
@@ -63,11 +63,21 @@ function transcriptState(): TranscriptSessionState {
     startedAtMs: 1781820000000,
   });
 
-  return upsertTranscriptSegment(recording, {
+  const withFinalSegment = upsertTranscriptSegment(recording, {
     id: 'seg-1',
     speakerLabel: 'Konuşmacı',
     startedAtMs: 1781820003000,
+    status: 'final',
+    source: 'direct-stream',
+    text: 'Direct STT bağlantısı kaynak olarak doğrulandı.',
+  });
+
+  return upsertTranscriptSegment(withFinalSegment, {
+    id: 'seg-2',
+    speakerLabel: 'Konuşmacı',
+    startedAtMs: 1781820013000,
     status: 'draft',
+    source: 'direct-stream',
     text: 'Toplantı notu kaynak transcript olarak hazır.',
   });
 }
@@ -140,7 +150,13 @@ describe('SummaryPanel', () => {
     );
 
     expect(screen.getByText('Kaynak transkript')).toBeInTheDocument();
-    expect(screen.getByText('1 satır hazır.')).toBeInTheDocument();
+    const sourceSummary = screen.getByLabelText('Kaynak transkript özeti');
+    expect(within(sourceSummary).getByText('Satır')).toBeInTheDocument();
+    expect(within(sourceSummary).getByText('2')).toBeInTheDocument();
+    expect(within(sourceSummary).getByText('1 final / 1 taslak')).toBeInTheDocument();
+    expect(within(sourceSummary).getByText('Direct STT')).toBeInTheDocument();
+    expect(screen.getByText('Son satır · Taslak · Direct STT')).toBeInTheDocument();
+    expect(screen.getByText('"Toplantı notu kaynak transcript olarak hazır."')).toBeInTheDocument();
     expect(screen.queryByText('Toplantı çıktısı bekleniyor')).not.toBeInTheDocument();
     expect(screen.queryByText('örnek özet')).not.toBeInTheDocument();
 

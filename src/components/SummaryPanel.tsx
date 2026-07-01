@@ -11,6 +11,8 @@ import {
 } from '../intelligence/meeting-intelligence';
 import {
   buildTranscriptSourceExport,
+  transcriptStatusLabel,
+  type TranscriptSegment,
   type TranscriptSessionState,
 } from '../transcript/session-transcript';
 
@@ -47,6 +49,63 @@ const browserExportAdapter: ExportAdapter = {
   },
 };
 
+function transcriptSegments(transcript: TranscriptSessionState | undefined): TranscriptSegment[] {
+  return (
+    transcript?.segments
+      .filter((segment) => segment.text.trim().length > 0)
+      .sort((a, b) => a.startedAtMs - b.startedAtMs || a.id.localeCompare(b.id)) ?? []
+  );
+}
+
+function segmentSourceLabel(segment: TranscriptSegment): string {
+  if (segment.source === 'direct-stream') {
+    return 'Direct STT';
+  }
+  if (segment.source === 'gateway-events') {
+    return 'Gateway';
+  }
+  return 'Kaynak bekleniyor';
+}
+
+function transcriptSourceMode(segments: TranscriptSegment[]): string {
+  const sources = new Set(segments.map(segmentSourceLabel));
+  if (sources.size === 0) {
+    return '-';
+  }
+  if (sources.size === 1) {
+    return [...sources][0];
+  }
+  return 'Karma';
+}
+
+function formatClock(value: number | null | undefined): string {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return '-';
+  }
+  return new Date(value).toLocaleTimeString('tr-TR', {
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  });
+}
+
+function transcriptWindowLabel(segments: TranscriptSegment[]): string {
+  if (segments.length === 0) {
+    return '-';
+  }
+  return `${formatClock(segments[0].startedAtMs)} - ${formatClock(
+    segments[segments.length - 1].startedAtMs,
+  )}`;
+}
+
+function finalityLabel(segments: TranscriptSegment[]): string {
+  const finalCount = segments.filter(
+    (segment) => segment.status === 'final' || segment.status === 'revised',
+  ).length;
+  const draftCount = segments.length - finalCount;
+  return `${finalCount} final / ${draftCount} taslak`;
+}
+
 export function SummaryPanel({
   intelligence,
   transcript,
@@ -54,9 +113,12 @@ export function SummaryPanel({
 }: SummaryPanelProps): ReactElement {
   const [message, setMessage] = useState<string | null>(null);
   const result = intelligence.status === 'ready' ? intelligence.result : null;
-  const transcriptSegmentCount =
-    transcript?.segments.filter((segment) => segment.text.trim().length > 0).length ?? 0;
-  const hasTranscriptSource = transcriptSegmentCount > 0;
+  const transcriptSourceSegments = transcriptSegments(transcript);
+  const hasTranscriptSource = transcriptSourceSegments.length > 0;
+  const latestTranscriptSegment =
+    transcriptSourceSegments.length > 0
+      ? transcriptSourceSegments[transcriptSourceSegments.length - 1]
+      : null;
 
   const runExport = async (kind: 'copy' | 'markdown' | 'csv' | 'print'): Promise<void> => {
     setMessage(null);
@@ -230,7 +292,33 @@ export function SummaryPanel({
           <div className="summary-content">
             <div className="summary-section">
               <h3>Kaynak transkript</h3>
-              <p>{transcriptSegmentCount} satır hazır.</p>
+              <div className="source-metrics" aria-label="Kaynak transkript özeti">
+                <div>
+                  <span>Satır</span>
+                  <strong>{transcriptSourceSegments.length}</strong>
+                </div>
+                <div>
+                  <span>Durum</span>
+                  <strong>{finalityLabel(transcriptSourceSegments)}</strong>
+                </div>
+                <div>
+                  <span>Akış</span>
+                  <strong>{transcriptSourceMode(transcriptSourceSegments)}</strong>
+                </div>
+                <div>
+                  <span>Zaman</span>
+                  <strong>{transcriptWindowLabel(transcriptSourceSegments)}</strong>
+                </div>
+              </div>
+              {latestTranscriptSegment ? (
+                <div className="source-preview">
+                  <span>
+                    Son satır · {transcriptStatusLabel(latestTranscriptSegment.status)} ·{' '}
+                    {segmentSourceLabel(latestTranscriptSegment)}
+                  </span>
+                  <p>"{latestTranscriptSegment.text}"</p>
+                </div>
+              ) : null}
             </div>
           </div>
         </>
