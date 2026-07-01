@@ -23,6 +23,7 @@ import {
   initialTranscriptSession,
   markTranscriptBlocked,
   markTranscriptReady,
+  markTranscriptWaitingForContract,
   startTranscriptSession,
   type TranscriptSegmentStatus,
   upsertTranscriptSegment,
@@ -30,6 +31,7 @@ import {
 
 const MEETING_ID_MISSING_MESSAGE =
   'Geçerli meetingId bulunamadı; kayıt başlatılamaz. (meetingId kaynağı henüz belirlenmedi)';
+const RECORDER_MEETING_ID_UNSET_MARKER = 'RECORDER_MEETING_ID tanimli degil';
 const RECORDER_START_TIMEOUT_MS = 45_000;
 const TRANSCRIPT_CLIENT_CLOCK_SKEW_MS = 30_000;
 const MAX_PENDING_LIVE_TRANSCRIPT_EVENTS = 50;
@@ -182,6 +184,23 @@ function applyLiveTranscriptEvent(
   });
 }
 
+function isContractCreationExpected(reason: string | null | undefined): boolean {
+  return typeof reason === 'string' && reason.includes(RECORDER_MEETING_ID_UNSET_MARKER);
+}
+
+function markMeetingIntelligenceWaitingForContract(
+  current: ReturnType<typeof initialMeetingIntelligence>,
+): ReturnType<typeof initialMeetingIntelligence> {
+  return {
+    ...current,
+    meetingId: null,
+    sessionId: null,
+    status: 'idle',
+    error: null,
+    result: null,
+  };
+}
+
 function App() {
   const [version, setVersion] = useState('');
   const [loggedIn, setLoggedIn] = useState(false);
@@ -258,6 +277,13 @@ function App() {
       .recorderConfig()
       .then((cfg) => {
         setRecorderConfig(cfg);
+        if (!cfg.ready && isContractCreationExpected(cfg.reason)) {
+          setTranscriptSession((current) =>
+            markTranscriptWaitingForContract(current, { deviceId: cfg.deviceId }),
+          );
+          setMeetingIntelligence((current) => markMeetingIntelligenceWaitingForContract(current));
+          return;
+        }
         setTranscriptSession((current) =>
           cfg.ready && cfg.meetingId
             ? markTranscriptReady(current, { meetingId: cfg.meetingId, deviceId: cfg.deviceId })

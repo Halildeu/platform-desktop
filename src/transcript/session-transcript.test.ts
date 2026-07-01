@@ -7,6 +7,7 @@ import {
   initialTranscriptSession,
   markTranscriptBlocked,
   markTranscriptReady,
+  markTranscriptWaitingForContract,
   startTranscriptSession,
   transcriptStatusLabel,
   upsertTranscriptSegment,
@@ -97,6 +98,28 @@ describe('session transcript state', () => {
     expect(blocked.lifecycle).toBe('blocked');
     expect(blocked.error).toBe('RECORDER_MEETING_ID yok');
     expect(blocked.segments).toEqual([]);
+  });
+
+  it('treats missing meeting contract as a neutral waiting state', () => {
+    const failed = failTranscriptSession(
+      upsertTranscriptSegment(initialTranscriptSession(), {
+        id: 'seg-1',
+        speakerLabel: 'Konuşmacı',
+        startedAtMs: 1000,
+        status: 'draft',
+        text: 'eski satır',
+      }),
+      'old error',
+    );
+
+    const waiting = markTranscriptWaitingForContract(failed, { deviceId: 'desktop-1' });
+
+    expect(waiting.lifecycle).toBe('idle');
+    expect(waiting.meetingId).toBeNull();
+    expect(waiting.sessionId).toBeNull();
+    expect(waiting.deviceId).toBe('desktop-1');
+    expect(waiting.error).toBeNull();
+    expect(waiting.segments).toEqual([]);
   });
 
   it('returns Turkish status labels for draft to revised transitions', () => {

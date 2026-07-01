@@ -88,6 +88,21 @@ export function markTranscriptBlocked(
   };
 }
 
+export function markTranscriptWaitingForContract(
+  state: TranscriptSessionState,
+  args: { deviceId: string },
+): TranscriptSessionState {
+  return {
+    ...state,
+    lifecycle: 'idle',
+    sessionId: null,
+    meetingId: null,
+    deviceId: args.deviceId,
+    error: null,
+    segments: [],
+  };
+}
+
 export function startTranscriptSession(
   state: TranscriptSessionState,
   args: {
