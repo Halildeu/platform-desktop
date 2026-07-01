@@ -8,6 +8,11 @@ import {
 
 export interface TranscriptPanelProps {
   session: TranscriptSessionState;
+  stream?: {
+    directConfigured: boolean;
+    directActive: boolean;
+    disabledReason: string | null;
+  };
 }
 
 function formatClock(ms: number): string {
@@ -22,7 +27,50 @@ function captureMode(hasLoopback: boolean): string {
   return hasLoopback ? 'Mikrofon + sistem sesi' : 'Mikrofon';
 }
 
-export function TranscriptPanel({ session }: TranscriptPanelProps): ReactElement {
+function streamModeLabel(stream: TranscriptPanelProps['stream']): string {
+  if (stream?.directActive) {
+    return 'Direct stream';
+  }
+  if (stream?.directConfigured) {
+    return 'Direct stream bekleniyor';
+  }
+  if (stream?.disabledReason) {
+    return 'Gateway event';
+  }
+  return 'Gateway event';
+}
+
+function streamModeDetail(stream: TranscriptPanelProps['stream']): string {
+  if (stream?.directActive) {
+    return 'Kelime akışı aktif';
+  }
+  if (stream?.directConfigured) {
+    return 'İlk partial bekleniyor';
+  }
+  return 'Batch/poll akışı';
+}
+
+function segmentSourceLabel(source: string | undefined): string {
+  if (source === 'direct-stream') {
+    return 'Direct STT';
+  }
+  if (source === 'gateway-events') {
+    return 'Gateway';
+  }
+  return 'Kaynak bekleniyor';
+}
+
+function segmentMetricLabel(segment: TranscriptSessionState['segments'][number]): string | null {
+  if (typeof segment.elapsedMs === 'number' && Number.isFinite(segment.elapsedMs)) {
+    return `${segment.elapsedMs} ms`;
+  }
+  if (typeof segment.rms === 'number' && Number.isFinite(segment.rms)) {
+    return `RMS ${segment.rms.toFixed(3)}`;
+  }
+  return null;
+}
+
+export function TranscriptPanel({ session, stream }: TranscriptPanelProps): ReactElement {
   const hasSegments = session.segments.length > 0;
   const listRef = useRef<HTMLDivElement | null>(null);
   const visibleSegments = [...session.segments].reverse();
@@ -66,22 +114,39 @@ export function TranscriptPanel({ session }: TranscriptPanelProps): ReactElement
         </div>
       </div>
 
+      <div className="stream-strip" aria-label="Transkript akış durumu">
+        <div>
+          <span>Akış</span>
+          <strong>{streamModeLabel(stream)}</strong>
+        </div>
+        <div>
+          <span>Durum</span>
+          <strong>{streamModeDetail(stream)}</strong>
+        </div>
+      </div>
+
       {session.error ? <p className="inline-error">{session.error}</p> : null}
 
       <div className="transcript-list" aria-live="polite" ref={listRef}>
         {hasSegments ? (
-          visibleSegments.map((segment) => (
-            <article className={`transcript-segment segment-${segment.status}`} key={segment.id}>
-              <div className="segment-meta">
-                <span>{segment.speakerLabel}</span>
-                <time dateTime={new Date(segment.startedAtMs).toISOString()}>
-                  {formatClock(segment.startedAtMs)}
-                </time>
-                <span>{transcriptStatusLabel(segment.status)}</span>
-              </div>
-              <p>{segment.text}</p>
-            </article>
-          ))
+          visibleSegments.map((segment) => {
+            const metricLabel = segmentMetricLabel(segment);
+
+            return (
+              <article className={`transcript-segment segment-${segment.status}`} key={segment.id}>
+                <div className="segment-meta">
+                  <span>{segment.speakerLabel}</span>
+                  <time dateTime={new Date(segment.startedAtMs).toISOString()}>
+                    {formatClock(segment.startedAtMs)}
+                  </time>
+                  <span>{transcriptStatusLabel(segment.status)}</span>
+                  <span>{segmentSourceLabel(segment.source)}</span>
+                  {metricLabel ? <span>{metricLabel}</span> : null}
+                </div>
+                <p>{segment.text}</p>
+              </article>
+            );
+          })
         ) : (
           <div className="transcript-empty">
             <strong>Transkript akışı bekleniyor</strong>

@@ -31,6 +31,8 @@ describe('TranscriptPanel', () => {
     expect(screen.getByText('Oturum SES-1')).toBeInTheDocument();
     expect(screen.getByText('Kayıt')).toBeInTheDocument();
     expect(screen.getByText('Mikrofon + sistem sesi')).toBeInTheDocument();
+    expect(screen.getByText('Gateway event')).toBeInTheDocument();
+    expect(screen.getByText('Batch/poll akışı')).toBeInTheDocument();
     expect(screen.getByText('Transkript akışı bekleniyor')).toBeInTheDocument();
     expect(screen.queryByText('örnek transcript')).not.toBeInTheDocument();
   });
@@ -49,6 +51,8 @@ describe('TranscriptPanel', () => {
       startedAtMs: 1781820060000,
       status: 'draft',
       text: 'İkinci cümle işleniyor',
+      source: 'direct-stream',
+      elapsedMs: 180,
     });
     const withEarlierFinal = upsertTranscriptSegment(withLaterDraft, {
       id: 'seg-1',
@@ -56,15 +60,26 @@ describe('TranscriptPanel', () => {
       startedAtMs: 1781820030000,
       status: 'final',
       text: 'İlk karar kaydedildi',
+      source: 'gateway-events',
     });
 
-    render(<TranscriptPanel session={withEarlierFinal} />);
+    render(
+      <TranscriptPanel
+        session={withEarlierFinal}
+        stream={{ directConfigured: true, directActive: true, disabledReason: null }}
+      />,
+    );
 
+    expect(screen.getByText('Direct stream')).toBeInTheDocument();
+    expect(screen.getByText('Kelime akışı aktif')).toBeInTheDocument();
     const articles = screen.getAllByRole('article');
     expect(articles).toHaveLength(2);
     expect(articles[0]).toHaveTextContent('İkinci cümle işleniyor');
     expect(articles[0]).toHaveTextContent('Taslak');
+    expect(articles[0]).toHaveTextContent('Direct STT');
+    expect(articles[0]).toHaveTextContent('180 ms');
     expect(articles[1]).toHaveTextContent('İlk karar kaydedildi');
     expect(articles[1]).toHaveTextContent('Final');
+    expect(articles[1]).toHaveTextContent('Gateway');
   });
 });

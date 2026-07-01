@@ -16,6 +16,10 @@ export interface TranscriptSegment {
   status: TranscriptSegmentStatus;
   text: string;
   revisedFromId?: string;
+  source?: 'direct-stream' | 'gateway-events';
+  elapsedMs?: number | null;
+  rms?: number | null;
+  receivedAtMs?: number | null;
 }
 
 export interface TranscriptSessionState {

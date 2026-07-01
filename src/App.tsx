@@ -174,6 +174,10 @@ function applyLiveTranscriptEvent(
     startedAtMs: event.startedAtMs,
     status: transcriptStatusFromLiveStream(event.status),
     text: event.text,
+    source: 'direct-stream',
+    elapsedMs: event.elapsedMs ?? null,
+    rms: event.rms ?? null,
+    receivedAtMs: Date.now(),
   });
 }
 
@@ -191,6 +195,7 @@ function App() {
   const [meetingIntelligence, setMeetingIntelligence] = useState(initialMeetingIntelligence);
   const [status, setStatus] = useState('');
   const [error, setError] = useState('');
+  const [liveStreamActive, setLiveStreamActive] = useState(false);
   const recorderRef = useRef<Recorder | null>(null);
   const contractPendingRef = useRef(false);
   const liveStreamHasEventsRef = useRef(false);
@@ -291,6 +296,12 @@ function App() {
           startedAtMs: transcriptTimelineStartedAtMs(event),
           status: transcriptStatusFromGateway(event.status),
           text: event.text,
+          source: 'gateway-events',
+          elapsedMs:
+            typeof event.durationSeconds === 'number' && Number.isFinite(event.durationSeconds)
+              ? Math.round(event.durationSeconds * 1000)
+              : null,
+          receivedAtMs: event.receivedAtMs ?? null,
         });
       });
     });
@@ -441,12 +452,14 @@ function App() {
       const meetingId = recorderConfig.meetingId;
       const deviceId = recorderConfig.deviceId;
       liveStreamHasEventsRef.current = false;
+      setLiveStreamActive(false);
       transcriptSessionIdRef.current = null;
       pendingLiveTranscriptEventsRef.current = [];
       const rec = await startRecordingWithTimeout(meetingId, deviceId, {
         liveSttStreamUrl: recorderConfig.liveSttStreamUrl,
         onLiveTranscriptEvent: (event) => {
           liveStreamHasEventsRef.current = true;
+          setLiveStreamActive(true);
           if (!transcriptSessionIdRef.current) {
             enqueuePendingLiveTranscriptEvent(event);
             return;
@@ -475,6 +488,7 @@ function App() {
         recorderRef.current = null;
         transcriptSessionIdRef.current = null;
         pendingLiveTranscriptEventsRef.current = [];
+        setLiveStreamActive(false);
         setRecording(false);
         const message = `Kayıt hatası (ses kaybı): ${err.message}`;
         setError(message);
@@ -507,6 +521,7 @@ function App() {
       const message = `Kayıt başlatılamadı: ${(e as Error).message}`;
       transcriptSessionIdRef.current = null;
       pendingLiveTranscriptEventsRef.current = [];
+      setLiveStreamActive(false);
       setError(message);
       setTranscriptSession((current) => failTranscriptSession(current, message));
       setMeetingIntelligence((current) => failMeetingIntelligence(current, message));
@@ -520,6 +535,7 @@ function App() {
       await recorderRef.current?.stop();
       transcriptSessionIdRef.current = null;
       pendingLiveTranscriptEventsRef.current = [];
+      setLiveStreamActive(false);
       setStatus('Kayıt tamamlandı, gönderildi.');
       setTranscriptSession((current) => finishTranscriptSession(current, Date.now()));
       setMeetingIntelligence((current) => markIntelligenceWaiting(current));
@@ -531,6 +547,7 @@ function App() {
     } finally {
       recorderRef.current = null;
       setRecording(false);
+      setLiveStreamActive(false);
     }
   };
 
@@ -623,7 +640,14 @@ function App() {
             ) : null}
           </div>
           <div className="intelligence-workspace">
-            <TranscriptPanel session={transcriptSession} />
+            <TranscriptPanel
+              session={transcriptSession}
+              stream={{
+                directConfigured: Boolean(recorderConfig?.liveSttStreamUrl),
+                directActive: liveStreamActive,
+                disabledReason: recorderConfig?.liveSttStreamReason ?? null,
+              }}
+            />
             <SummaryPanel intelligence={meetingIntelligence} transcript={transcriptSession} />
           </div>
         </section>
