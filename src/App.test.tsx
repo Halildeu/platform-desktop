@@ -381,6 +381,23 @@ describe('App recorder readiness', () => {
     await screen.findByText('Kayıt başladı (yalnız mikrofon, oturum SES-1)');
     const options = vi.mocked(startRecording).mock.calls[0]?.[2];
     expect(options?.liveSttStreamUrl).toBe('ws://127.0.0.1:18220/ws/stream');
+    expect(screen.getByText('Direct stream bekleniyor')).toBeInTheDocument();
+
+    act(() => {
+      transcriptEventHandler?.({
+        eventId: '1781820000000-0',
+        sessionId: 'SES-1',
+        meetingId: '22222222-2222-4222-8222-222222222222',
+        chunkSeq: 0,
+        chunkStartedAtMs: 1781820000000,
+        text: 'gateway cümle paketi',
+        textLength: 19,
+        status: 'DRAFT',
+      });
+    });
+
+    expect(screen.queryByText('gateway cümle paketi')).not.toBeInTheDocument();
+    expect(screen.queryAllByRole('article')).toHaveLength(0);
 
     act(() => {
       options?.onLiveTranscriptEvent?.({

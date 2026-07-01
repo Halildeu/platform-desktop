@@ -199,6 +199,7 @@ function App() {
   const recorderRef = useRef<Recorder | null>(null);
   const contractPendingRef = useRef(false);
   const liveStreamHasEventsRef = useRef(false);
+  const directStreamConfiguredRef = useRef(false);
   const transcriptSessionIdRef = useRef<string | null>(null);
   const pendingLiveTranscriptEventsRef = useRef<LiveSttTranscriptEvent[]>([]);
 
@@ -212,6 +213,10 @@ function App() {
   useEffect(() => {
     transcriptSessionIdRef.current = transcriptSession.sessionId;
   }, [transcriptSession.sessionId]);
+
+  useEffect(() => {
+    directStreamConfiguredRef.current = Boolean(recorderConfig?.liveSttStreamUrl);
+  }, [recorderConfig?.liveSttStreamUrl]);
 
   useEffect(() => {
     if (!transcriptSession.sessionId || pendingLiveTranscriptEventsRef.current.length === 0) {
@@ -284,7 +289,7 @@ function App() {
         if (!current.sessionId || event.sessionId !== current.sessionId) {
           return current;
         }
-        if (liveStreamHasEventsRef.current) {
+        if (directStreamConfiguredRef.current || liveStreamHasEventsRef.current) {
           return current;
         }
         if (!event.text.trim() || !Number.isFinite(event.chunkStartedAtMs)) {
