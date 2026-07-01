@@ -1,8 +1,9 @@
-import { useEffect, useRef, type ReactElement } from 'react';
+import { useEffect, useRef, useState, type ReactElement } from 'react';
 
 import {
   lifecycleLabel,
   transcriptStatusLabel,
+  type TranscriptSegmentStatus,
   type TranscriptSessionState,
 } from '../transcript/session-transcript';
 import type { LiveSttStreamStatusEvent } from '../audio/live-stt-stream';
@@ -220,13 +221,111 @@ function isLiveDirectDraft(segment: TranscriptSessionState['segments'][number]):
   return segment.source === 'direct-stream' && segment.status === 'draft';
 }
 
+function formatDiagnosticTimestamp(value: number | null | undefined): string {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return '-';
+  }
+  return new Date(value).toISOString();
+}
+
+function formatDiagnosticNumber(value: number | null | undefined, precision = 3): string {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return '-';
+  }
+  return value.toFixed(precision);
+}
+
+function transcriptStatusCounts(
+  session: TranscriptSessionState,
+): Record<TranscriptSegmentStatus, number> {
+  return session.segments.reduce<Record<TranscriptSegmentStatus, number>>(
+    (counts, segment) => {
+      counts[segment.status] += 1;
+      return counts;
+    },
+    { draft: 0, stabilizing: 0, final: 0, revised: 0 },
+  );
+}
+
+function transcriptSourceCounts(session: TranscriptSessionState): {
+  direct: number;
+  gateway: number;
+  unknown: number;
+} {
+  return session.segments.reduce(
+    (counts, segment) => {
+      if (segment.source === 'direct-stream') {
+        counts.direct += 1;
+      } else if (segment.source === 'gateway-events') {
+        counts.gateway += 1;
+      } else {
+        counts.unknown += 1;
+      }
+      return counts;
+    },
+    { direct: 0, gateway: 0, unknown: 0 },
+  );
+}
+
+function buildTranscriptDiagnostics(
+  session: TranscriptSessionState,
+  stream: TranscriptPanelProps['stream'],
+  lastTranscriptAtMs: number | null,
+  recordingActive: boolean,
+): string {
+  const statusCounts = transcriptStatusCounts(session);
+  const sourceCounts = transcriptSourceCounts(session);
+  const lagMs = streamLagMs(stream, lastTranscriptAtMs, recordingActive);
+
+  return [
+    'meeting-intelligence.transcript.diagnostics.v1',
+    `generatedAt=${new Date().toISOString()}`,
+    `lifecycle=${session.lifecycle}`,
+    `meetingId=${session.meetingId ?? '-'}`,
+    `sessionId=${session.sessionId ?? '-'}`,
+    `deviceId=${session.deviceId ?? '-'}`,
+    `captureMode=${captureMode(session.hasLoopback)}`,
+    `recordingActive=${recordingActive}`,
+    `directConfigured=${Boolean(stream?.directConfigured)}`,
+    `directStatus=${stream?.directStatus?.status ?? '-'}`,
+    `directReady=${Boolean(stream?.directReady)}`,
+    `directActive=${Boolean(stream?.directActive)}`,
+    `audioActive=${Boolean(stream?.audioActive)}`,
+    `audioRms=${formatDiagnosticNumber(stream?.audioRms)}`,
+    `lastAudioAt=${formatDiagnosticTimestamp(stream?.lastAudioAtMs)}`,
+    `lastTranscriptAt=${formatDiagnosticTimestamp(lastTranscriptAtMs)}`,
+    `lagMs=${lagMs ?? '-'}`,
+    `segments.total=${session.segments.length}`,
+    `segments.draft=${statusCounts.draft}`,
+    `segments.stabilizing=${statusCounts.stabilizing}`,
+    `segments.final=${statusCounts.final}`,
+    `segments.revised=${statusCounts.revised}`,
+    `segments.direct=${sourceCounts.direct}`,
+    `segments.gateway=${sourceCounts.gateway}`,
+    `segments.unknown=${sourceCounts.unknown}`,
+    `errorPresent=${Boolean(session.error)}`,
+  ].join('\n');
+}
+
 export function TranscriptPanel({ session, stream }: TranscriptPanelProps): ReactElement {
   const hasSegments = session.segments.length > 0;
   const listRef = useRef<HTMLDivElement | null>(null);
+  const [diagnosticMessage, setDiagnosticMessage] = useState('');
   const visibleSegments = [...session.segments].reverse();
   const lastTranscriptAtMs = latestTranscriptReceivedAtMs(session);
   const recordingActive = session.lifecycle === 'recording';
   const lagClass = transcriptLagClass(stream, lastTranscriptAtMs, recordingActive);
+
+  const handleCopyDiagnostics = async (): Promise<void> => {
+    try {
+      await navigator.clipboard.writeText(
+        buildTranscriptDiagnostics(session, stream, lastTranscriptAtMs, recordingActive),
+      );
+      setDiagnosticMessage('Tanı panoya kopyalandı.');
+    } catch {
+      setDiagnosticMessage('Tanı kopyalanamadı.');
+    }
+  };
 
   useEffect(() => {
     if (listRef.current) {
@@ -243,9 +342,18 @@ export function TranscriptPanel({ session, stream }: TranscriptPanelProps): Reac
             {session.sessionId ? `Oturum ${session.sessionId}` : 'Recorder oturumu yok'}
           </p>
         </div>
-        <span className={`state-pill state-${session.lifecycle}`}>
-          {lifecycleLabel(session.lifecycle)}
-        </span>
+        <div className="panel-header-actions">
+          <button
+            className="secondary-action compact-action"
+            type="button"
+            onClick={() => void handleCopyDiagnostics()}
+          >
+            Tanı kopyala
+          </button>
+          <span className={`state-pill state-${session.lifecycle}`}>
+            {lifecycleLabel(session.lifecycle)}
+          </span>
+        </div>
       </div>
 
       <div className="session-strip" aria-label="Oturum özeti">
@@ -296,6 +404,7 @@ export function TranscriptPanel({ session, stream }: TranscriptPanelProps): Reac
         </div>
       </div>
 
+      {diagnosticMessage ? <p className="export-message">{diagnosticMessage}</p> : null}
       {session.error ? <p className="inline-error">{session.error}</p> : null}
 
       <div className="transcript-list" aria-live="polite" ref={listRef}>

@@ -218,6 +218,21 @@ button:disabled {
   color: #0f172a;
 }
 
+.panel-header-actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.compact-action {
+  min-height: 30px;
+  padding: 5px 10px;
+  font-size: 12px;
+}
+
 .panel-subtitle {
   margin: 5px 0 0;
   color: #64748b;
@@ -577,6 +592,11 @@ button:disabled {
 
   .panel-header {
     flex-direction: column;
+  }
+
+  .panel-header-actions {
+    width: 100%;
+    justify-content: flex-start;
   }
 
   .state-pill {

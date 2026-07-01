@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import '@testing-library/jest-dom/vitest';
 
 import { TranscriptPanel } from './TranscriptPanel';
@@ -11,8 +12,16 @@ import {
   upsertTranscriptSegment,
 } from '../transcript/session-transcript';
 
+const originalClipboardDescriptor = Object.getOwnPropertyDescriptor(navigator, 'clipboard');
+
 afterEach(() => {
   cleanup();
+  vi.restoreAllMocks();
+  if (originalClipboardDescriptor) {
+    Object.defineProperty(navigator, 'clipboard', originalClipboardDescriptor);
+  } else {
+    delete (navigator as { clipboard?: Clipboard }).clipboard;
+  }
 });
 
 describe('TranscriptPanel', () => {
@@ -116,6 +125,59 @@ describe('TranscriptPanel', () => {
     expect(articles[1]).toHaveTextContent('Final');
     expect(articles[1]).toHaveTextContent('Gateway');
     expect(articles[1]).not.toHaveClass('segment-live');
+  });
+
+  it('copies a non-content diagnostic snapshot for live transcript triage', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText },
+    });
+    const recording = startTranscriptSession(initialTranscriptSession(), {
+      sessionId: 'SES-1',
+      meetingId: '22222222-2222-4222-8222-222222222222',
+      deviceId: 'desktop-1',
+      hasLoopback: false,
+      startedAtMs: 1781820000123,
+    });
+    const withTranscript = upsertTranscriptSegment(recording, {
+      id: 'stream:1',
+      speakerLabel: 'Konuşmacı',
+      startedAtMs: 1781820001000,
+      status: 'draft',
+      text: 'Bu hassas transcript metni snapshot içine girmemeli',
+      source: 'direct-stream',
+      receivedAtMs: 1781820002000,
+    });
+
+    render(
+      <TranscriptPanel
+        session={withTranscript}
+        stream={{
+          directConfigured: true,
+          directReady: true,
+          directActive: true,
+          audioRms: 0.026,
+          audioActive: true,
+          lastAudioAtMs: 1781820003000,
+          disabledReason: null,
+        }}
+      />,
+    );
+
+    await userEvent.click(screen.getByRole('button', { name: 'Tanı kopyala' }));
+
+    expect(writeText).toHaveBeenCalledTimes(1);
+    const snapshot = String(writeText.mock.calls[0]?.[0]);
+    expect(snapshot).toContain('meeting-intelligence.transcript.diagnostics.v1');
+    expect(snapshot).toContain('lifecycle=recording');
+    expect(snapshot).toContain('directReady=true');
+    expect(snapshot).toContain('audioRms=0.026');
+    expect(snapshot).toContain('segments.total=1');
+    expect(snapshot).toContain('segments.draft=1');
+    expect(snapshot).toContain('segments.direct=1');
+    expect(snapshot).not.toContain('Bu hassas transcript metni');
+    expect(await screen.findByText('Tanı panoya kopyalandı.')).toBeInTheDocument();
   });
 
   it('distinguishes direct stream ready from first transcript event', () => {
