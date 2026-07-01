@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  buildTranscriptSourceExport,
   failTranscriptSession,
   finishTranscriptSession,
   initialTranscriptSession,
@@ -103,5 +104,50 @@ describe('session transcript state', () => {
     expect(transcriptStatusLabel('stabilizing')).toBe('Netleşiyor');
     expect(transcriptStatusLabel('final')).toBe('Final');
     expect(transcriptStatusLabel('revised')).toBe('Revize');
+  });
+
+  it('builds source transcript markdown and text exports from real segments', () => {
+    const recording = startTranscriptSession(initialTranscriptSession(), {
+      sessionId: 'SES-1',
+      meetingId: '22222222-2222-4222-8222-222222222222',
+      deviceId: 'desktop-1',
+      hasLoopback: false,
+      startedAtMs: 1781820000000,
+    });
+    const withLaterDraft = upsertTranscriptSegment(recording, {
+      id: 'seg-2',
+      speakerLabel: 'Konuşmacı',
+      startedAtMs: 1781820007000,
+      status: 'draft',
+      text: 'ikinci satır',
+    });
+    const withEarlierFinal = upsertTranscriptSegment(withLaterDraft, {
+      id: 'seg-1',
+      speakerLabel: 'Konuşmacı',
+      startedAtMs: 1781820002000,
+      status: 'final',
+      text: 'ilk satır',
+    });
+
+    const bundle = buildTranscriptSourceExport(withEarlierFinal, 1781820100000);
+
+    expect(bundle.markdownFileName).toMatch(
+      /^meeting-transcript-22222222-2222-4222-8222-222222222222-/,
+    );
+    expect(bundle.textFileName).toMatch(
+      /^meeting-transcript-22222222-2222-4222-8222-222222222222-/,
+    );
+    expect(bundle.markdown).toContain('# Meeting Transcript');
+    expect(bundle.markdown.indexOf('ilk satır')).toBeLessThan(
+      bundle.markdown.indexOf('ikinci satır'),
+    );
+    expect(bundle.text).toContain(`[${new Date(1781820002000).toISOString()} Final]`);
+    expect(bundle.text).toContain('Konuşmacı: ilk satır');
+  });
+
+  it('rejects source export when no transcript segment exists', () => {
+    expect(() => buildTranscriptSourceExport(initialTranscriptSession())).toThrow(
+      'Transcript source is not ready',
+    );
   });
 });

@@ -10,6 +10,7 @@ const DEFAULT_ERROR_RETRY_MS = 3_000;
 const DEFAULT_LIMIT = 50;
 const MAX_IMMEDIATE_DRAIN_POLLS = 20;
 const DRAIN_BACKOFF_MS = 25;
+const READ_TIMEOUT_PREFIX = 'readTranscriptEvents timed out after ';
 
 export interface TranscriptEventSubscriptionArgs {
   cfg: GatewayConfig;
@@ -132,6 +133,10 @@ export class TranscriptEventSubscription {
       }
       this.consecutiveDrainPolls = 0;
       const error = err instanceof Error ? err : new Error(String(err));
+      if (isReadTranscriptTimeout(error)) {
+        this.schedule(this.args.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS);
+        return;
+      }
       if (error.message !== this.lastErrorMessage) {
         this.lastErrorMessage = error.message;
         this.args.onError?.(error);
@@ -155,4 +160,8 @@ export class TranscriptEventSubscription {
     }
     return DRAIN_BACKOFF_MS;
   }
+}
+
+function isReadTranscriptTimeout(error: Error): boolean {
+  return error.message.startsWith(READ_TIMEOUT_PREFIX);
 }

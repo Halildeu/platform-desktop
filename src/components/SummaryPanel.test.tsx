@@ -11,6 +11,12 @@ import {
   setMeetingIntelligenceResult,
   type MeetingIntelligenceState,
 } from '../intelligence/meeting-intelligence';
+import {
+  initialTranscriptSession,
+  startTranscriptSession,
+  upsertTranscriptSegment,
+  type TranscriptSessionState,
+} from '../transcript/session-transcript';
 
 function readyState(): MeetingIntelligenceState {
   return setMeetingIntelligenceResult(
@@ -46,6 +52,24 @@ function readyState(): MeetingIntelligenceState {
       ],
     },
   );
+}
+
+function transcriptState(): TranscriptSessionState {
+  const recording = startTranscriptSession(initialTranscriptSession(), {
+    sessionId: 'SES-1',
+    meetingId: '22222222-2222-4222-8222-222222222222',
+    deviceId: 'desktop-1',
+    hasLoopback: false,
+    startedAtMs: 1781820000000,
+  });
+
+  return upsertTranscriptSegment(recording, {
+    id: 'seg-1',
+    speakerLabel: 'Konuşmacı',
+    startedAtMs: 1781820003000,
+    status: 'draft',
+    text: 'Toplantı notu kaynak transcript olarak hazır.',
+  });
 }
 
 afterEach(() => {
@@ -98,6 +122,40 @@ describe('SummaryPanel', () => {
       expect.stringMatching(/^meeting-intelligence-actions-.*\.csv$/),
       expect.stringContaining('audio_record rolü yeni token claim özetinde doğrulanacak'),
       'text/csv',
+    );
+  });
+
+  it('offers source transcript export while meeting intelligence is still waiting', async () => {
+    const adapter: ExportAdapter = {
+      copyText: vi.fn().mockResolvedValue(undefined),
+      downloadText: vi.fn(),
+      print: vi.fn(),
+    };
+    render(
+      <SummaryPanel
+        intelligence={{ ...initialMeetingIntelligence(), status: 'waiting' }}
+        transcript={transcriptState()}
+        exportAdapter={adapter}
+      />,
+    );
+
+    expect(screen.getByText('Kaynak transkript')).toBeInTheDocument();
+    expect(screen.getByText('1 satır hazır.')).toBeInTheDocument();
+    expect(screen.queryByText('Toplantı çıktısı bekleniyor')).not.toBeInTheDocument();
+    expect(screen.queryByText('örnek özet')).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Transkript kopyala' }));
+    await waitFor(() => {
+      expect(adapter.copyText).toHaveBeenCalledWith(
+        expect.stringContaining('Toplantı notu kaynak transcript olarak hazır.'),
+      );
+    });
+
+    await userEvent.click(screen.getByRole('button', { name: 'Transkript TXT' }));
+    expect(adapter.downloadText).toHaveBeenCalledWith(
+      expect.stringMatching(/^meeting-transcript-22222222-2222-4222-8222-222222222222-/),
+      expect.stringContaining('Toplantı notu kaynak transcript olarak hazır.'),
+      'text/plain',
     );
   });
 });

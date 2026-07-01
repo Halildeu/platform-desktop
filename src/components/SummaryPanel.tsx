@@ -9,6 +9,10 @@ import {
   type IntelligenceCitation,
   type MeetingIntelligenceState,
 } from '../intelligence/meeting-intelligence';
+import {
+  buildTranscriptSourceExport,
+  type TranscriptSessionState,
+} from '../transcript/session-transcript';
 
 export interface ExportAdapter {
   copyText(text: string): Promise<void>;
@@ -18,6 +22,7 @@ export interface ExportAdapter {
 
 export interface SummaryPanelProps {
   intelligence: MeetingIntelligenceState;
+  transcript?: TranscriptSessionState;
   exportAdapter?: ExportAdapter;
 }
 
@@ -44,10 +49,14 @@ const browserExportAdapter: ExportAdapter = {
 
 export function SummaryPanel({
   intelligence,
+  transcript,
   exportAdapter = browserExportAdapter,
 }: SummaryPanelProps): ReactElement {
   const [message, setMessage] = useState<string | null>(null);
   const result = intelligence.status === 'ready' ? intelligence.result : null;
+  const transcriptSegmentCount =
+    transcript?.segments.filter((segment) => segment.text.trim().length > 0).length ?? 0;
+  const hasTranscriptSource = transcriptSegmentCount > 0;
 
   const runExport = async (kind: 'copy' | 'markdown' | 'csv' | 'print'): Promise<void> => {
     setMessage(null);
@@ -68,6 +77,28 @@ export function SummaryPanel({
       }
     } catch (error) {
       setMessage(`Export hazır değil: ${(error as Error).message}`);
+    }
+  };
+
+  const runTranscriptExport = async (kind: 'copy' | 'markdown' | 'text'): Promise<void> => {
+    setMessage(null);
+    try {
+      if (!transcript) {
+        throw new Error('Transcript source is not ready');
+      }
+      const bundle = buildTranscriptSourceExport(transcript);
+      if (kind === 'copy') {
+        await exportAdapter.copyText(bundle.text);
+        setMessage('Transkript panoya kopyalandı.');
+      } else if (kind === 'markdown') {
+        exportAdapter.downloadText(bundle.markdownFileName, bundle.markdown, 'text/markdown');
+        setMessage('Transkript Markdown indirildi.');
+      } else {
+        exportAdapter.downloadText(bundle.textFileName, bundle.text, 'text/plain');
+        setMessage('Transkript TXT indirildi.');
+      }
+    } catch (error) {
+      setMessage(`Transkript export hazır değil: ${(error as Error).message}`);
     }
   };
 
@@ -168,6 +199,39 @@ export function SummaryPanel({
                 <p className="muted-line">Aksiyon yok.</p>
               )}
             </article>
+          </div>
+        </>
+      ) : hasTranscriptSource ? (
+        <>
+          <div className="summary-toolbar" aria-label="Transkript kaynak araçları">
+            <button
+              className="secondary-action"
+              type="button"
+              onClick={() => void runTranscriptExport('copy')}
+            >
+              Transkript kopyala
+            </button>
+            <button
+              className="secondary-action"
+              type="button"
+              onClick={() => void runTranscriptExport('markdown')}
+            >
+              Transkript MD
+            </button>
+            <button
+              className="secondary-action"
+              type="button"
+              onClick={() => void runTranscriptExport('text')}
+            >
+              Transkript TXT
+            </button>
+          </div>
+          {message ? <p className="export-message">{message}</p> : null}
+          <div className="summary-content">
+            <div className="summary-section">
+              <h3>Kaynak transkript</h3>
+              <p>{transcriptSegmentCount} satır hazır.</p>
+            </div>
           </div>
         </>
       ) : (

@@ -241,6 +241,27 @@ describe('gateway-client HTTP fetch wrapper', () => {
     expect(opts.headers.Accept).toBe('application/json');
   });
 
+  it('uses a longer timeout for transcript long-poll reads', async () => {
+    const timeoutSpy = vi.spyOn(globalThis, 'setTimeout');
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          sessionId: 'SES-9',
+          correlationId: 'corr-1',
+          events: [],
+          nextCursor: null,
+          hasMore: false,
+        }),
+      }),
+    );
+
+    await readTranscriptEvents(cfg, 'JWT', 'SES-9');
+
+    expect(timeoutSpy).toHaveBeenCalledWith(expect.any(Function), 25_000);
+  });
+
   it('streamTranscriptEvents parses SSE transcript chunks and advances cursor', async () => {
     const body = new ReadableStream<Uint8Array>({
       start(controller) {

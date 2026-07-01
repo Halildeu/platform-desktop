@@ -624,7 +624,7 @@ function App() {
           </div>
           <div className="intelligence-workspace">
             <TranscriptPanel session={transcriptSession} />
-            <SummaryPanel intelligence={meetingIntelligence} />
+            <SummaryPanel intelligence={meetingIntelligence} transcript={transcriptSession} />
           </div>
         </section>
       </main>

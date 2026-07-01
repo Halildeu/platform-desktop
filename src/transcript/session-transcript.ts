@@ -30,6 +30,13 @@ export interface TranscriptSessionState {
   segments: TranscriptSegment[];
 }
 
+export interface TranscriptSourceExportBundle {
+  markdown: string;
+  text: string;
+  markdownFileName: string;
+  textFileName: string;
+}
+
 const STATUS_RANK: Record<TranscriptSegmentStatus, number> = {
   draft: 0,
   stabilizing: 1,
@@ -173,4 +180,83 @@ export function lifecycleLabel(lifecycle: TranscriptLifecycle): string {
     case 'error':
       return 'Hata';
   }
+}
+
+export function buildTranscriptSourceExport(
+  state: TranscriptSessionState,
+  nowMs: number = Date.now(),
+): TranscriptSourceExportBundle {
+  const segments = state.segments
+    .filter((segment) => segment.text.trim().length > 0)
+    .sort((a, b) => a.startedAtMs - b.startedAtMs || a.id.localeCompare(b.id));
+  if (segments.length === 0) {
+    throw new Error('Transcript source is not ready');
+  }
+
+  const safeMeetingId = safeFilePart(state.meetingId ?? 'meeting');
+  const stamp = new Date(nowMs).toISOString().replace(/[:.]/g, '-');
+  return {
+    markdown: buildTranscriptMarkdown(state, segments),
+    text: buildTranscriptText(state, segments),
+    markdownFileName: `meeting-transcript-${safeMeetingId}-${stamp}.md`,
+    textFileName: `meeting-transcript-${safeMeetingId}-${stamp}.txt`,
+  };
+}
+
+function buildTranscriptMarkdown(
+  state: TranscriptSessionState,
+  segments: TranscriptSegment[],
+): string {
+  const lines = [
+    '# Meeting Transcript',
+    '',
+    `- Meeting: ${state.meetingId ?? '-'}`,
+    `- Oturum: ${state.sessionId ?? '-'}`,
+    `- Kaynak: ${state.hasLoopback ? 'Mikrofon + sistem sesi' : 'Mikrofon'}`,
+    `- Başlangıç: ${formatTimestamp(state.startedAtMs)}`,
+    `- Bitiş: ${formatTimestamp(state.finishedAtMs)}`,
+    '',
+    '## Transkript',
+    '',
+  ];
+
+  for (const segment of segments) {
+    lines.push(`- ${formatSegmentPrefix(segment)} ${segment.speakerLabel}: ${segment.text.trim()}`);
+  }
+
+  return `${lines.join('\n')}\n`;
+}
+
+function buildTranscriptText(state: TranscriptSessionState, segments: TranscriptSegment[]): string {
+  const lines = [
+    'Meeting Transcript',
+    '',
+    `Meeting: ${state.meetingId ?? '-'}`,
+    `Oturum: ${state.sessionId ?? '-'}`,
+    `Kaynak: ${state.hasLoopback ? 'Mikrofon + sistem sesi' : 'Mikrofon'}`,
+    `Başlangıç: ${formatTimestamp(state.startedAtMs)}`,
+    `Bitiş: ${formatTimestamp(state.finishedAtMs)}`,
+    '',
+  ];
+
+  for (const segment of segments) {
+    lines.push(`${formatSegmentPrefix(segment)} ${segment.speakerLabel}: ${segment.text.trim()}`);
+  }
+
+  return `${lines.join('\n')}\n`;
+}
+
+function formatSegmentPrefix(segment: TranscriptSegment): string {
+  return `[${formatTimestamp(segment.startedAtMs)} ${transcriptStatusLabel(segment.status)}]`;
+}
+
+function formatTimestamp(value: number | null): string {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return '-';
+  }
+  return new Date(value).toISOString();
+}
+
+function safeFilePart(value: string): string {
+  return value.replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '') || 'meeting';
 }

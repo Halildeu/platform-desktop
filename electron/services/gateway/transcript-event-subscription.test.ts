@@ -181,6 +181,37 @@ describe('TranscriptEventSubscription', () => {
     expect(mocks.readTranscriptEvents).toHaveBeenCalledTimes(22);
   });
 
+  it('treats transcript long-poll timeout as transient and keeps the UI error-free', async () => {
+    const onError = vi.fn();
+    mocks.readTranscriptEvents
+      .mockRejectedValueOnce(new Error('readTranscriptEvents timed out after 25000ms'))
+      .mockResolvedValueOnce({
+        sessionId: 'SES-1',
+        correlationId: 'corr-1',
+        events: [],
+        nextCursor: null,
+        hasMore: false,
+      });
+
+    const subscription = new TranscriptEventSubscription({
+      cfg,
+      sessionId: 'SES-1',
+      getJwt: () => 'JWT',
+      onEvent: vi.fn(),
+      onError,
+      pollIntervalMs: 250,
+      streamPreferred: false,
+    });
+
+    subscription.start();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(onError).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(250);
+    expect(mocks.readTranscriptEvents).toHaveBeenCalledTimes(2);
+    expect(onError).not.toHaveBeenCalled();
+  });
+
   it('aborts an in-flight poll when stopped', async () => {
     let signal: AbortSignal | null = null;
     mocks.readTranscriptEvents.mockImplementation(

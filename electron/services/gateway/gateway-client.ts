@@ -16,6 +16,7 @@ import { desktopFetch } from '../net/desktop-fetch.js';
 
 const API = '/api/v1/audio-gateway';
 const HTTP_TIMEOUT_MS = 15_000;
+const TRANSCRIPT_EVENTS_HTTP_TIMEOUT_MS = 25_000;
 const SSE_DECODER_FATAL = false;
 
 export interface GatewayConfig {
@@ -100,9 +101,10 @@ async function fetchWithTimeout(
   input: string,
   init: RequestInit,
   label: string,
+  timeoutMs: number = HTTP_TIMEOUT_MS,
 ): Promise<Response> {
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), HTTP_TIMEOUT_MS);
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
   if (init.signal) {
     if (init.signal.aborted) {
       controller.abort();
@@ -115,7 +117,7 @@ async function fetchWithTimeout(
   } catch (err) {
     const name = err instanceof Error ? err.name : '';
     if (name === 'AbortError' || name === 'TimeoutError') {
-      throw new Error(`${label} timed out after ${HTTP_TIMEOUT_MS}ms`);
+      throw new Error(`${label} timed out after ${timeoutMs}ms`);
     }
     throw err;
   } finally {
@@ -386,6 +388,7 @@ export async function readTranscriptEvents(
       signal: args.signal,
     },
     'readTranscriptEvents',
+    TRANSCRIPT_EVENTS_HTTP_TIMEOUT_MS,
   );
   if (!res.ok) {
     throw new Error(await httpErrorMessage(res, 'readTranscriptEvents'));
