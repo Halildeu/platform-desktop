@@ -177,6 +177,9 @@ describe('audio IPC recorder consent gate', () => {
     expect(mocks.recordConsent).toHaveBeenCalledTimes(1);
     expect(mocks.senderStart).toHaveBeenCalledTimes(1);
     expect(mocks.transcriptSubscriptionStart).toHaveBeenCalledTimes(1);
+    expect(mocks.transcriptSubscriptionCtor).toHaveBeenCalledWith(
+      expect.objectContaining({ streamPreferred: false }),
+    );
 
     const consentArgs = mocks.recordConsent.mock.calls[0][2] as {
       meetingId: string;

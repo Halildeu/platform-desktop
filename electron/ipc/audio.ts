@@ -312,6 +312,7 @@ export function registerAudioIpc(): void {
           getJwt: () => getValidAccessToken(),
           onEvent: (transcriptEvent) => emitTranscriptEvent(send, transcriptEvent),
           onError: (error) => emitTranscriptError(send, sessionId, error),
+          streamPreferred: false,
         });
         transcriptSubscription.start();
         active = {
