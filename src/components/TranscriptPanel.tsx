@@ -35,7 +35,10 @@ function captureMode(hasLoopback: boolean): string {
   return hasLoopback ? 'Mikrofon + sistem sesi' : 'Mikrofon';
 }
 
-function streamModeLabel(stream: TranscriptPanelProps['stream']): string {
+function streamModeLabel(stream: TranscriptPanelProps['stream'], recordingActive: boolean): string {
+  if (!recordingActive) {
+    return stream?.directConfigured ? 'Direct stream' : 'Gateway event';
+  }
   if (stream?.directStatus?.status === 'reconnecting') {
     return 'Direct stream';
   }
@@ -67,8 +70,10 @@ function streamLoadingStageLabel(stage: string | undefined): string {
 function streamLagMs(
   stream: TranscriptPanelProps['stream'],
   lastTranscriptAtMs: number | null,
+  recordingActive: boolean,
 ): number | null {
   if (
+    !recordingActive ||
     !stream?.audioActive ||
     typeof stream.lastAudioAtMs !== 'number' ||
     !Number.isFinite(stream.lastAudioAtMs) ||
@@ -91,8 +96,10 @@ function formatDuration(ms: number): string {
 function transcriptLagLabel(
   stream: TranscriptPanelProps['stream'],
   lastTranscriptAtMs: number | null,
+  recordingActive: boolean,
 ): string {
   if (
+    !recordingActive ||
     !stream?.directConfigured ||
     typeof stream.lastAudioAtMs !== 'number' ||
     !Number.isFinite(stream.lastAudioAtMs)
@@ -113,15 +120,21 @@ function transcriptLagLabel(
 function transcriptLagClass(
   stream: TranscriptPanelProps['stream'],
   lastTranscriptAtMs: number | null,
+  recordingActive: boolean,
 ): string {
-  const lagMs = streamLagMs(stream, lastTranscriptAtMs);
+  const lagMs = streamLagMs(stream, lastTranscriptAtMs, recordingActive);
   return lagMs !== null && lagMs >= TRANSCRIPT_LAG_WARN_MS ? 'stream-lag-warning' : '';
 }
 
 function streamModeDetail(
   stream: TranscriptPanelProps['stream'],
   lastTranscriptAtMs: number | null,
+  recordingActive: boolean,
 ): string {
+  if (!recordingActive) {
+    return stream?.directConfigured ? 'Kayıt başlayınca bağlanacak' : 'Kayıt başlayınca batch/poll';
+  }
+
   const status = stream?.directStatus;
   if (status?.status === 'reconnecting') {
     const attempt =
@@ -146,7 +159,7 @@ function streamModeDetail(
     return 'Kelime akışı aktif';
   }
   if (stream?.directReady) {
-    const lagMs = streamLagMs(stream, lastTranscriptAtMs);
+    const lagMs = streamLagMs(stream, lastTranscriptAtMs, recordingActive);
     if (lagMs !== null && lagMs >= TRANSCRIPT_LAG_WARN_MS) {
       return `Metin gecikiyor (${formatDuration(lagMs)})`;
     }
@@ -212,7 +225,8 @@ export function TranscriptPanel({ session, stream }: TranscriptPanelProps): Reac
   const listRef = useRef<HTMLDivElement | null>(null);
   const visibleSegments = [...session.segments].reverse();
   const lastTranscriptAtMs = latestTranscriptReceivedAtMs(session);
-  const lagClass = transcriptLagClass(stream, lastTranscriptAtMs);
+  const recordingActive = session.lifecycle === 'recording';
+  const lagClass = transcriptLagClass(stream, lastTranscriptAtMs, recordingActive);
 
   useEffect(() => {
     if (listRef.current) {
@@ -256,11 +270,11 @@ export function TranscriptPanel({ session, stream }: TranscriptPanelProps): Reac
       <div className="stream-strip" aria-label="Transkript akış durumu">
         <div>
           <span>Akış</span>
-          <strong>{streamModeLabel(stream)}</strong>
+          <strong>{streamModeLabel(stream, recordingActive)}</strong>
         </div>
         <div>
           <span>Durum</span>
-          <strong>{streamModeDetail(stream, lastTranscriptAtMs)}</strong>
+          <strong>{streamModeDetail(stream, lastTranscriptAtMs, recordingActive)}</strong>
         </div>
         <div>
           <span>Ses</span>
@@ -276,7 +290,9 @@ export function TranscriptPanel({ session, stream }: TranscriptPanelProps): Reac
         </div>
         <div>
           <span>Gecikme</span>
-          <strong className={lagClass}>{transcriptLagLabel(stream, lastTranscriptAtMs)}</strong>
+          <strong className={lagClass}>
+            {transcriptLagLabel(stream, lastTranscriptAtMs, recordingActive)}
+          </strong>
         </div>
       </div>
 

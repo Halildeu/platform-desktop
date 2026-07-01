@@ -48,6 +48,25 @@ describe('TranscriptPanel', () => {
     expect(screen.queryByText('örnek transcript')).not.toBeInTheDocument();
   });
 
+  it('does not report direct stream as connecting before recorder starts', () => {
+    render(
+      <TranscriptPanel
+        session={initialTranscriptSession()}
+        stream={{
+          directConfigured: true,
+          directStatus: { status: 'connecting' },
+          directActive: false,
+          disabledReason: null,
+        }}
+      />,
+    );
+
+    expect(screen.getByText('Recorder oturumu yok')).toBeInTheDocument();
+    expect(screen.getByText('Direct stream')).toBeInTheDocument();
+    expect(screen.getByText('Kayıt başlayınca bağlanacak')).toBeInTheDocument();
+    expect(screen.queryByText('Bağlantı kuruluyor')).not.toBeInTheDocument();
+  });
+
   it('renders newest transcript segment first while keeping statuses visible', () => {
     const recording = startTranscriptSession(initialTranscriptSession(), {
       sessionId: 'SES-1',
