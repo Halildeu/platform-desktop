@@ -199,6 +199,7 @@ function App() {
   const [liveStreamActive, setLiveStreamActive] = useState(false);
   const [liveStreamReady, setLiveStreamReady] = useState(false);
   const [audioRms, setAudioRms] = useState<number | null>(null);
+  const [lastAudioAtMs, setLastAudioAtMs] = useState<number | null>(null);
   const recorderRef = useRef<Recorder | null>(null);
   const contractPendingRef = useRef(false);
   const liveStreamHasEventsRef = useRef(false);
@@ -409,6 +410,7 @@ function App() {
       setLiveStreamActive(false);
       setLiveStreamReady(false);
       setAudioRms(null);
+      setLastAudioAtMs(null);
       setTranscriptSession(initialTranscriptSession());
       setMeetingIntelligence(initialMeetingIntelligence());
       setStatus('Çıkış yapıldı; Keycloak logout/revoke isteği gönderildi.');
@@ -466,6 +468,7 @@ function App() {
       setLiveStreamActive(false);
       setLiveStreamReady(false);
       setAudioRms(null);
+      setLastAudioAtMs(null);
       transcriptSessionIdRef.current = null;
       pendingLiveTranscriptEventsRef.current = [];
       const rec = await startRecordingWithTimeout(meetingId, deviceId, {
@@ -475,6 +478,7 @@ function App() {
         },
         onAudioActivity: (activity) => {
           setAudioRms(activity.rms);
+          setLastAudioAtMs(activity.capturedAtMs);
         },
         onLiveTranscriptEvent: (event) => {
           liveStreamHasEventsRef.current = true;
@@ -511,6 +515,7 @@ function App() {
         setLiveStreamActive(false);
         setLiveStreamReady(false);
         setAudioRms(null);
+        setLastAudioAtMs(null);
         setRecording(false);
         const message = `Kayıt hatası (ses kaybı): ${err.message}`;
         setError(message);
@@ -546,6 +551,7 @@ function App() {
       setLiveStreamActive(false);
       setLiveStreamReady(false);
       setAudioRms(null);
+      setLastAudioAtMs(null);
       setError(message);
       setTranscriptSession((current) => failTranscriptSession(current, message));
       setMeetingIntelligence((current) => failMeetingIntelligence(current, message));
@@ -562,6 +568,7 @@ function App() {
       setLiveStreamActive(false);
       setLiveStreamReady(false);
       setAudioRms(null);
+      setLastAudioAtMs(null);
       setStatus('Kayıt tamamlandı, gönderildi.');
       setTranscriptSession((current) => finishTranscriptSession(current, Date.now()));
       setMeetingIntelligence((current) => markIntelligenceWaiting(current));
@@ -576,6 +583,7 @@ function App() {
       setLiveStreamActive(false);
       setLiveStreamReady(false);
       setAudioRms(null);
+      setLastAudioAtMs(null);
     }
   };
 
@@ -676,6 +684,7 @@ function App() {
                 directActive: liveStreamActive,
                 audioRms,
                 audioActive: typeof audioRms === 'number' && audioRms >= ACTIVE_AUDIO_RMS,
+                lastAudioAtMs,
                 disabledReason: recorderConfig?.liveSttStreamReason ?? null,
               }}
             />

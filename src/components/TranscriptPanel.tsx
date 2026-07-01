@@ -14,6 +14,7 @@ export interface TranscriptPanelProps {
     directActive: boolean;
     audioRms?: number | null;
     audioActive?: boolean;
+    lastAudioAtMs?: number | null;
     disabledReason: string | null;
   };
 }
@@ -67,6 +68,23 @@ function audioStatusLabel(stream: TranscriptPanelProps['stream']): string {
   return `${level} · RMS ${stream.audioRms.toFixed(3)}`;
 }
 
+function latestTranscriptReceivedAtMs(session: TranscriptSessionState): number | null {
+  return session.segments.reduce<number | null>((latest, segment) => {
+    const candidate =
+      typeof segment.receivedAtMs === 'number' && Number.isFinite(segment.receivedAtMs)
+        ? segment.receivedAtMs
+        : segment.startedAtMs;
+    return latest === null || candidate > latest ? candidate : latest;
+  }, null);
+}
+
+function streamTimestampLabel(value: number | null | undefined): string {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return '-';
+  }
+  return formatClock(value);
+}
+
 function segmentSourceLabel(source: string | undefined): string {
   if (source === 'direct-stream') {
     return 'Direct STT';
@@ -91,6 +109,7 @@ export function TranscriptPanel({ session, stream }: TranscriptPanelProps): Reac
   const hasSegments = session.segments.length > 0;
   const listRef = useRef<HTMLDivElement | null>(null);
   const visibleSegments = [...session.segments].reverse();
+  const lastTranscriptAtMs = latestTranscriptReceivedAtMs(session);
 
   useEffect(() => {
     if (listRef.current) {
@@ -143,6 +162,14 @@ export function TranscriptPanel({ session, stream }: TranscriptPanelProps): Reac
         <div>
           <span>Ses</span>
           <strong>{audioStatusLabel(stream)}</strong>
+        </div>
+        <div>
+          <span>Son ses</span>
+          <strong>{streamTimestampLabel(stream?.lastAudioAtMs)}</strong>
+        </div>
+        <div>
+          <span>Son metin</span>
+          <strong>{streamTimestampLabel(lastTranscriptAtMs)}</strong>
         </div>
       </div>
 

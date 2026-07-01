@@ -16,6 +16,14 @@ afterEach(() => {
 });
 
 describe('TranscriptPanel', () => {
+  function clock(ms: number): string {
+    return new Date(ms).toLocaleTimeString('tr-TR', {
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+    });
+  }
+
   it('renders recorder session metadata without fake transcript content', () => {
     const session = startTranscriptSession(initialTranscriptSession(), {
       sessionId: 'SES-1',
@@ -33,6 +41,8 @@ describe('TranscriptPanel', () => {
     expect(screen.getByText('Mikrofon + sistem sesi')).toBeInTheDocument();
     expect(screen.getByText('Gateway event')).toBeInTheDocument();
     expect(screen.getByText('Batch/poll akışı')).toBeInTheDocument();
+    expect(screen.getByText('Son ses')).toBeInTheDocument();
+    expect(screen.getByText('Son metin')).toBeInTheDocument();
     expect(screen.getByText('Transkript akışı bekleniyor')).toBeInTheDocument();
     expect(screen.queryByText('örnek transcript')).not.toBeInTheDocument();
   });
@@ -53,6 +63,7 @@ describe('TranscriptPanel', () => {
       text: 'İkinci cümle işleniyor',
       source: 'direct-stream',
       elapsedMs: 180,
+      receivedAtMs: 1781820065123,
     });
     const withEarlierFinal = upsertTranscriptSegment(withLaterDraft, {
       id: 'seg-1',
@@ -72,6 +83,7 @@ describe('TranscriptPanel', () => {
 
     expect(screen.getByText('Direct stream')).toBeInTheDocument();
     expect(screen.getByText('Kelime akışı aktif')).toBeInTheDocument();
+    expect(screen.getByText(clock(1781820065123))).toBeInTheDocument();
     const articles = screen.getAllByRole('article');
     expect(articles).toHaveLength(2);
     expect(articles[0]).toHaveTextContent('İkinci cümle işleniyor');
@@ -99,12 +111,17 @@ describe('TranscriptPanel', () => {
           directConfigured: true,
           directReady: true,
           directActive: false,
+          audioRms: 0.021,
+          audioActive: true,
+          lastAudioAtMs: 1781820009123,
           disabledReason: null,
         }}
       />,
     );
 
     expect(screen.getByText('Direct stream')).toBeInTheDocument();
-    expect(screen.getByText('Bağlı, ses bekleniyor')).toBeInTheDocument();
+    expect(screen.getByText('Ses alınıyor, kelime bekleniyor')).toBeInTheDocument();
+    expect(screen.getByText('Alınıyor · RMS 0.021')).toBeInTheDocument();
+    expect(screen.getByText(clock(1781820009123))).toBeInTheDocument();
   });
 });

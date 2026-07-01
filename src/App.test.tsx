@@ -395,6 +395,15 @@ describe('App recorder readiness', () => {
     });
     expect(screen.getByText('Ses alınıyor, kelime bekleniyor')).toBeInTheDocument();
     expect(screen.getByText('Alınıyor · RMS 0.020')).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        new Date(1781820000000).toLocaleTimeString('tr-TR', {
+          hour: '2-digit',
+          minute: '2-digit',
+          second: '2-digit',
+        }),
+      ),
+    ).toBeInTheDocument();
 
     act(() => {
       transcriptEventHandler?.({
@@ -536,7 +545,7 @@ describe('App recorder readiness', () => {
     });
 
     expect(await screen.findByText('clock skew segment')).toBeInTheDocument();
-    expect(screen.getByText(serverClockLabel)).toBeInTheDocument();
+    expect(screen.getAllByText(serverClockLabel).length).toBeGreaterThan(0);
     expect(screen.queryByText(clientClockLabel)).not.toBeInTheDocument();
   });
 });
