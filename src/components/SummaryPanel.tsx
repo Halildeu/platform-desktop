@@ -10,6 +10,7 @@ import {
   type MeetingIntelligenceState,
 } from '../intelligence/meeting-intelligence';
 import {
+  analyzeTranscriptSourceReadiness,
   buildTranscriptSourceExport,
   transcriptStatusLabel,
   type TranscriptSegment,
@@ -106,6 +107,26 @@ function finalityLabel(segments: TranscriptSegment[]): string {
   return `${finalCount} final / ${draftCount} taslak`;
 }
 
+function formatDurationMs(value: number): string {
+  if (!Number.isFinite(value) || value <= 0) {
+    return '-';
+  }
+  const totalSeconds = Math.round(value / 1000);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  if (minutes === 0) {
+    return `${seconds} sn`;
+  }
+  return `${minutes} dk ${seconds} sn`;
+}
+
+function formatPercent(value: number): string {
+  if (!Number.isFinite(value)) {
+    return '-';
+  }
+  return `%${Math.round(value * 100)}`;
+}
+
 export function SummaryPanel({
   intelligence,
   transcript,
@@ -115,6 +136,9 @@ export function SummaryPanel({
   const result = intelligence.status === 'ready' ? intelligence.result : null;
   const transcriptSourceSegments = transcriptSegments(transcript);
   const hasTranscriptSource = transcriptSourceSegments.length > 0;
+  const transcriptReadiness = transcript
+    ? analyzeTranscriptSourceReadiness(transcript)
+    : analyzeTranscriptSourceReadiness(initialTranscriptSessionFallback);
   const latestTranscriptSegment =
     transcriptSourceSegments.length > 0
       ? transcriptSourceSegments[transcriptSourceSegments.length - 1]
@@ -292,6 +316,16 @@ export function SummaryPanel({
           <div className="summary-content">
             <div className="summary-section">
               <h3>Kaynak transkript</h3>
+              <div
+                className={`source-readiness source-readiness-${transcriptReadiness.level}`}
+                aria-label="Kaynak hazırlık durumu"
+              >
+                <strong>{transcriptReadiness.label}</strong>
+                <span>{transcriptReadiness.detail}</span>
+                {transcriptReadiness.warnings.length > 0 ? (
+                  <small>{transcriptReadiness.warnings.join(' ')}</small>
+                ) : null}
+              </div>
               <div className="source-metrics" aria-label="Kaynak transkript özeti">
                 <div>
                   <span>Satır</span>
@@ -308,6 +342,18 @@ export function SummaryPanel({
                 <div>
                   <span>Zaman</span>
                   <strong>{transcriptWindowLabel(transcriptSourceSegments)}</strong>
+                </div>
+                <div>
+                  <span>Kelime</span>
+                  <strong>{transcriptReadiness.wordCount}</strong>
+                </div>
+                <div>
+                  <span>Süre</span>
+                  <strong>{formatDurationMs(transcriptReadiness.durationMs)}</strong>
+                </div>
+                <div>
+                  <span>Final oranı</span>
+                  <strong>{formatPercent(transcriptReadiness.finalRatio)}</strong>
                 </div>
               </div>
               {latestTranscriptSegment ? (
@@ -331,6 +377,18 @@ export function SummaryPanel({
     </section>
   );
 }
+
+const initialTranscriptSessionFallback: TranscriptSessionState = {
+  lifecycle: 'idle',
+  sessionId: null,
+  meetingId: null,
+  deviceId: null,
+  hasLoopback: false,
+  startedAtMs: null,
+  finishedAtMs: null,
+  error: null,
+  segments: [],
+};
 
 function formatCitations(citations: IntelligenceCitation[]): string {
   if (citations.length === 0) {

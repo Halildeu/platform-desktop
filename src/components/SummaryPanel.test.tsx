@@ -82,6 +82,40 @@ function transcriptState(): TranscriptSessionState {
   });
 }
 
+function reportReadyTranscriptState(): TranscriptSessionState {
+  const recording = startTranscriptSession(initialTranscriptSession(), {
+    sessionId: 'SES-2',
+    meetingId: '33333333-3333-4333-8333-333333333333',
+    deviceId: 'desktop-1',
+    hasLoopback: false,
+    startedAtMs: 1781820000000,
+  });
+
+  const withFirstSegment = upsertTranscriptSegment(recording, {
+    id: 'seg-1',
+    speakerLabel: 'Konuşmacı',
+    startedAtMs: 1781820003000,
+    status: 'final',
+    source: 'direct-stream',
+    text: 'Canlı toplantı kaydı sırasında transkript kaynağı final satırlarla doğrulandı ve çıktı üretimi için hazırlandı.',
+  });
+
+  const withSecondSegment = upsertTranscriptSegment(withFirstSegment, {
+    id: 'seg-2',
+    speakerLabel: 'Konuşmacı',
+    startedAtMs: 1781820021000,
+    status: 'final',
+    source: 'direct-stream',
+    text: 'Toplantı sonrasında özet karar ve aksiyon üretimi transkript kanıtına bağlı şekilde ilerleyecek.',
+  });
+
+  return {
+    ...withSecondSegment,
+    lifecycle: 'finished',
+    finishedAtMs: 1781820025000,
+  };
+}
+
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
@@ -150,11 +184,18 @@ describe('SummaryPanel', () => {
     );
 
     expect(screen.getByText('Kaynak transkript')).toBeInTheDocument();
+    const readiness = screen.getByLabelText('Kaynak hazırlık durumu');
+    expect(within(readiness).getByText('Kaynak toplanıyor')).toBeInTheDocument();
+    expect(
+      within(readiness).getByText('Canlı transkript rapor kaynağına ekleniyor.'),
+    ).toBeInTheDocument();
     const sourceSummary = screen.getByLabelText('Kaynak transkript özeti');
     expect(within(sourceSummary).getByText('Satır')).toBeInTheDocument();
     expect(within(sourceSummary).getByText('2')).toBeInTheDocument();
     expect(within(sourceSummary).getByText('1 final / 1 taslak')).toBeInTheDocument();
     expect(within(sourceSummary).getByText('Direct STT')).toBeInTheDocument();
+    expect(within(sourceSummary).getByText('Kelime')).toBeInTheDocument();
+    expect(within(sourceSummary).getByText('Final oranı')).toBeInTheDocument();
     expect(screen.getByText('Son satır · Taslak · Direct STT')).toBeInTheDocument();
     expect(screen.getByText('"Toplantı notu kaynak transcript olarak hazır."')).toBeInTheDocument();
     expect(screen.queryByText('Toplantı çıktısı bekleniyor')).not.toBeInTheDocument();
@@ -173,5 +214,27 @@ describe('SummaryPanel', () => {
       expect.stringContaining('Toplantı notu kaynak transcript olarak hazır.'),
       'text/plain',
     );
+  });
+
+  it('shows when transcript source is suitable for meeting output generation', () => {
+    render(
+      <SummaryPanel
+        intelligence={{ ...initialMeetingIntelligence(), status: 'waiting' }}
+        transcript={reportReadyTranscriptState()}
+      />,
+    );
+
+    const readiness = screen.getByLabelText('Kaynak hazırlık durumu');
+    expect(within(readiness).getByText('Çıktıya uygun')).toBeInTheDocument();
+    expect(
+      within(readiness).getByText(
+        'Transkript kaynağı meeting output üretimi için yeterli görünüyor.',
+      ),
+    ).toBeInTheDocument();
+
+    const sourceSummary = screen.getByLabelText('Kaynak transkript özeti');
+    expect(within(sourceSummary).getByText('2 final / 0 taslak')).toBeInTheDocument();
+    expect(within(sourceSummary).getByText('18 sn')).toBeInTheDocument();
+    expect(within(sourceSummary).getByText('%100')).toBeInTheDocument();
   });
 });

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  analyzeTranscriptSourceReadiness,
   buildTranscriptSourceExport,
   failTranscriptSession,
   finishTranscriptSession,
@@ -172,5 +173,62 @@ describe('session transcript state', () => {
     expect(() => buildTranscriptSourceExport(initialTranscriptSession())).toThrow(
       'Transcript source is not ready',
     );
+  });
+
+  it('analyzes transcript source readiness without fabricating intelligence output', () => {
+    expect(analyzeTranscriptSourceReadiness(initialTranscriptSession())).toMatchObject({
+      level: 'empty',
+      label: 'Kaynak bekleniyor',
+      wordCount: 0,
+      finalCount: 0,
+    });
+
+    const recording = startTranscriptSession(initialTranscriptSession(), {
+      sessionId: 'SES-1',
+      meetingId: '22222222-2222-4222-8222-222222222222',
+      deviceId: 'desktop-1',
+      hasLoopback: false,
+      startedAtMs: 1000,
+    });
+    const collecting = upsertTranscriptSegment(recording, {
+      id: 'seg-1',
+      speakerLabel: 'Konuşmacı',
+      startedAtMs: 2000,
+      status: 'draft',
+      text: 'kayıt sürerken gelen kısa taslak',
+    });
+
+    expect(analyzeTranscriptSourceReadiness(collecting)).toMatchObject({
+      level: 'collecting',
+      label: 'Kaynak toplanıyor',
+      finalCount: 0,
+      draftCount: 1,
+    });
+
+    const finalOnly = finishTranscriptSession(
+      upsertTranscriptSegment(recording, {
+        id: 'seg-1',
+        speakerLabel: 'Konuşmacı',
+        startedAtMs: 2000,
+        status: 'final',
+        text: 'Bu toplantıda canlı transkript doğrulandı ve kayıt çıktısı için kaynak kalite eşiği değerlendirildi.',
+      }),
+      30_000,
+    );
+    const reportReady = upsertTranscriptSegment(finalOnly, {
+      id: 'seg-2',
+      speakerLabel: 'Konuşmacı',
+      startedAtMs: 20_000,
+      status: 'final',
+      text: 'Kullanıcı deneyimi tarafında özet üretmeden önce transkript olgunluğu görünür hale getirilecek.',
+    });
+
+    expect(analyzeTranscriptSourceReadiness(reportReady)).toMatchObject({
+      level: 'ready',
+      label: 'Çıktıya uygun',
+      finalCount: 2,
+      draftCount: 0,
+      finalRatio: 1,
+    });
   });
 });

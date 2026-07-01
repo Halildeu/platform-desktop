@@ -445,6 +445,50 @@ button:disabled {
   gap: 10px;
 }
 
+.source-readiness {
+  display: grid;
+  gap: 4px;
+  margin-bottom: 12px;
+  padding: 10px 12px;
+  border-left: 3px solid #64748b;
+  border-radius: 6px;
+  background: #f8fafc;
+}
+
+.source-readiness-ready {
+  border-left-color: #10b981;
+  background: #f0fdf4;
+}
+
+.source-readiness-collecting {
+  border-left-color: #0f766e;
+  background: #f0fdfa;
+}
+
+.source-readiness-review {
+  border-left-color: #f59e0b;
+  background: #fffbeb;
+}
+
+.source-readiness-empty {
+  border-left-color: #94a3b8;
+}
+
+.source-readiness strong {
+  color: #0f172a;
+  font-size: 13px;
+}
+
+.source-readiness span,
+.source-readiness small {
+  color: #64748b;
+  line-height: 1.45;
+}
+
+.source-readiness small {
+  font-size: 12px;
+}
+
 .source-metrics div {
   min-width: 0;
   padding: 10px 12px;

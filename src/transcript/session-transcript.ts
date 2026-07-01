@@ -41,12 +41,29 @@ export interface TranscriptSourceExportBundle {
   textFileName: string;
 }
 
+export type TranscriptSourceReadinessLevel = 'empty' | 'collecting' | 'review' | 'ready';
+
+export interface TranscriptSourceReadiness {
+  level: TranscriptSourceReadinessLevel;
+  label: string;
+  detail: string;
+  wordCount: number;
+  durationMs: number;
+  finalCount: number;
+  draftCount: number;
+  finalRatio: number;
+  warnings: string[];
+}
+
 const STATUS_RANK: Record<TranscriptSegmentStatus, number> = {
   draft: 0,
   stabilizing: 1,
   final: 2,
   revised: 3,
 };
+
+const REPORT_READY_MIN_WORDS = 20;
+const REPORT_READY_MIN_DURATION_MS = 15_000;
 
 export function initialTranscriptSession(): TranscriptSessionState {
   return {
@@ -205,9 +222,7 @@ export function buildTranscriptSourceExport(
   state: TranscriptSessionState,
   nowMs: number = Date.now(),
 ): TranscriptSourceExportBundle {
-  const segments = state.segments
-    .filter((segment) => segment.text.trim().length > 0)
-    .sort((a, b) => a.startedAtMs - b.startedAtMs || a.id.localeCompare(b.id));
+  const segments = sourceSegments(state);
   if (segments.length === 0) {
     throw new Error('Transcript source is not ready');
   }
@@ -220,6 +235,105 @@ export function buildTranscriptSourceExport(
     markdownFileName: `meeting-transcript-${safeMeetingId}-${stamp}.md`,
     textFileName: `meeting-transcript-${safeMeetingId}-${stamp}.txt`,
   };
+}
+
+export function analyzeTranscriptSourceReadiness(
+  state: TranscriptSessionState,
+): TranscriptSourceReadiness {
+  const segments = sourceSegments(state);
+  if (segments.length === 0) {
+    return {
+      level: 'empty',
+      label: 'Kaynak bekleniyor',
+      detail: 'Transkript satırı oluşmadan çıktı üretimi başlamaz.',
+      wordCount: 0,
+      durationMs: 0,
+      finalCount: 0,
+      draftCount: 0,
+      finalRatio: 0,
+      warnings: ['Transkript satırı yok.'],
+    };
+  }
+
+  const finalCount = segments.filter(isFinalSegment).length;
+  const draftCount = segments.length - finalCount;
+  const wordCount = segments.reduce((total, segment) => total + countWords(segment.text), 0);
+  const durationMs = Math.max(
+    0,
+    segments[segments.length - 1].startedAtMs - segments[0].startedAtMs,
+  );
+  const finalRatio = finalCount / segments.length;
+  const warnings = [
+    ...(finalCount === 0 ? ['Final satır bekleniyor.'] : []),
+    ...(wordCount < REPORT_READY_MIN_WORDS
+      ? [`En az ${REPORT_READY_MIN_WORDS} kelimelik kaynak hedefleniyor.`]
+      : []),
+    ...(durationMs < REPORT_READY_MIN_DURATION_MS
+      ? ['Toplantı penceresi rapor için kısa görünüyor.']
+      : []),
+    ...(state.lifecycle === 'recording' ? ['Kayıt sürüyor; çıktı henüz sabit değil.'] : []),
+  ];
+
+  if (state.lifecycle === 'recording') {
+    return {
+      level: 'collecting',
+      label: 'Kaynak toplanıyor',
+      detail: 'Canlı transkript rapor kaynağına ekleniyor.',
+      wordCount,
+      durationMs,
+      finalCount,
+      draftCount,
+      finalRatio,
+      warnings,
+    };
+  }
+
+  if (
+    finalCount > 0 &&
+    wordCount >= REPORT_READY_MIN_WORDS &&
+    durationMs >= REPORT_READY_MIN_DURATION_MS
+  ) {
+    return {
+      level: 'ready',
+      label: 'Çıktıya uygun',
+      detail: 'Transkript kaynağı meeting output üretimi için yeterli görünüyor.',
+      wordCount,
+      durationMs,
+      finalCount,
+      draftCount,
+      finalRatio,
+      warnings,
+    };
+  }
+
+  return {
+    level: 'review',
+    label: finalCount > 0 ? 'Gözden geçirilmeli' : 'Taslak kaynak',
+    detail:
+      finalCount > 0
+        ? 'Kaynak var; rapor/özet öncesi kapsam ve final oranı kontrol edilmeli.'
+        : 'Yalnız taslak satır var; final transcript beklenmeli.',
+    wordCount,
+    durationMs,
+    finalCount,
+    draftCount,
+    finalRatio,
+    warnings,
+  };
+}
+
+function sourceSegments(state: TranscriptSessionState): TranscriptSegment[] {
+  return state.segments
+    .filter((segment) => segment.text.trim().length > 0)
+    .sort((a, b) => a.startedAtMs - b.startedAtMs || a.id.localeCompare(b.id));
+}
+
+function isFinalSegment(segment: TranscriptSegment): boolean {
+  return segment.status === 'final' || segment.status === 'revised';
+}
+
+function countWords(text: string): number {
+  return text.trim().split(/\s+/).filter(Boolean).length;
 }
 
 function buildTranscriptMarkdown(
