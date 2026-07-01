@@ -178,4 +178,35 @@ describe('connectLiveSttStream', () => {
 
     stream.close();
   });
+
+  it('reconnects after a transient close and flushes buffered audio frames', () => {
+    vi.useFakeTimers();
+    vi.stubGlobal('WebSocket', FakeWebSocket);
+    const onReady = vi.fn();
+
+    const stream = connectLiveSttStream('ws://127.0.0.1:18220/ws/stream', { onReady });
+    const first = FakeWebSocket.instances[0];
+
+    first?.open();
+    first?.message({ type: 'ready' });
+    stream.send(new Float32Array([0.1, 0.2]));
+    expect(first?.sent).toHaveLength(1);
+
+    first?.close();
+    stream.send(new Float32Array([0.3, 0.4]));
+    expect(FakeWebSocket.instances).toHaveLength(1);
+
+    vi.advanceTimersByTime(250);
+    const second = FakeWebSocket.instances[1];
+    expect(second?.url).toBe('ws://127.0.0.1:18220/ws/stream');
+    expect(second?.sent).toHaveLength(0);
+
+    second?.open();
+    second?.message({ type: 'ready' });
+
+    expect(onReady).toHaveBeenCalledTimes(2);
+    expect(second?.sent).toHaveLength(1);
+
+    stream.close();
+  });
 });

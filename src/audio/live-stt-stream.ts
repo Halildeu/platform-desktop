@@ -57,6 +57,9 @@ const SAMPLE_RATE = 16_000;
 const MAX_BUFFERED_SAMPLES = Math.floor((SAMPLE_RATE * MAX_BUFFERED_STREAM_MS) / 1000);
 const PARTIAL_REVEAL_STEP_MS = 70;
 const MAX_PROGRESSIVE_PARTIAL_STEPS = 12;
+const MAX_RECONNECT_ATTEMPTS = 8;
+const RECONNECT_BASE_DELAY_MS = 250;
+const RECONNECT_MAX_DELAY_MS = 2_000;
 
 function parseEvent(data: unknown): LiveSttServerEvent | null {
   if (typeof data !== 'string') {
@@ -130,10 +133,12 @@ export function connectLiveSttStream(
   streamUrl: string,
   callbacks: LiveSttStreamCallbacks = {},
 ): LiveSttStreamConnection {
-  const ws = new WebSocket(streamUrl);
+  let ws: WebSocket | null = null;
   const pendingFrames: Float32Array[] = [];
   let ready = false;
   let closedByClient = false;
+  let reconnectAttempts = 0;
+  let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   const segmentStartedAt = new Map<number, number>();
   const segmentDraftText = new Map<number, string>();
   const pendingPartialTimers = new Map<number, Array<ReturnType<typeof setTimeout>>>();
@@ -143,15 +148,108 @@ export function connectLiveSttStream(
   };
 
   const flushPending = (): void => {
-    if (!ready || ws.readyState !== WebSocket.OPEN) {
+    const socket = ws;
+    if (!ready || !socket || socket.readyState !== WebSocket.OPEN) {
       return;
     }
     while (pendingFrames.length > 0) {
       const frame = pendingFrames.shift();
       if (frame) {
-        ws.send(frameBuffer(frame));
+        socket.send(frameBuffer(frame));
       }
     }
+  };
+
+  const reconnectDelay = (): number =>
+    Math.min(
+      RECONNECT_BASE_DELAY_MS * 2 ** Math.max(0, reconnectAttempts - 1),
+      RECONNECT_MAX_DELAY_MS,
+    );
+
+  const connect = (): void => {
+    if (closedByClient) {
+      return;
+    }
+
+    ready = false;
+    const socket = new WebSocket(streamUrl);
+    ws = socket;
+
+    const scheduleReconnect = (reason: string): void => {
+      if (closedByClient || ws !== socket || reconnectTimer) {
+        return;
+      }
+
+      ready = false;
+      if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
+        emitError(`Live STT stream yeniden kurulamadı: ${reason}`);
+        return;
+      }
+
+      reconnectAttempts += 1;
+      reconnectTimer = setTimeout(() => {
+        reconnectTimer = null;
+        connect();
+      }, reconnectDelay());
+    };
+
+    socket.addEventListener('message', (message) => {
+      const event = parseEvent(message.data);
+      if (!event) {
+        return;
+      }
+
+      if (event.type === 'ready') {
+        ready = true;
+        reconnectAttempts = 0;
+        callbacks.onReady?.();
+        flushPending();
+        return;
+      }
+
+      if (event.type === 'partial') {
+        const text = segmentText(event);
+        if (!text) {
+          return;
+        }
+        const startedAtMs = segmentStartedAt.get(event.seq) ?? Date.now();
+        segmentStartedAt.set(event.seq, startedAtMs);
+        emitProgressivePartial(event, text, startedAtMs);
+        return;
+      }
+
+      if (event.type === 'final') {
+        const text = event.text.trim();
+        if (!text) {
+          return;
+        }
+        const startedAtMs = segmentStartedAt.get(event.seq) ?? Date.now();
+        segmentStartedAt.set(event.seq, startedAtMs);
+        clearPendingPartials(event.seq);
+        segmentDraftText.delete(event.seq);
+        callbacks.onTranscriptEvent?.({
+          id: `stream:${event.seq}`,
+          startedAtMs,
+          text,
+          status: 'final',
+          elapsedMs: event.elapsed_ms ?? null,
+          rms: event.rms ?? null,
+        });
+        return;
+      }
+
+      if (event.type === 'error') {
+        scheduleReconnect(event.msg);
+      }
+    });
+
+    socket.addEventListener('error', () => {
+      scheduleReconnect('bağlantı hatası');
+    });
+
+    socket.addEventListener('close', () => {
+      scheduleReconnect('bağlantı kapandı');
+    });
   };
 
   const clearPendingPartials = (seq: number): void => {
@@ -210,72 +308,16 @@ export function connectLiveSttStream(
     }
   };
 
-  ws.addEventListener('message', (message) => {
-    const event = parseEvent(message.data);
-    if (!event) {
-      return;
-    }
-
-    if (event.type === 'ready') {
-      ready = true;
-      callbacks.onReady?.();
-      flushPending();
-      return;
-    }
-
-    if (event.type === 'partial') {
-      const text = segmentText(event);
-      if (!text) {
-        return;
-      }
-      const startedAtMs = segmentStartedAt.get(event.seq) ?? Date.now();
-      segmentStartedAt.set(event.seq, startedAtMs);
-      emitProgressivePartial(event, text, startedAtMs);
-      return;
-    }
-
-    if (event.type === 'final') {
-      const text = event.text.trim();
-      if (!text) {
-        return;
-      }
-      const startedAtMs = segmentStartedAt.get(event.seq) ?? Date.now();
-      segmentStartedAt.set(event.seq, startedAtMs);
-      clearPendingPartials(event.seq);
-      segmentDraftText.delete(event.seq);
-      callbacks.onTranscriptEvent?.({
-        id: `stream:${event.seq}`,
-        startedAtMs,
-        text,
-        status: 'final',
-        elapsedMs: event.elapsed_ms ?? null,
-        rms: event.rms ?? null,
-      });
-      return;
-    }
-
-    if (event.type === 'error') {
-      emitError(`Live STT stream error: ${event.msg}`);
-    }
-  });
-
-  ws.addEventListener('error', () => {
-    emitError('Live STT stream bağlantı hatası.');
-  });
-
-  ws.addEventListener('close', () => {
-    if (!closedByClient) {
-      emitError('Live STT stream kapandı.');
-    }
-  });
+  connect();
 
   return {
     send: (samples: Float32Array): void => {
       if (closedByClient || samples.length === 0) {
         return;
       }
-      if (ready && ws.readyState === WebSocket.OPEN) {
-        ws.send(frameBuffer(samples));
+      const socket = ws;
+      if (ready && socket?.readyState === WebSocket.OPEN) {
+        socket.send(frameBuffer(samples));
         return;
       }
       pushBounded(pendingFrames, samples);
@@ -284,8 +326,16 @@ export function connectLiveSttStream(
       closedByClient = true;
       pendingFrames.length = 0;
       clearAllPendingPartials();
-      if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
-        ws.close();
+      if (reconnectTimer) {
+        clearTimeout(reconnectTimer);
+        reconnectTimer = null;
+      }
+      const socket = ws;
+      if (
+        socket &&
+        (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)
+      ) {
+        socket.close();
       }
     },
   };
