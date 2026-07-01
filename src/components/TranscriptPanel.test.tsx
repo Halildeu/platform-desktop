@@ -76,6 +76,79 @@ describe('TranscriptPanel', () => {
     expect(screen.queryByText('Bağlantı kuruluyor')).not.toBeInTheDocument();
   });
 
+  it('runs direct stream preflight before recording starts', async () => {
+    const onPreflight = vi.fn();
+
+    render(
+      <TranscriptPanel
+        session={initialTranscriptSession()}
+        stream={{
+          directConfigured: true,
+          directActive: false,
+          disabledReason: null,
+          preflight: {
+            status: 'idle',
+            message: null,
+            checkedAtMs: null,
+            elapsedMs: null,
+            stage: null,
+          },
+          onPreflight,
+        }}
+      />,
+    );
+
+    await userEvent.click(screen.getByRole('button', { name: 'Bağlantı testi' }));
+
+    expect(onPreflight).toHaveBeenCalledTimes(1);
+  });
+
+  it('renders direct stream preflight result', () => {
+    render(
+      <TranscriptPanel
+        session={initialTranscriptSession()}
+        stream={{
+          directConfigured: true,
+          directActive: false,
+          disabledReason: null,
+          preflight: {
+            status: 'ready',
+            message: 'Direct STT stream hazir.',
+            checkedAtMs: 1781820000000,
+            elapsedMs: 240,
+            stage: 'live_model',
+          },
+          onPreflight: vi.fn(),
+        }}
+      />,
+    );
+
+    expect(screen.getByText('Direct STT stream hazir. · 240 ms')).toBeInTheDocument();
+  });
+
+  it('renders direct stream preflight error', () => {
+    render(
+      <TranscriptPanel
+        session={initialTranscriptSession()}
+        stream={{
+          directConfigured: true,
+          directActive: false,
+          disabledReason: null,
+          preflight: {
+            status: 'error',
+            message: 'Direct STT baglanti hatasi.',
+            checkedAtMs: 1781820000000,
+            elapsedMs: null,
+            stage: null,
+          },
+          onPreflight: vi.fn(),
+        }}
+      />,
+    );
+
+    expect(screen.getByText('Direct STT baglanti hatasi.')).toHaveClass('inline-error');
+  });
+
   it('renders newest transcript segment first while keeping statuses visible', () => {
     const recording = startTranscriptSession(initialTranscriptSession(), {
       sessionId: 'SES-1',

@@ -6,6 +6,7 @@ import {
   type TranscriptSegmentStatus,
   type TranscriptSessionState,
 } from '../transcript/session-transcript';
+import type { LiveSttPreflightState } from '../audio/live-stt-preflight';
 import type { LiveSttStreamStatusEvent } from '../audio/live-stt-stream';
 
 const TRANSCRIPT_LAG_WARN_MS = 5_000;
@@ -21,6 +22,8 @@ export interface TranscriptPanelProps {
     audioActive?: boolean;
     lastAudioAtMs?: number | null;
     disabledReason: string | null;
+    preflight?: LiveSttPreflightState;
+    onPreflight?: () => void;
   };
 }
 
@@ -197,6 +200,27 @@ function streamTimestampLabel(value: number | null | undefined): string {
   return formatClock(value);
 }
 
+function preflightStatusLabel(preflight: LiveSttPreflightState | undefined): string | null {
+  if (!preflight || preflight.status === 'idle') {
+    return null;
+  }
+  if (preflight.status === 'checking') {
+    return preflight.message ?? 'Direct STT stream kontrol ediliyor...';
+  }
+  const elapsed =
+    typeof preflight.elapsedMs === 'number' && Number.isFinite(preflight.elapsedMs)
+      ? ` · ${preflight.elapsedMs} ms`
+      : '';
+  return `${preflight.message ?? 'Direct STT test sonucu alindi.'}${elapsed}`;
+}
+
+function preflightMessageClass(preflight: LiveSttPreflightState | undefined): string {
+  if (preflight?.status === 'error') {
+    return 'inline-error';
+  }
+  return 'export-message';
+}
+
 function segmentSourceLabel(source: string | undefined): string {
   if (source === 'direct-stream') {
     return 'Direct STT';
@@ -315,6 +339,10 @@ export function TranscriptPanel({ session, stream }: TranscriptPanelProps): Reac
   const lastTranscriptAtMs = latestTranscriptReceivedAtMs(session);
   const recordingActive = session.lifecycle === 'recording';
   const lagClass = transcriptLagClass(stream, lastTranscriptAtMs, recordingActive);
+  const canRunPreflight = Boolean(
+    stream?.directConfigured && stream.onPreflight && !recordingActive,
+  );
+  const preflightLabel = preflightStatusLabel(stream?.preflight);
 
   const handleCopyDiagnostics = async (): Promise<void> => {
     try {
@@ -343,6 +371,16 @@ export function TranscriptPanel({ session, stream }: TranscriptPanelProps): Reac
           </p>
         </div>
         <div className="panel-header-actions">
+          {canRunPreflight ? (
+            <button
+              className="secondary-action compact-action"
+              type="button"
+              onClick={stream?.onPreflight}
+              disabled={stream?.preflight?.status === 'checking'}
+            >
+              {stream?.preflight?.status === 'checking' ? 'Test ediliyor...' : 'Bağlantı testi'}
+            </button>
+          ) : null}
           <button
             className="secondary-action compact-action"
             type="button"
@@ -404,6 +442,9 @@ export function TranscriptPanel({ session, stream }: TranscriptPanelProps): Reac
         </div>
       </div>
 
+      {preflightLabel ? (
+        <p className={preflightMessageClass(stream?.preflight)}>{preflightLabel}</p>
+      ) : null}
       {diagnosticMessage ? <p className="export-message">{diagnosticMessage}</p> : null}
       {session.error ? <p className="inline-error">{session.error}</p> : null}
 

@@ -9,7 +9,16 @@ vi.mock('./audio/capture', () => ({
   startRecording: vi.fn(),
 }));
 
+vi.mock('./audio/live-stt-preflight', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./audio/live-stt-preflight')>();
+  return {
+    ...actual,
+    testLiveSttStreamConnection: vi.fn(),
+  };
+});
+
 import { startRecording } from './audio/capture';
+import { testLiveSttStreamConnection } from './audio/live-stt-preflight';
 import App from './App';
 
 interface TestTranscriptGatewayEvent {
@@ -210,6 +219,30 @@ describe('App recorder readiness', () => {
     await waitFor(() => {
       expect(screen.getByRole('button', { name: 'Kaydet' })).toBeEnabled();
     });
+  });
+
+  it('direct STT baglanti testini kayit oncesi calistirir', async () => {
+    installElectronApiMock({
+      meetingId: '22222222-2222-4222-8222-222222222222',
+      deviceId: 'desktop-1',
+      ready: true,
+      reason: null,
+      liveSttStreamUrl: 'ws://127.0.0.1:18220/ws/stream',
+      liveSttStreamReason: null,
+    });
+    vi.mocked(testLiveSttStreamConnection).mockResolvedValue({
+      ok: true,
+      message: 'Direct STT stream hazir.',
+      elapsedMs: 240,
+      stage: 'live_model',
+    });
+
+    render(<App />);
+
+    await userEvent.click(await screen.findByRole('button', { name: 'Bağlantı testi' }));
+
+    expect(testLiveSttStreamConnection).toHaveBeenCalledWith('ws://127.0.0.1:18220/ws/stream');
+    expect(await screen.findByText('Direct STT stream hazir. · 240 ms')).toBeInTheDocument();
   });
 
   it('kayit baslatma cevapsiz kalirsa butonu serbest birakir', async () => {

@@ -1,6 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
 
 import { type Recorder, startRecording } from './audio/capture';
+import {
+  initialLiveSttPreflightState,
+  testLiveSttStreamConnection,
+  type LiveSttPreflightState,
+} from './audio/live-stt-preflight';
 import type { LiveSttStreamStatusEvent, LiveSttTranscriptEvent } from './audio/live-stt-stream';
 import {
   ConsentDialog,
@@ -218,6 +223,9 @@ function App() {
   const [liveStreamActive, setLiveStreamActive] = useState(false);
   const [liveStreamReady, setLiveStreamReady] = useState(false);
   const [liveStreamStatus, setLiveStreamStatus] = useState<LiveSttStreamStatusEvent | null>(null);
+  const [liveStreamPreflight, setLiveStreamPreflight] = useState<LiveSttPreflightState>(
+    initialLiveSttPreflightState,
+  );
   const [audioRms, setAudioRms] = useState<number | null>(null);
   const [lastAudioAtMs, setLastAudioAtMs] = useState<number | null>(null);
   const recorderRef = useRef<Recorder | null>(null);
@@ -240,6 +248,10 @@ function App() {
 
   useEffect(() => {
     directStreamConfiguredRef.current = Boolean(recorderConfig?.liveSttStreamUrl);
+  }, [recorderConfig?.liveSttStreamUrl]);
+
+  useEffect(() => {
+    setLiveStreamPreflight(initialLiveSttPreflightState);
   }, [recorderConfig?.liveSttStreamUrl]);
 
   useEffect(() => {
@@ -437,6 +449,7 @@ function App() {
       setLiveStreamActive(false);
       setLiveStreamReady(false);
       setLiveStreamStatus(null);
+      setLiveStreamPreflight(initialLiveSttPreflightState);
       setAudioRms(null);
       setLastAudioAtMs(null);
       setTranscriptSession(initialTranscriptSession());
@@ -597,6 +610,48 @@ function App() {
     }
   };
 
+  const handleLiveStreamPreflight = async (): Promise<void> => {
+    const streamUrl = recorderConfig?.liveSttStreamUrl;
+    if (!streamUrl) {
+      setLiveStreamPreflight({
+        status: 'error',
+        message: recorderConfig?.liveSttStreamReason ?? 'LIVE_STT_STREAM_URL tanimli degil.',
+        checkedAtMs: Date.now(),
+        elapsedMs: null,
+        stage: null,
+      });
+      return;
+    }
+
+    setLiveStreamPreflight({
+      status: 'checking',
+      message: 'Direct STT stream kontrol ediliyor...',
+      checkedAtMs: null,
+      elapsedMs: null,
+      stage: null,
+    });
+    try {
+      const result = await testLiveSttStreamConnection(streamUrl);
+      setLiveStreamPreflight({
+        status: result.ok ? 'ready' : 'error',
+        message: result.message,
+        checkedAtMs: Date.now(),
+        elapsedMs: result.elapsedMs,
+        stage: result.stage,
+      });
+    } catch (error) {
+      setLiveStreamPreflight({
+        status: 'error',
+        message: `Direct STT test hatasi: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+        checkedAtMs: Date.now(),
+        elapsedMs: null,
+        stage: null,
+      });
+    }
+  };
+
   const handleStop = async (): Promise<void> => {
     try {
       await recorderRef.current?.stop();
@@ -726,6 +781,8 @@ function App() {
                 audioActive: typeof audioRms === 'number' && audioRms >= ACTIVE_AUDIO_RMS,
                 lastAudioAtMs,
                 disabledReason: recorderConfig?.liveSttStreamReason ?? null,
+                preflight: liveStreamPreflight,
+                onPreflight: recording ? undefined : () => void handleLiveStreamPreflight(),
               }}
             />
             <SummaryPanel intelligence={meetingIntelligence} transcript={transcriptSession} />
