@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 
 import { type Recorder, startRecording } from './audio/capture';
-import type { LiveSttTranscriptEvent } from './audio/live-stt-stream';
+import type { LiveSttStreamStatusEvent, LiveSttTranscriptEvent } from './audio/live-stt-stream';
 import {
   ConsentDialog,
   CONSENT_VERSION,
@@ -198,6 +198,7 @@ function App() {
   const [error, setError] = useState('');
   const [liveStreamActive, setLiveStreamActive] = useState(false);
   const [liveStreamReady, setLiveStreamReady] = useState(false);
+  const [liveStreamStatus, setLiveStreamStatus] = useState<LiveSttStreamStatusEvent | null>(null);
   const [audioRms, setAudioRms] = useState<number | null>(null);
   const [lastAudioAtMs, setLastAudioAtMs] = useState<number | null>(null);
   const recorderRef = useRef<Recorder | null>(null);
@@ -409,6 +410,7 @@ function App() {
       pendingLiveTranscriptEventsRef.current = [];
       setLiveStreamActive(false);
       setLiveStreamReady(false);
+      setLiveStreamStatus(null);
       setAudioRms(null);
       setLastAudioAtMs(null);
       setTranscriptSession(initialTranscriptSession());
@@ -467,6 +469,7 @@ function App() {
       liveStreamHasEventsRef.current = false;
       setLiveStreamActive(false);
       setLiveStreamReady(false);
+      setLiveStreamStatus(null);
       setAudioRms(null);
       setLastAudioAtMs(null);
       transcriptSessionIdRef.current = null;
@@ -475,6 +478,12 @@ function App() {
         liveSttStreamUrl: recorderConfig.liveSttStreamUrl,
         onLiveStreamReady: () => {
           setLiveStreamReady(true);
+        },
+        onLiveStreamStatus: (event) => {
+          setLiveStreamStatus(event);
+          if (event.status !== 'ready') {
+            setLiveStreamReady(false);
+          }
         },
         onAudioActivity: (activity) => {
           setAudioRms(activity.rms);
@@ -514,6 +523,7 @@ function App() {
         pendingLiveTranscriptEventsRef.current = [];
         setLiveStreamActive(false);
         setLiveStreamReady(false);
+        setLiveStreamStatus(null);
         setAudioRms(null);
         setLastAudioAtMs(null);
         setRecording(false);
@@ -550,6 +560,7 @@ function App() {
       pendingLiveTranscriptEventsRef.current = [];
       setLiveStreamActive(false);
       setLiveStreamReady(false);
+      setLiveStreamStatus(null);
       setAudioRms(null);
       setLastAudioAtMs(null);
       setError(message);
@@ -567,6 +578,7 @@ function App() {
       pendingLiveTranscriptEventsRef.current = [];
       setLiveStreamActive(false);
       setLiveStreamReady(false);
+      setLiveStreamStatus(null);
       setAudioRms(null);
       setLastAudioAtMs(null);
       setStatus('Kayıt tamamlandı, gönderildi.');
@@ -582,6 +594,7 @@ function App() {
       setRecording(false);
       setLiveStreamActive(false);
       setLiveStreamReady(false);
+      setLiveStreamStatus(null);
       setAudioRms(null);
       setLastAudioAtMs(null);
     }
@@ -681,6 +694,7 @@ function App() {
               stream={{
                 directConfigured: Boolean(recorderConfig?.liveSttStreamUrl),
                 directReady: liveStreamReady,
+                directStatus: liveStreamStatus,
                 directActive: liveStreamActive,
                 audioRms,
                 audioActive: typeof audioRms === 'number' && audioRms >= ACTIVE_AUDIO_RMS,

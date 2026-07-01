@@ -5,12 +5,14 @@ import {
   transcriptStatusLabel,
   type TranscriptSessionState,
 } from '../transcript/session-transcript';
+import type { LiveSttStreamStatusEvent } from '../audio/live-stt-stream';
 
 export interface TranscriptPanelProps {
   session: TranscriptSessionState;
   stream?: {
     directConfigured: boolean;
     directReady?: boolean;
+    directStatus?: LiveSttStreamStatusEvent | null;
     directActive: boolean;
     audioRms?: number | null;
     audioActive?: boolean;
@@ -32,6 +34,9 @@ function captureMode(hasLoopback: boolean): string {
 }
 
 function streamModeLabel(stream: TranscriptPanelProps['stream']): string {
+  if (stream?.directStatus?.status === 'reconnecting') {
+    return 'Direct stream';
+  }
   if (stream?.directActive) {
     return 'Direct stream';
   }
@@ -47,7 +52,37 @@ function streamModeLabel(stream: TranscriptPanelProps['stream']): string {
   return 'Gateway event';
 }
 
+function streamLoadingStageLabel(stage: string | undefined): string {
+  if (stage === 'live_model') {
+    return 'canlı model';
+  }
+  if (stage === 'final_model') {
+    return 'final model';
+  }
+  return 'model';
+}
+
 function streamModeDetail(stream: TranscriptPanelProps['stream']): string {
+  const status = stream?.directStatus;
+  if (status?.status === 'reconnecting') {
+    const attempt =
+      typeof status.attempt === 'number' && typeof status.maxAttempts === 'number'
+        ? ` (${status.attempt}/${status.maxAttempts})`
+        : '';
+    return `Yeniden bağlanıyor${attempt}`;
+  }
+  if (status?.status === 'connecting') {
+    return 'Bağlantı kuruluyor';
+  }
+  if (status?.status === 'loading') {
+    return `Model yükleniyor: ${streamLoadingStageLabel(status.stage)}`;
+  }
+  if (status?.status === 'error') {
+    return 'Bağlantı hatası';
+  }
+  if (status?.status === 'closed') {
+    return 'Kapalı';
+  }
   if (stream?.directActive) {
     return 'Kelime akışı aktif';
   }

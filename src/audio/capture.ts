@@ -15,6 +15,7 @@ import {
   connectLiveSttStream,
   type LiveSttTranscriptEvent,
   type LiveSttStreamConnection,
+  type LiveSttStreamStatusEvent,
 } from './live-stt-stream';
 import { encodeChunk, resampleLinear } from './pcm-encode';
 import { FrameBuffer } from './frame-buffer';
@@ -40,6 +41,7 @@ export interface Recorder {
 export interface StartRecordingOptions {
   liveSttStreamUrl?: string | null;
   onLiveStreamReady?: () => void;
+  onLiveStreamStatus?: (event: LiveSttStreamStatusEvent) => void;
   onAudioActivity?: (activity: { rms: number; capturedAtMs: number }) => void;
   onLiveTranscriptEvent?: (event: LiveSttTranscriptEvent) => void;
   onLiveTranscriptError?: (err: Error) => void;
@@ -247,6 +249,7 @@ export async function startRecording(
   if (options.liveSttStreamUrl) {
     liveStream = connectLiveSttStream(options.liveSttStreamUrl, {
       onReady: options.onLiveStreamReady,
+      onStatus: options.onLiveStreamStatus,
       onTranscriptEvent: options.onLiveTranscriptEvent,
       onError: options.onLiveTranscriptError,
     });

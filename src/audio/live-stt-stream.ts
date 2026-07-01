@@ -10,8 +10,26 @@ export interface LiveSttTranscriptEvent {
   source?: string | null;
 }
 
+export type LiveSttStreamStatus =
+  | 'connecting'
+  | 'loading'
+  | 'ready'
+  | 'reconnecting'
+  | 'closed'
+  | 'error';
+
+export interface LiveSttStreamStatusEvent {
+  status: LiveSttStreamStatus;
+  attempt?: number;
+  maxAttempts?: number;
+  retryDelayMs?: number;
+  reason?: string;
+  stage?: string;
+}
+
 export interface LiveSttStreamCallbacks {
   onReady?: () => void;
+  onStatus?: (event: LiveSttStreamStatusEvent) => void;
   onTranscriptEvent?: (event: LiveSttTranscriptEvent) => void;
   onError?: (error: Error) => void;
 }
@@ -45,7 +63,7 @@ interface LiveSttServerError {
 }
 
 type LiveSttServerEvent =
-  | { type: 'loading' }
+  | { type: 'loading'; stage?: string }
   | { type: 'ready' }
   | { type: 'debug' }
   | LiveSttServerPartial
@@ -147,6 +165,10 @@ export function connectLiveSttStream(
     callbacks.onError?.(new Error(message));
   };
 
+  const emitStatus = (event: LiveSttStreamStatusEvent): void => {
+    callbacks.onStatus?.(event);
+  };
+
   const flushPending = (): void => {
     const socket = ws;
     if (!ready || !socket || socket.readyState !== WebSocket.OPEN) {
@@ -172,6 +194,7 @@ export function connectLiveSttStream(
     }
 
     ready = false;
+    emitStatus(reconnectAttempts > 0 ? { status: 'reconnecting' } : { status: 'connecting' });
     const socket = new WebSocket(streamUrl);
     ws = socket;
 
@@ -182,15 +205,24 @@ export function connectLiveSttStream(
 
       ready = false;
       if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
+        emitStatus({ status: 'error', reason });
         emitError(`Live STT stream yeniden kurulamadı: ${reason}`);
         return;
       }
 
       reconnectAttempts += 1;
+      const retryDelayMs = reconnectDelay();
+      emitStatus({
+        status: 'reconnecting',
+        attempt: reconnectAttempts,
+        maxAttempts: MAX_RECONNECT_ATTEMPTS,
+        retryDelayMs,
+        reason,
+      });
       reconnectTimer = setTimeout(() => {
         reconnectTimer = null;
         connect();
-      }, reconnectDelay());
+      }, retryDelayMs);
     };
 
     socket.addEventListener('message', (message) => {
@@ -202,8 +234,14 @@ export function connectLiveSttStream(
       if (event.type === 'ready') {
         ready = true;
         reconnectAttempts = 0;
+        emitStatus({ status: 'ready' });
         callbacks.onReady?.();
         flushPending();
+        return;
+      }
+
+      if (event.type === 'loading') {
+        emitStatus({ status: 'loading', stage: event.stage });
         return;
       }
 
@@ -326,6 +364,7 @@ export function connectLiveSttStream(
       closedByClient = true;
       pendingFrames.length = 0;
       clearAllPendingPartials();
+      emitStatus({ status: 'closed' });
       if (reconnectTimer) {
         clearTimeout(reconnectTimer);
         reconnectTimer = null;

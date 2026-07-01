@@ -2,7 +2,11 @@
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { connectLiveSttStream, type LiveSttTranscriptEvent } from './live-stt-stream';
+import {
+  connectLiveSttStream,
+  type LiveSttStreamStatusEvent,
+  type LiveSttTranscriptEvent,
+} from './live-stt-stream';
 
 class FakeWebSocket extends EventTarget {
   static CONNECTING = 0;
@@ -46,10 +50,12 @@ describe('connectLiveSttStream', () => {
   it('buffers audio until ready and emits same-id partial/final transcript updates', () => {
     vi.stubGlobal('WebSocket', FakeWebSocket);
     const events: LiveSttTranscriptEvent[] = [];
+    const statuses: LiveSttStreamStatusEvent[] = [];
     const onReady = vi.fn();
 
     const stream = connectLiveSttStream('ws://127.0.0.1:18220/ws/stream', {
       onReady,
+      onStatus: (event) => statuses.push(event),
       onTranscriptEvent: (event) => events.push(event),
     });
     const ws = FakeWebSocket.instances[0];
@@ -59,9 +65,12 @@ describe('connectLiveSttStream', () => {
     expect(ws?.sent).toHaveLength(0);
 
     ws?.open();
+    ws?.message({ type: 'loading', stage: 'live_model' });
     ws?.message({ type: 'ready' });
     expect(onReady).toHaveBeenCalledTimes(1);
     expect(ws?.sent).toHaveLength(1);
+    expect(statuses.map((event) => event.status)).toEqual(['connecting', 'loading', 'ready']);
+    expect(statuses[1]?.stage).toBe('live_model');
 
     ws?.message({
       type: 'partial',
@@ -183,8 +192,12 @@ describe('connectLiveSttStream', () => {
     vi.useFakeTimers();
     vi.stubGlobal('WebSocket', FakeWebSocket);
     const onReady = vi.fn();
+    const statuses: LiveSttStreamStatusEvent[] = [];
 
-    const stream = connectLiveSttStream('ws://127.0.0.1:18220/ws/stream', { onReady });
+    const stream = connectLiveSttStream('ws://127.0.0.1:18220/ws/stream', {
+      onReady,
+      onStatus: (event) => statuses.push(event),
+    });
     const first = FakeWebSocket.instances[0];
 
     first?.open();
@@ -195,6 +208,13 @@ describe('connectLiveSttStream', () => {
     first?.close();
     stream.send(new Float32Array([0.3, 0.4]));
     expect(FakeWebSocket.instances).toHaveLength(1);
+    expect(statuses).toContainEqual({
+      status: 'reconnecting',
+      attempt: 1,
+      maxAttempts: 8,
+      retryDelayMs: 250,
+      reason: 'bağlantı kapandı',
+    });
 
     vi.advanceTimersByTime(250);
     const second = FakeWebSocket.instances[1];

@@ -124,4 +124,40 @@ describe('TranscriptPanel', () => {
     expect(screen.getByText('Alınıyor · RMS 0.021')).toBeInTheDocument();
     expect(screen.getByText(clock(1781820009123))).toBeInTheDocument();
   });
+
+  it('surfaces direct stream reconnect state for operator triage', () => {
+    const session = startTranscriptSession(initialTranscriptSession(), {
+      sessionId: 'SES-1',
+      meetingId: '22222222-2222-4222-8222-222222222222',
+      deviceId: 'desktop-1',
+      hasLoopback: false,
+      startedAtMs: 1781820000123,
+    });
+
+    render(
+      <TranscriptPanel
+        session={session}
+        stream={{
+          directConfigured: true,
+          directReady: false,
+          directStatus: {
+            status: 'reconnecting',
+            attempt: 2,
+            maxAttempts: 8,
+            retryDelayMs: 500,
+            reason: 'bağlantı kapandı',
+          },
+          directActive: false,
+          audioRms: 0.018,
+          audioActive: true,
+          lastAudioAtMs: 1781820010123,
+          disabledReason: null,
+        }}
+      />,
+    );
+
+    expect(screen.getByText('Direct stream')).toBeInTheDocument();
+    expect(screen.getByText('Yeniden bağlanıyor (2/8)')).toBeInTheDocument();
+    expect(screen.getByText('Alınıyor · RMS 0.018')).toBeInTheDocument();
+  });
 });
