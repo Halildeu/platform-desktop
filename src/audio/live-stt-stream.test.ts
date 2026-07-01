@@ -37,6 +37,7 @@ class FakeWebSocket extends EventTarget {
 }
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.unstubAllGlobals();
   FakeWebSocket.instances = [];
 });
@@ -89,6 +90,87 @@ describe('connectLiveSttStream', () => {
       ['stream:0', 'draft', 'Merhaba'],
       ['stream:0', 'draft', 'Merhaba nasılsın'],
       ['stream:0', 'final', 'Merhaba nasılsın?'],
+    ]);
+
+    stream.close();
+  });
+
+  it('reveals multi-word partial payloads word-by-word on the same segment id', () => {
+    vi.useFakeTimers();
+    vi.stubGlobal('WebSocket', FakeWebSocket);
+    const events: LiveSttTranscriptEvent[] = [];
+
+    const stream = connectLiveSttStream('ws://127.0.0.1:18220/ws/stream', {
+      onTranscriptEvent: (event) => events.push(event),
+    });
+    const ws = FakeWebSocket.instances[0];
+
+    ws?.open();
+    ws?.message({ type: 'ready' });
+    ws?.message({
+      type: 'partial',
+      seq: 0,
+      confirmed: '',
+      tentative: 'Merhaba nasılsın bugün',
+      elapsed_ms: 180,
+      rms: 0.04,
+      source: 'medium',
+    });
+
+    expect(events.map((event) => [event.id, event.status, event.text])).toEqual([
+      ['stream:0', 'draft', 'Merhaba'],
+    ]);
+
+    vi.advanceTimersByTime(70);
+    expect(events.map((event) => [event.id, event.status, event.text])).toEqual([
+      ['stream:0', 'draft', 'Merhaba'],
+      ['stream:0', 'draft', 'Merhaba nasılsın'],
+    ]);
+
+    vi.advanceTimersByTime(70);
+    expect(events.map((event) => [event.id, event.status, event.text])).toEqual([
+      ['stream:0', 'draft', 'Merhaba'],
+      ['stream:0', 'draft', 'Merhaba nasılsın'],
+      ['stream:0', 'draft', 'Merhaba nasılsın bugün'],
+    ]);
+
+    stream.close();
+  });
+
+  it('cancels pending word reveal when final transcript arrives', () => {
+    vi.useFakeTimers();
+    vi.stubGlobal('WebSocket', FakeWebSocket);
+    const events: LiveSttTranscriptEvent[] = [];
+
+    const stream = connectLiveSttStream('ws://127.0.0.1:18220/ws/stream', {
+      onTranscriptEvent: (event) => events.push(event),
+    });
+    const ws = FakeWebSocket.instances[0];
+
+    ws?.open();
+    ws?.message({ type: 'ready' });
+    ws?.message({
+      type: 'partial',
+      seq: 0,
+      confirmed: '',
+      tentative: 'Merhaba nasılsın bugün',
+      elapsed_ms: 180,
+      rms: 0.04,
+      source: 'medium',
+    });
+    ws?.message({
+      type: 'final',
+      seq: 0,
+      text: 'Merhaba nasılsın bugün.',
+      elapsed_ms: 320,
+      rms: 0.04,
+    });
+
+    vi.advanceTimersByTime(500);
+
+    expect(events.map((event) => [event.id, event.status, event.text])).toEqual([
+      ['stream:0', 'draft', 'Merhaba'],
+      ['stream:0', 'final', 'Merhaba nasılsın bugün.'],
     ]);
 
     stream.close();
