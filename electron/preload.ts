@@ -104,6 +104,15 @@ const electronAPI = {
       scheduledStart?: string | null;
       scheduledEnd?: string | null;
     }> => ipcRenderer.invoke('meeting:create-contract', payload),
+    analyze: (payload: {
+      meetingId: string;
+      request: {
+        transcript: string;
+        meeting_id?: string | null;
+        session_id?: string | null;
+        segments?: Array<{ text: string; start: number; end?: number }>;
+      };
+    }): Promise<unknown> => ipcRenderer.invoke('meeting:analyze', payload),
   },
 };
 

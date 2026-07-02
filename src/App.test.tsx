@@ -79,6 +79,7 @@ function installElectronApiMock(recorderConfig: {
         title: 'Faz 24 desktop recording',
         status: 'SCHEDULED',
       }),
+      analyze: vi.fn(),
     },
     audio: {
       recorderConfig: vi.fn().mockResolvedValue({
@@ -310,7 +311,7 @@ describe('App recorder readiness', () => {
       '22222222-2222-4222-8222-222222222222',
       'desktop-1',
       expect.objectContaining({
-        liveSttStreamUrl: 'ws://127.0.0.1:18220/ws/stream',
+        liveSttStreamUrl: null,
       }),
     );
     expect(

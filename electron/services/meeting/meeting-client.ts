@@ -36,6 +36,32 @@ export interface CreateMeetingContractArgs {
   scheduledEnd?: string;
 }
 
+export interface MeetingAiAnalyzeSegment {
+  text: string;
+  start: number;
+  end?: number;
+}
+
+export interface MeetingAiAnalyzeRequest {
+  transcript: string;
+  meeting_id: string;
+  session_id?: string | null;
+  segments: MeetingAiAnalyzeSegment[];
+}
+
+export interface MeetingAiAnalyzeArgs {
+  meetingId: string;
+  request: MeetingAiAnalyzeRequest;
+}
+
+export type MeetingAiAnalyzeResponse = Record<string, unknown> & {
+  summary?: string | null;
+  decisions?: unknown[] | null;
+  action_items?: unknown[] | null;
+  citations?: unknown[] | null;
+  summary_citations?: unknown[] | null;
+};
+
 function isLocalHttp(url: URL): boolean {
   return (
     url.protocol === 'http:' &&
@@ -68,6 +94,13 @@ export function loadMeetingConfig(env: NodeJS.ProcessEnv = process.env): Meeting
 
 export function meetingsUrl(cfg: MeetingClientConfig): string {
   return `${cfg.baseUrl}${API}`;
+}
+
+export function meetingIntelligenceAnalyzeUrl(cfg: MeetingClientConfig, meetingId: string): string {
+  if (!MEETING_ID_PATTERN.test(meetingId)) {
+    throw new Error('meetingId must be a canonical UUID');
+  }
+  return `${meetingsUrl(cfg)}/${meetingId}/intelligence/analyze`;
 }
 
 function delay(ms: number): Promise<void> {
@@ -107,7 +140,7 @@ async function retryDelay(attempt: number): Promise<void> {
   await delay(CREATE_CONTRACT_RETRY_DELAY_MS * attempt);
 }
 
-async function httpErrorMessage(res: Response): Promise<string> {
+async function httpErrorMessage(res: Response, operation: string): Promise<string> {
   const contentType = res.headers?.get('content-type') ?? '';
   let body = '';
   try {
@@ -144,7 +177,7 @@ async function httpErrorMessage(res: Response): Promise<string> {
   }
 
   const suffix = fields.length > 0 ? ` ${fields.join(' ')}` : '';
-  return `createMeetingContract failed: ${res.status}${suffix}`;
+  return `${operation} failed: ${res.status}${suffix}`;
 }
 
 function normalizeTitle(title: string | undefined): string {
@@ -176,6 +209,33 @@ function parseMeetingContract(value: unknown): MeetingContract {
     scheduledStart: typeof record.scheduledStart === 'string' ? record.scheduledStart : null,
     scheduledEnd: typeof record.scheduledEnd === 'string' ? record.scheduledEnd : null,
   };
+}
+
+function parseMeetingAiAnalyzeResponse(value: unknown): MeetingAiAnalyzeResponse {
+  if (!value || typeof value !== 'object') {
+    throw new Error('meeting-ai response is not an object');
+  }
+  const record = value as Record<string, unknown>;
+  const arrayFields = [
+    'decisions',
+    'action_items',
+    'citations',
+    'summary_citations',
+    'rejected_claims',
+  ];
+  for (const field of arrayFields) {
+    if (record[field] !== undefined && record[field] !== null && !Array.isArray(record[field])) {
+      throw new Error(`meeting-ai response ${field} is not an array`);
+    }
+  }
+  if (
+    record.summary !== undefined &&
+    record.summary !== null &&
+    typeof record.summary !== 'string'
+  ) {
+    throw new Error('meeting-ai response summary is not a string');
+  }
+  return record as MeetingAiAnalyzeResponse;
 }
 
 export async function createMeetingContract(
@@ -223,10 +283,62 @@ export async function createMeetingContract(
         await retryDelay(attempt);
         continue;
       }
-      throw new Error(await httpErrorMessage(res));
+      throw new Error(await httpErrorMessage(res, 'createMeetingContract'));
     }
     return parseMeetingContract(await res.json());
   }
 
   throw new Error('createMeetingContract failed: retry loop exhausted');
+}
+
+export async function analyzeMeetingIntelligence(
+  cfg: MeetingClientConfig,
+  jwt: string,
+  args: MeetingAiAnalyzeArgs,
+): Promise<MeetingAiAnalyzeResponse> {
+  const body = {
+    ...args.request,
+    meeting_id: args.meetingId,
+    segments: args.request.segments ?? [],
+  };
+  const requestInit = {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${jwt}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(body),
+  };
+
+  for (let attempt = 1; attempt <= CREATE_CONTRACT_MAX_ATTEMPTS; attempt += 1) {
+    let res: Response;
+    try {
+      res = await desktopFetch(meetingIntelligenceAnalyzeUrl(cfg, args.meetingId), requestInit);
+    } catch (error) {
+      if (attempt < CREATE_CONTRACT_MAX_ATTEMPTS && isRetryableNetworkError(error)) {
+        await retryDelay(attempt);
+        continue;
+      }
+      if (isRetryableNetworkError(error)) {
+        throw new Error(
+          `analyzeMeetingIntelligence failed before response after ${attempt} attempts: network=${retryableNetworkLabel(
+            error,
+          )}`,
+        );
+      }
+      throw error instanceof Error ? error : new Error(String(error));
+    }
+
+    if (!res.ok) {
+      if (attempt < CREATE_CONTRACT_MAX_ATTEMPTS && RETRYABLE_HTTP_STATUS.has(res.status)) {
+        await retryDelay(attempt);
+        continue;
+      }
+      throw new Error(await httpErrorMessage(res, 'analyzeMeetingIntelligence'));
+    }
+
+    return parseMeetingAiAnalyzeResponse(await res.json());
+  }
+
+  throw new Error('analyzeMeetingIntelligence failed: retry loop exhausted');
 }

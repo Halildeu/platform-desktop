@@ -1,6 +1,12 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { createMeetingContract, loadMeetingConfig, meetingsUrl } from './meeting-client';
+import {
+  analyzeMeetingIntelligence,
+  createMeetingContract,
+  loadMeetingConfig,
+  meetingIntelligenceAnalyzeUrl,
+  meetingsUrl,
+} from './meeting-client';
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -30,6 +36,14 @@ describe('meeting-client', () => {
   it('builds the admin meetings URL', () => {
     const cfg = loadMeetingConfig({ MEETING_BASE_URL: 'https://testai.acik.com' });
     expect(meetingsUrl(cfg)).toBe('https://testai.acik.com/api/v1/admin/meetings');
+  });
+
+  it('builds the Meeting AI analyze URL behind the admin meeting route', () => {
+    const cfg = loadMeetingConfig({ MEETING_BASE_URL: 'https://testai.acik.com' });
+    expect(meetingIntelligenceAnalyzeUrl(cfg, '33333333-3333-4333-8333-333333333333')).toBe(
+      'https://testai.acik.com/api/v1/admin/meetings/33333333-3333-4333-8333-333333333333/intelligence/analyze',
+    );
+    expect(() => meetingIntelligenceAnalyzeUrl(cfg, 'MTG-1')).toThrow('canonical UUID');
   });
 
   it('creates a meeting contract with the bearer token in main process', async () => {
@@ -115,5 +129,79 @@ describe('meeting-client', () => {
     await expect(
       createMeetingContract({ baseUrl: 'https://testai.acik.com' }, 'JWT'),
     ).rejects.toThrow('canonical UUID');
+  });
+
+  it('submits Meeting AI analyze requests through the backend gateway with bearer auth', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        summary: 'Toplantı özeti üretildi.',
+        decisions: ['Gateway rotası kullanılacak'],
+        action_items: [{ text: 'Kanıt eklenecek', owner: 'Zeynep' }],
+        citations: [{ claim: 'Gateway rotası kullanılacak', source_index: 0, start_sec: 2 }],
+      }),
+      headers: new Headers({ 'content-type': 'application/json' }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await analyzeMeetingIntelligence({ baseUrl: 'https://testai.acik.com' }, 'JWT', {
+      meetingId: '33333333-3333-4333-8333-333333333333',
+      request: {
+        meeting_id: '33333333-3333-4333-8333-333333333333',
+        session_id: 'SES-1',
+        transcript: 'Canlı toplantı transkripti',
+        segments: [{ text: 'Canlı toplantı transkripti', start: 0 }],
+      },
+    });
+
+    expect(result.summary).toBe('Toplantı özeti üretildi.');
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://testai.acik.com/api/v1/admin/meetings/33333333-3333-4333-8333-333333333333/intelligence/analyze',
+      expect.objectContaining({
+        method: 'POST',
+        headers: {
+          Authorization: 'Bearer JWT',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          meeting_id: '33333333-3333-4333-8333-333333333333',
+          session_id: 'SES-1',
+          transcript: 'Canlı toplantı transkripti',
+          segments: [{ text: 'Canlı toplantı transkripti', start: 0 }],
+        }),
+      }),
+    );
+  });
+
+  it('keeps Meeting AI HTTP errors redacted from transcript content', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: false,
+        status: 403,
+        text: async () =>
+          JSON.stringify({
+            code: 'MEETING_AI_FORBIDDEN',
+            correlationId: 'cid-123',
+            retryable: false,
+            transcript: 'raw transcript must not appear',
+          }),
+        headers: new Headers({ 'content-type': 'application/json' }),
+      }),
+    );
+
+    await expect(
+      analyzeMeetingIntelligence({ baseUrl: 'https://testai.acik.com' }, 'JWT', {
+        meetingId: '33333333-3333-4333-8333-333333333333',
+        request: {
+          meeting_id: '33333333-3333-4333-8333-333333333333',
+          session_id: 'SES-1',
+          transcript: 'raw transcript must not appear',
+          segments: [],
+        },
+      }),
+    ).rejects.toThrow(
+      'analyzeMeetingIntelligence failed: 403 code=MEETING_AI_FORBIDDEN correlationId=cid-123 retryable=false',
+    );
   });
 });

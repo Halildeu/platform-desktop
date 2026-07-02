@@ -8,8 +8,15 @@ import {
   formatCitationTime,
   intelligenceStatusLabel,
   type IntelligenceCitation,
+  type MeetingIntelligenceResult,
   type MeetingIntelligenceState,
+  setMeetingIntelligenceResult,
 } from '../intelligence/meeting-intelligence';
+import {
+  meetingAiResultFromAnalyzeResponse,
+  type MeetingAiAnalyzeResponse,
+  type MeetingAiSubmitPayload,
+} from '../intelligence/meeting-ai-submit';
 import {
   analyzeTranscriptSourceReadiness,
   buildMeetingAiSourceGate,
@@ -26,10 +33,17 @@ export interface ExportAdapter {
   print(): void;
 }
 
+export interface MeetingAiSubmitAdapter {
+  analyze(payload: MeetingAiSubmitPayload): Promise<MeetingAiAnalyzeResponse>;
+}
+
 export interface SummaryPanelProps {
   intelligence: MeetingIntelligenceState;
   transcript?: TranscriptSessionState;
   exportAdapter?: ExportAdapter;
+  meetingAiSubmitAdapter?: MeetingAiSubmitAdapter;
+  onMeetingAiResult?: (result: MeetingIntelligenceResult) => void;
+  onMeetingAiError?: (message: string) => void;
 }
 
 const browserExportAdapter: ExportAdapter = {
@@ -50,6 +64,16 @@ const browserExportAdapter: ExportAdapter = {
   },
   print() {
     window.print();
+  },
+};
+
+const electronMeetingAiSubmitAdapter: MeetingAiSubmitAdapter = {
+  async analyze(payload) {
+    const response = await window.electronAPI?.meeting.analyze(payload);
+    if (!response || typeof response !== 'object') {
+      throw new Error('Meeting AI response is empty');
+    }
+    return response as MeetingAiAnalyzeResponse;
   },
 };
 
@@ -134,9 +158,17 @@ export function SummaryPanel({
   intelligence,
   transcript,
   exportAdapter = browserExportAdapter,
+  meetingAiSubmitAdapter = electronMeetingAiSubmitAdapter,
+  onMeetingAiResult,
+  onMeetingAiError,
 }: SummaryPanelProps): ReactElement {
   const [message, setMessage] = useState<string | null>(null);
-  const result = intelligence.status === 'ready' ? intelligence.result : null;
+  const [localSubmittedResult, setLocalSubmittedResult] = useState<{
+    meetingId: string | null;
+    sessionId: string | null;
+    result: MeetingIntelligenceResult;
+  } | null>(null);
+  const [isSubmittingMeetingAi, setIsSubmittingMeetingAi] = useState(false);
   const transcriptSourceSegments = transcriptSegments(transcript);
   const hasTranscriptSource = transcriptSourceSegments.length > 0;
   const transcriptReadiness = transcript
@@ -149,11 +181,22 @@ export function SummaryPanel({
     transcriptSourceSegments.length > 0
       ? transcriptSourceSegments[transcriptSourceSegments.length - 1]
       : null;
+  const visibleIntelligence = localSubmittedResult
+    ? setMeetingIntelligenceResult(
+        {
+          ...intelligence,
+          meetingId: localSubmittedResult.meetingId,
+          sessionId: localSubmittedResult.sessionId,
+        },
+        localSubmittedResult.result,
+      )
+    : intelligence;
+  const result = visibleIntelligence.status === 'ready' ? visibleIntelligence.result : null;
 
   const runExport = async (kind: 'copy' | 'markdown' | 'csv' | 'print'): Promise<void> => {
     setMessage(null);
     try {
-      const bundle = buildIntelligenceExport(intelligence);
+      const bundle = buildIntelligenceExport(visibleIntelligence);
       if (kind === 'copy') {
         await exportAdapter.copyText(bundle.markdown);
         setMessage('Markdown panoya kopyalandı.');
@@ -217,21 +260,63 @@ export function SummaryPanel({
     }
   };
 
+  const runMeetingAiSubmit = async (): Promise<void> => {
+    setMessage(null);
+    setIsSubmittingMeetingAi(true);
+    try {
+      if (!transcript) {
+        throw new Error('Transcript source is not ready');
+      }
+      const bundle = buildMeetingAiSourcePackage(transcript, Date.now(), {
+        consentVersion: CONSENT_VERSION,
+        consentTextHash: CONSENT_TEXT_HASH,
+        consentLocale: CONSENT_LOCALE,
+      });
+      if (!bundle.package.gate.can_submit || !bundle.package.meeting_id) {
+        throw new Error(
+          bundle.package.gate.blocked_by.join(', ') || 'Meeting AI kapısı hazır değil',
+        );
+      }
+      const response = await meetingAiSubmitAdapter.analyze({
+        meetingId: bundle.package.meeting_id,
+        request: bundle.package.request,
+      });
+      const submittedResult = meetingAiResultFromAnalyzeResponse(response);
+      setLocalSubmittedResult({
+        meetingId: bundle.package.meeting_id,
+        sessionId: bundle.package.session_id,
+        result: submittedResult,
+      });
+      onMeetingAiResult?.(submittedResult);
+      setMessage('Meeting AI sonucu alındı.');
+    } catch (error) {
+      const text = error instanceof Error ? error.message : String(error);
+      onMeetingAiError?.(text);
+      setMessage(`Meeting AI gönderimi hazır değil: ${text}`);
+    } finally {
+      setIsSubmittingMeetingAi(false);
+    }
+  };
+
   return (
     <section className="summary-panel" aria-labelledby="summary-title">
       <div className="panel-header">
         <div>
           <h2 id="summary-title">Toplantı Çıktısı</h2>
           <p className="panel-subtitle">
-            {intelligence.meetingId ? `Meeting ${intelligence.meetingId}` : 'Meeting seçilmedi'}
+            {visibleIntelligence.meetingId
+              ? `Meeting ${visibleIntelligence.meetingId}`
+              : 'Meeting seçilmedi'}
           </p>
         </div>
-        <span className={`state-pill state-${intelligence.status}`}>
-          {intelligenceStatusLabel(intelligence.status)}
+        <span className={`state-pill state-${visibleIntelligence.status}`}>
+          {intelligenceStatusLabel(visibleIntelligence.status)}
         </span>
       </div>
 
-      {intelligence.error ? <p className="inline-error">{intelligence.error}</p> : null}
+      {visibleIntelligence.error ? (
+        <p className="inline-error">{visibleIntelligence.error}</p>
+      ) : null}
 
       {result ? (
         <>
@@ -319,6 +404,14 @@ export function SummaryPanel({
       ) : hasTranscriptSource ? (
         <>
           <div className="summary-toolbar" aria-label="Transkript kaynak araçları">
+            <button
+              className="primary-action"
+              type="button"
+              disabled={!meetingAiGate.can_submit || isSubmittingMeetingAi}
+              onClick={() => void runMeetingAiSubmit()}
+            >
+              {isSubmittingMeetingAi ? 'Gönderiliyor...' : 'Meeting AI gönder'}
+            </button>
             <button
               className="secondary-action"
               type="button"
@@ -481,7 +574,7 @@ export function SummaryPanel({
       ) : (
         <div className="summary-empty">
           <strong>Toplantı çıktısı bekleniyor</strong>
-          <span>{emptyStateText(intelligence.status)}</span>
+          <span>{emptyStateText(visibleIntelligence.status)}</span>
         </div>
       )}
     </section>

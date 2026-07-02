@@ -6,7 +6,7 @@ import userEvent from '@testing-library/user-event';
 import '@testing-library/jest-dom/vitest';
 
 import { CONSENT_TEXT_HASH, CONSENT_VERSION } from './ConsentDialog';
-import { SummaryPanel, type ExportAdapter } from './SummaryPanel';
+import { SummaryPanel, type ExportAdapter, type MeetingAiSubmitAdapter } from './SummaryPanel';
 import {
   initialMeetingIntelligence,
   setMeetingIntelligenceResult,
@@ -299,5 +299,83 @@ describe('SummaryPanel', () => {
     expect(within(sourceSummary).getByText('2 final / 0 taslak')).toBeInTheDocument();
     expect(within(sourceSummary).getByText('18 sn')).toBeInTheDocument();
     expect(within(sourceSummary).getByText('%100')).toBeInTheDocument();
+  });
+
+  it('submits the ready transcript to Meeting AI via the backend gateway adapter', async () => {
+    const adapter: MeetingAiSubmitAdapter = {
+      analyze: vi.fn().mockResolvedValue({
+        schema_version: '5-adr0043',
+        summary: 'Transkript kaynağı doğrulandı; toplantı çıktısı gateway üzerinden üretildi.',
+        decisions: ['Meeting AI gönderimi backend gateway üzerinden yapılacak'],
+        action_items: [
+          {
+            text: 'Kaynak kalitesi ve KVKK sınırı PR kanıtına eklenecek',
+            owner: 'Zeynep',
+            due_date: '2026-07-03',
+          },
+        ],
+        citations: [
+          {
+            claim: 'Meeting AI gönderimi backend gateway üzerinden yapılacak',
+            source_index: 0,
+            start_sec: 3,
+            grounded: true,
+          },
+          {
+            claim: 'Kaynak kalitesi ve KVKK sınırı PR kanıtına eklenecek',
+            source_index: 1,
+            start_sec: 21,
+            grounded: true,
+          },
+        ],
+        backend: 'mock-meeting-ai',
+        model: 'unit-test',
+        redacted: false,
+        redaction_count: 0,
+        persisted: false,
+        storageMode: 'preview',
+      }),
+    };
+    const onMeetingAiResult = vi.fn();
+
+    render(
+      <SummaryPanel
+        intelligence={{ ...initialMeetingIntelligence(), status: 'waiting' }}
+        transcript={reportReadyTranscriptState()}
+        meetingAiSubmitAdapter={adapter}
+        onMeetingAiResult={onMeetingAiResult}
+      />,
+    );
+
+    await userEvent.click(screen.getByRole('button', { name: 'Meeting AI gönder' }));
+
+    await waitFor(() => {
+      expect(adapter.analyze).toHaveBeenCalledWith({
+        meetingId: '33333333-3333-4333-8333-333333333333',
+        request: expect.objectContaining({
+          meeting_id: '33333333-3333-4333-8333-333333333333',
+          session_id: 'SES-2',
+          transcript: expect.stringContaining('Canlı toplantı kaydı'),
+          segments: expect.any(Array),
+        }),
+      });
+    });
+    expect(await screen.findByText('Meeting AI sonucu alındı.')).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        'Transkript kaynağı doğrulandı; toplantı çıktısı gateway üzerinden üretildi.',
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText('Meeting AI gönderimi backend gateway üzerinden yapılacak'),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText('Kaynak kalitesi ve KVKK sınırı PR kanıtına eklenecek'),
+    ).toBeInTheDocument();
+    expect(onMeetingAiResult).toHaveBeenCalledWith(
+      expect.objectContaining({
+        providerLabel: 'mock-meeting-ai / unit-test / 5-adr0043',
+      }),
+    );
   });
 });

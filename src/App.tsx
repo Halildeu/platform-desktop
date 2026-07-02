@@ -27,6 +27,7 @@ import {
   initialMeetingIntelligence,
   markIntelligenceRecording,
   markIntelligenceWaiting,
+  setMeetingIntelligenceResult,
 } from './intelligence/meeting-intelligence';
 import { TranscriptPanel } from './components/TranscriptPanel';
 import {
@@ -606,15 +607,21 @@ function App() {
       if (!recorderConfig?.ready || !recorderConfig.meetingId) {
         throw new Error(recorderConfig?.reason ?? MEETING_ID_MISSING_MESSAGE);
       }
+      let liveSttStreamUrlForSession = recorderConfig.liveSttStreamUrl;
       if (recorderConfig.liveSttStreamUrl) {
         const preflight = await handleLiveStreamPreflight();
         if (!preflight.captureOk) {
           throw new Error(preflight.captureMessage);
         }
+        if (!preflight.streamOk) {
+          liveSttStreamUrlForSession = null;
+          directStreamConfiguredRef.current = false;
+        }
       }
       const meetingId = recorderConfig.meetingId;
       const deviceId = recorderConfig.deviceId;
       liveStreamHasEventsRef.current = false;
+      directStreamConfiguredRef.current = Boolean(liveSttStreamUrlForSession);
       setLiveStreamActive(false);
       setLiveStreamReady(false);
       setLiveStreamStatus(null);
@@ -623,7 +630,7 @@ function App() {
       transcriptSessionIdRef.current = null;
       pendingLiveTranscriptEventsRef.current = [];
       const rec = await startRecordingWithTimeout(meetingId, deviceId, {
-        liveSttStreamUrl: recorderConfig.liveSttStreamUrl,
+        liveSttStreamUrl: liveSttStreamUrlForSession,
         onLiveStreamReady: () => {
           setLiveStreamReady(true);
         },
@@ -976,7 +983,16 @@ function App() {
                 onPreflight: recording ? undefined : () => void handleLiveStreamPreflight(),
               }}
             />
-            <SummaryPanel intelligence={meetingIntelligence} transcript={transcriptSession} />
+            <SummaryPanel
+              intelligence={meetingIntelligence}
+              transcript={transcriptSession}
+              onMeetingAiResult={(result) =>
+                setMeetingIntelligence((current) => setMeetingIntelligenceResult(current, result))
+              }
+              onMeetingAiError={(message) =>
+                setMeetingIntelligence((current) => failMeetingIntelligence(current, message))
+              }
+            />
           </div>
         </section>
       </main>
