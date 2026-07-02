@@ -162,9 +162,15 @@ describe('session transcript state', () => {
       /^meeting-transcript-22222222-2222-4222-8222-222222222222-/,
     );
     expect(bundle.markdown).toContain('# Meeting Transcript');
+    expect(bundle.markdown).toContain('## Kaynak Hazırlık');
+    expect(bundle.markdown).toContain('- Durum: Kaynak toplanıyor');
+    expect(bundle.markdown).toContain('- Sonraki kapı: Kayıt bitişi');
+    expect(bundle.markdown).toContain('- Final oranı: %50');
     expect(bundle.markdown.indexOf('ilk satır')).toBeLessThan(
       bundle.markdown.indexOf('ikinci satır'),
     );
+    expect(bundle.text).toContain('Kaynak Hazırlık');
+    expect(bundle.text).toContain('Sonraki kapı: Kayıt bitişi');
     expect(bundle.text).toContain(`[${new Date(1781820002000).toISOString()} Final]`);
     expect(bundle.text).toContain('Konuşmacı: ilk satır');
   });
@@ -179,6 +185,7 @@ describe('session transcript state', () => {
     expect(analyzeTranscriptSourceReadiness(initialTranscriptSession())).toMatchObject({
       level: 'empty',
       label: 'Kaynak bekleniyor',
+      nextStepLabel: 'Kayıt kaynağı',
       wordCount: 0,
       finalCount: 0,
     });
@@ -201,6 +208,7 @@ describe('session transcript state', () => {
     expect(analyzeTranscriptSourceReadiness(collecting)).toMatchObject({
       level: 'collecting',
       label: 'Kaynak toplanıyor',
+      nextStepLabel: 'Kayıt bitişi',
       finalCount: 0,
       draftCount: 1,
     });
@@ -226,6 +234,7 @@ describe('session transcript state', () => {
     expect(analyzeTranscriptSourceReadiness(reportReady)).toMatchObject({
       level: 'ready',
       label: 'Çıktıya uygun',
+      nextStepLabel: 'Meeting AI',
       finalCount: 2,
       draftCount: 0,
       finalRatio: 1,

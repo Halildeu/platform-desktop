@@ -326,6 +326,11 @@ export function SummaryPanel({
                   <small>{transcriptReadiness.warnings.join(' ')}</small>
                 ) : null}
               </div>
+              <div className="source-next-step" aria-label="Sıradaki kapı">
+                <span>Sıradaki kapı</span>
+                <strong>{transcriptReadiness.nextStepLabel}</strong>
+                <small>{transcriptReadiness.nextStepDetail}</small>
+              </div>
               <div className="source-metrics" aria-label="Kaynak transkript özeti">
                 <div>
                   <span>Satır</span>

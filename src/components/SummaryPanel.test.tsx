@@ -189,6 +189,13 @@ describe('SummaryPanel', () => {
     expect(
       within(readiness).getByText('Canlı transkript rapor kaynağına ekleniyor.'),
     ).toBeInTheDocument();
+    const nextStep = screen.getByLabelText('Sıradaki kapı');
+    expect(within(nextStep).getByText('Kayıt bitişi')).toBeInTheDocument();
+    expect(
+      within(nextStep).getByText(
+        'Toplantı çıktısı için kayıt bitişi ve final transkript satırları bekleniyor.',
+      ),
+    ).toBeInTheDocument();
     const sourceSummary = screen.getByLabelText('Kaynak transkript özeti');
     expect(within(sourceSummary).getByText('Satır')).toBeInTheDocument();
     expect(within(sourceSummary).getByText('2')).toBeInTheDocument();
@@ -228,7 +235,14 @@ describe('SummaryPanel', () => {
     expect(within(readiness).getByText('Çıktıya uygun')).toBeInTheDocument();
     expect(
       within(readiness).getByText(
-        'Transkript kaynağı meeting output üretimi için yeterli görünüyor.',
+        'Transkript kaynağı toplantı çıktısı üretimi için yeterli görünüyor.',
+      ),
+    ).toBeInTheDocument();
+    const nextStep = screen.getByLabelText('Sıradaki kapı');
+    expect(within(nextStep).getByText('Meeting AI')).toBeInTheDocument();
+    expect(
+      within(nextStep).getByText(
+        'Kaynak hazır; özet, karar ve aksiyon üretimi için meeting-ai sonucu bekleniyor.',
       ),
     ).toBeInTheDocument();
 

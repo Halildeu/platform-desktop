@@ -445,6 +445,32 @@ button:disabled {
   gap: 10px;
 }
 
+.source-next-step {
+  display: grid;
+  gap: 4px;
+  margin-bottom: 12px;
+  padding: 10px 12px;
+  border: 1px solid #dbeafe;
+  border-radius: 6px;
+  background: #eff6ff;
+}
+
+.source-next-step span {
+  color: #1d4ed8;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.source-next-step strong {
+  color: #17202a;
+  font-size: 14px;
+}
+
+.source-next-step small {
+  color: #475569;
+  line-height: 1.45;
+}
+
 .source-readiness {
   display: grid;
   gap: 4px;

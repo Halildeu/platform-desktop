@@ -47,6 +47,8 @@ export interface TranscriptSourceReadiness {
   level: TranscriptSourceReadinessLevel;
   label: string;
   detail: string;
+  nextStepLabel: string;
+  nextStepDetail: string;
   wordCount: number;
   durationMs: number;
   finalCount: number;
@@ -246,6 +248,8 @@ export function analyzeTranscriptSourceReadiness(
       level: 'empty',
       label: 'Kaynak bekleniyor',
       detail: 'Transkript satırı oluşmadan çıktı üretimi başlamaz.',
+      nextStepLabel: 'Kayıt kaynağı',
+      nextStepDetail: 'Toplantı kaydı başlayınca canlı transkript satırları değerlendirilecek.',
       wordCount: 0,
       durationMs: 0,
       finalCount: 0,
@@ -279,6 +283,9 @@ export function analyzeTranscriptSourceReadiness(
       level: 'collecting',
       label: 'Kaynak toplanıyor',
       detail: 'Canlı transkript rapor kaynağına ekleniyor.',
+      nextStepLabel: 'Kayıt bitişi',
+      nextStepDetail:
+        'Toplantı çıktısı için kayıt bitişi ve final transkript satırları bekleniyor.',
       wordCount,
       durationMs,
       finalCount,
@@ -296,7 +303,10 @@ export function analyzeTranscriptSourceReadiness(
     return {
       level: 'ready',
       label: 'Çıktıya uygun',
-      detail: 'Transkript kaynağı meeting output üretimi için yeterli görünüyor.',
+      detail: 'Transkript kaynağı toplantı çıktısı üretimi için yeterli görünüyor.',
+      nextStepLabel: 'Meeting AI',
+      nextStepDetail:
+        'Kaynak hazır; özet, karar ve aksiyon üretimi için meeting-ai sonucu bekleniyor.',
       wordCount,
       durationMs,
       finalCount,
@@ -313,6 +323,11 @@ export function analyzeTranscriptSourceReadiness(
       finalCount > 0
         ? 'Kaynak var; rapor/özet öncesi kapsam ve final oranı kontrol edilmeli.'
         : 'Yalnız taslak satır var; final transcript beklenmeli.',
+    nextStepLabel: finalCount > 0 ? 'Kaynak kalite kontrolü' : 'Final transkript',
+    nextStepDetail:
+      finalCount > 0
+        ? 'Meeting AI öncesi kaynak kapsamı, süre ve final oranı netleştirilmeli.'
+        : 'Taslak satırlar final veya revize satıra dönmeden çıktı kapısı açılmıyor.',
     wordCount,
     durationMs,
     finalCount,
@@ -340,6 +355,7 @@ function buildTranscriptMarkdown(
   state: TranscriptSessionState,
   segments: TranscriptSegment[],
 ): string {
+  const readiness = analyzeTranscriptSourceReadiness(state);
   const lines = [
     '# Meeting Transcript',
     '',
@@ -348,6 +364,17 @@ function buildTranscriptMarkdown(
     `- Kaynak: ${state.hasLoopback ? 'Mikrofon + sistem sesi' : 'Mikrofon'}`,
     `- Başlangıç: ${formatTimestamp(state.startedAtMs)}`,
     `- Bitiş: ${formatTimestamp(state.finishedAtMs)}`,
+    '',
+    '## Kaynak Hazırlık',
+    '',
+    `- Durum: ${readiness.label}`,
+    `- Sonraki kapı: ${readiness.nextStepLabel}`,
+    `- Detay: ${readiness.nextStepDetail}`,
+    `- Satır: ${segments.length}`,
+    `- Kelime: ${readiness.wordCount}`,
+    `- Süre: ${formatDuration(readiness.durationMs)}`,
+    `- Final oranı: ${formatPercent(readiness.finalRatio)}`,
+    `- Uyarı: ${readiness.warnings.length > 0 ? readiness.warnings.join(' ') : '-'}`,
     '',
     '## Transkript',
     '',
@@ -361,6 +388,7 @@ function buildTranscriptMarkdown(
 }
 
 function buildTranscriptText(state: TranscriptSessionState, segments: TranscriptSegment[]): string {
+  const readiness = analyzeTranscriptSourceReadiness(state);
   const lines = [
     'Meeting Transcript',
     '',
@@ -369,6 +397,16 @@ function buildTranscriptText(state: TranscriptSessionState, segments: Transcript
     `Kaynak: ${state.hasLoopback ? 'Mikrofon + sistem sesi' : 'Mikrofon'}`,
     `Başlangıç: ${formatTimestamp(state.startedAtMs)}`,
     `Bitiş: ${formatTimestamp(state.finishedAtMs)}`,
+    '',
+    'Kaynak Hazırlık',
+    `Durum: ${readiness.label}`,
+    `Sonraki kapı: ${readiness.nextStepLabel}`,
+    `Detay: ${readiness.nextStepDetail}`,
+    `Satır: ${segments.length}`,
+    `Kelime: ${readiness.wordCount}`,
+    `Süre: ${formatDuration(readiness.durationMs)}`,
+    `Final oranı: ${formatPercent(readiness.finalRatio)}`,
+    `Uyarı: ${readiness.warnings.length > 0 ? readiness.warnings.join(' ') : '-'}`,
     '',
   ];
 
@@ -388,6 +426,26 @@ function formatTimestamp(value: number | null): string {
     return '-';
   }
   return new Date(value).toISOString();
+}
+
+function formatDuration(value: number): string {
+  if (!Number.isFinite(value) || value <= 0) {
+    return '-';
+  }
+  const totalSeconds = Math.round(value / 1000);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  if (minutes === 0) {
+    return `${seconds} sn`;
+  }
+  return `${minutes} dk ${seconds} sn`;
+}
+
+function formatPercent(value: number): string {
+  if (!Number.isFinite(value)) {
+    return '-';
+  }
+  return `%${Math.round(value * 100)}`;
 }
 
 function safeFilePart(value: string): string {
