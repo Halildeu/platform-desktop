@@ -206,11 +206,16 @@ describe('SummaryPanel', () => {
     expect(screen.getByText('Son satır · Taslak · Direct STT')).toBeInTheDocument();
     expect(screen.getByText('"Toplantı notu kaynak transcript olarak hazır."')).toBeInTheDocument();
     const aiPackage = screen.getByLabelText('Meeting AI kaynak paketi');
-    expect(within(aiPackage).getByText('Kaynak paketi hazırlanabilir')).toBeInTheDocument();
+    expect(within(aiPackage).getByText('Kapı kontrolü bekliyor')).toBeInTheDocument();
     expect(
       within(aiPackage).getByText(/Backend gateway -> meeting-ai \/analyze kontratı/),
     ).toBeInTheDocument();
     expect(within(aiPackage).getByText(/doğrudan platform-ai çağırmaz/)).toBeInTheDocument();
+    const aiGate = screen.getByLabelText('Meeting AI kapı kontrolü');
+    expect(within(aiGate).getByText('Meeting AI kapısı bekliyor')).toBeInTheDocument();
+    expect(within(aiGate).getByText('backend-gateway -> meeting-ai /analyze')).toBeInTheDocument();
+    expect(within(aiGate).getByText('Gateway zorunlu')).toBeInTheDocument();
+    expect(within(aiGate).getByText('kayıt sürüyor')).toBeInTheDocument();
     expect(screen.queryByText('Toplantı çıktısı bekleniyor')).not.toBeInTheDocument();
     expect(screen.queryByText('örnek özet')).not.toBeInTheDocument();
 
@@ -236,6 +241,7 @@ describe('SummaryPanel', () => {
     });
     const copiedPackage = String(vi.mocked(adapter.copyText).mock.calls.at(-1)?.[0]);
     expect(copiedPackage).toContain('"client_direct_platform_ai": false');
+    expect(copiedPackage).toContain('"can_submit": false');
     expect(copiedPackage).toContain('"meeting_id": "22222222-2222-4222-8222-222222222222"');
     expect(copiedPackage).toContain('"transcript":');
     expect(copiedPackage).not.toContain('summaryMarkdown');
@@ -274,6 +280,14 @@ describe('SummaryPanel', () => {
     const sourceSummary = screen.getByLabelText('Kaynak transkript özeti');
     const aiPackage = screen.getByLabelText('Meeting AI kaynak paketi');
     expect(within(aiPackage).getByText('Gönderime hazır kaynak')).toBeInTheDocument();
+    const aiGate = screen.getByLabelText('Meeting AI kapı kontrolü');
+    expect(within(aiGate).getByText('Meeting AI gönderimine hazır')).toBeInTheDocument();
+    expect(within(aiGate).getByText('Yok')).toBeInTheDocument();
+    expect(
+      within(aiGate).getByText(
+        'Kaynak backend gateway üzerinden meeting-ai /analyze kontratına iletilebilir.',
+      ),
+    ).toBeInTheDocument();
     expect(within(sourceSummary).getByText('2 final / 0 taslak')).toBeInTheDocument();
     expect(within(sourceSummary).getByText('18 sn')).toBeInTheDocument();
     expect(within(sourceSummary).getByText('%100')).toBeInTheDocument();

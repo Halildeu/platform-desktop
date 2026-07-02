@@ -212,6 +212,17 @@ describe('session transcript state', () => {
       target: 'backend-gateway -> meeting-ai /analyze',
       client_direct_platform_ai: false,
     });
+    expect(bundle.package.gate).toMatchObject({
+      status: 'review',
+      can_submit: false,
+      label: 'Meeting AI kapısı bekliyor',
+      blocked_by: ['kaynak kalite kontrolü gerekiyor'],
+      contract: {
+        submit_via: 'backend-gateway',
+        endpoint: 'meeting-ai /analyze',
+        direct_platform_ai_allowed: false,
+      },
+    });
     expect(bundle.package.request).toEqual({
       transcript: 'İlk karar kaynak pakete girer.\nİkinci satır zamanlı segment olarak taşınır.',
       meeting_id: '22222222-2222-4222-8222-222222222222',
@@ -226,6 +237,46 @@ describe('session transcript state', () => {
     expect(bundle.json).toContain('"client_direct_platform_ai": false');
     expect(bundle.json).not.toContain('summaryMarkdown');
     expect(bundle.json).not.toContain('actionItems');
+  });
+
+  it('marks meeting-ai package as submittable only when the source gate is ready', () => {
+    const recording = startTranscriptSession(initialTranscriptSession(), {
+      sessionId: 'SES-2',
+      meetingId: '33333333-3333-4333-8333-333333333333',
+      deviceId: 'desktop-1',
+      hasLoopback: false,
+      startedAtMs: 1781820000000,
+    });
+    const withFirstSegment = upsertTranscriptSegment(recording, {
+      id: 'seg-1',
+      speakerLabel: 'Konuşmacı',
+      startedAtMs: 1781820003000,
+      status: 'final',
+      source: 'direct-stream',
+      text: 'Canlı toplantı kaydı sırasında transkript kaynağı final satırlarla doğrulandı ve çıktı üretimi için hazırlandı.',
+    });
+    const withSecondSegment = finishTranscriptSession(
+      upsertTranscriptSegment(withFirstSegment, {
+        id: 'seg-2',
+        speakerLabel: 'Konuşmacı',
+        startedAtMs: 1781820021000,
+        status: 'final',
+        source: 'direct-stream',
+        text: 'Toplantı sonrasında özet karar ve aksiyon üretimi transkript kanıtına bağlı şekilde ilerleyecek.',
+      }),
+      1781820025000,
+    );
+
+    const bundle = buildMeetingAiSourcePackage(withSecondSegment, 1781820100000);
+
+    expect(bundle.package.gate).toMatchObject({
+      status: 'ready',
+      can_submit: true,
+      label: 'Meeting AI gönderimine hazır',
+      blocked_by: [],
+    });
+    expect(bundle.package.gate.next_action).toContain('backend gateway');
+    expect(bundle.json).toContain('"can_submit": true');
   });
 
   it('rejects source export when no transcript segment exists', () => {

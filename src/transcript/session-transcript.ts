@@ -54,6 +54,21 @@ export interface MeetingAiAnalyzeRequest {
   segments: MeetingAiAnalyzeSegment[];
 }
 
+export type MeetingAiSourceGateStatus = 'blocked' | 'collecting' | 'review' | 'ready';
+
+export interface MeetingAiSourceGate {
+  status: MeetingAiSourceGateStatus;
+  can_submit: boolean;
+  label: string;
+  next_action: string;
+  blocked_by: string[];
+  contract: {
+    submit_via: 'backend-gateway';
+    endpoint: 'meeting-ai /analyze';
+    direct_platform_ai_allowed: false;
+  };
+}
+
 export interface MeetingAiSourcePackage {
   schema_version: 'platform-desktop.meeting-ai-source.v1';
   generated_at: string;
@@ -61,6 +76,7 @@ export interface MeetingAiSourcePackage {
     target: 'backend-gateway -> meeting-ai /analyze';
     client_direct_platform_ai: false;
   };
+  gate: MeetingAiSourceGate;
   source_quality: {
     level: TranscriptSourceReadinessLevel;
     label: string;
@@ -306,6 +322,7 @@ export function buildMeetingAiSourcePackage(
       target: 'backend-gateway -> meeting-ai /analyze',
       client_direct_platform_ai: false,
     },
+    gate: buildMeetingAiSourceGate(state, readiness),
     source_quality: {
       level: readiness.level,
       label: readiness.label,
@@ -427,6 +444,39 @@ export function analyzeTranscriptSourceReadiness(
     draftCount,
     finalRatio,
     warnings,
+  };
+}
+
+export function buildMeetingAiSourceGate(
+  state: TranscriptSessionState,
+  readiness: TranscriptSourceReadiness = analyzeTranscriptSourceReadiness(state),
+): MeetingAiSourceGate {
+  const blockedBy = [
+    ...(!state.meetingId ? ['canonical meetingId yok'] : []),
+    ...(!state.sessionId ? ['recorder sessionId yok'] : []),
+    ...(readiness.level === 'empty' ? ['transkript satırı yok'] : []),
+    ...(readiness.level === 'collecting' ? ['kayıt sürüyor'] : []),
+    ...(readiness.level === 'review' ? ['kaynak kalite kontrolü gerekiyor'] : []),
+  ];
+  const canSubmit = readiness.level === 'ready' && blockedBy.length === 0;
+
+  return {
+    status: canSubmit
+      ? 'ready'
+      : readiness.level === 'collecting' || readiness.level === 'review'
+        ? readiness.level
+        : 'blocked',
+    can_submit: canSubmit,
+    label: canSubmit ? 'Meeting AI gönderimine hazır' : 'Meeting AI kapısı bekliyor',
+    next_action: canSubmit
+      ? 'Kaynak backend gateway üzerinden meeting-ai /analyze kontratına iletilebilir.'
+      : readiness.nextStepDetail,
+    blocked_by: blockedBy,
+    contract: {
+      submit_via: 'backend-gateway',
+      endpoint: 'meeting-ai /analyze',
+      direct_platform_ai_allowed: false,
+    },
   };
 }
 

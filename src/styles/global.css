@@ -497,6 +497,43 @@ button:disabled {
   line-height: 1.45;
 }
 
+.source-gate-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 8px;
+  margin-bottom: 12px;
+  padding: 10px 12px;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  background: #ffffff;
+}
+
+.source-gate-grid div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.source-gate-grid span {
+  color: #64748b;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.source-gate-grid strong {
+  color: #17202a;
+  font-size: 13px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.source-gate-grid p {
+  grid-column: 1 / -1;
+  color: #475569;
+  font-size: 13px;
+}
+
 .source-readiness {
   display: grid;
   gap: 4px;

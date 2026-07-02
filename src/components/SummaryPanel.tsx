@@ -11,6 +11,7 @@ import {
 } from '../intelligence/meeting-intelligence';
 import {
   analyzeTranscriptSourceReadiness,
+  buildMeetingAiSourceGate,
   buildMeetingAiSourcePackage,
   buildTranscriptSourceExport,
   transcriptStatusLabel,
@@ -140,6 +141,9 @@ export function SummaryPanel({
   const transcriptReadiness = transcript
     ? analyzeTranscriptSourceReadiness(transcript)
     : analyzeTranscriptSourceReadiness(initialTranscriptSessionFallback);
+  const meetingAiGate = transcript
+    ? buildMeetingAiSourceGate(transcript, transcriptReadiness)
+    : buildMeetingAiSourceGate(initialTranscriptSessionFallback, transcriptReadiness);
   const latestTranscriptSegment =
     transcriptSourceSegments.length > 0
       ? transcriptSourceSegments[transcriptSourceSegments.length - 1]
@@ -368,15 +372,42 @@ export function SummaryPanel({
               <div className="source-ai-package" aria-label="Meeting AI kaynak paketi">
                 <span>Meeting AI kaynak paketi</span>
                 <strong>
-                  {transcriptReadiness.level === 'ready'
-                    ? 'Gönderime hazır kaynak'
-                    : 'Kaynak paketi hazırlanabilir'}
+                  {meetingAiGate.can_submit ? 'Gönderime hazır kaynak' : 'Kapı kontrolü bekliyor'}
                 </strong>
                 <small>
                   Backend gateway -&gt; meeting-ai /analyze kontratı için transcript, meeting_id,
                   session_id ve zamanlı segmentler paketlenir; desktop client doğrudan platform-ai
                   çağırmaz.
                 </small>
+              </div>
+              <div className="source-gate-grid" aria-label="Meeting AI kapı kontrolü">
+                <div>
+                  <span>Gönderim</span>
+                  <strong>{meetingAiGate.label}</strong>
+                </div>
+                <div>
+                  <span>Rota</span>
+                  <strong>
+                    {meetingAiGate.contract.submit_via} -&gt; {meetingAiGate.contract.endpoint}
+                  </strong>
+                </div>
+                <div>
+                  <span>Client sınırı</span>
+                  <strong>
+                    {meetingAiGate.contract.direct_platform_ai_allowed
+                      ? 'Direct platform-ai'
+                      : 'Gateway zorunlu'}
+                  </strong>
+                </div>
+                <div>
+                  <span>Engel</span>
+                  <strong>
+                    {meetingAiGate.blocked_by.length > 0
+                      ? meetingAiGate.blocked_by.join(', ')
+                      : 'Yok'}
+                  </strong>
+                </div>
+                <p>{meetingAiGate.next_action}</p>
               </div>
               <div className="source-metrics" aria-label="Kaynak transkript özeti">
                 <div>
