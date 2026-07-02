@@ -47,6 +47,7 @@ const RECORDER_START_TIMEOUT_MS = 45_000;
 const TRANSCRIPT_CLIENT_CLOCK_SKEW_MS = 30_000;
 const MAX_PENDING_LIVE_TRANSCRIPT_EVENTS = 50;
 const ACTIVE_AUDIO_RMS = 0.006;
+const DIRECT_STT_START_BLOCKED_MARKER = 'Kayıt başlatılmadı; mikrofon açılmadı.';
 
 interface RecorderRuntimeConfig {
   meetingId: string | null;
@@ -199,6 +200,14 @@ function isContractCreationExpected(reason: string | null | undefined): boolean 
   return typeof reason === 'string' && reason.includes(RECORDER_MEETING_ID_UNSET_MARKER);
 }
 
+function isRecoverableDirectSttStartupError(error: string | null | undefined): boolean {
+  return (
+    typeof error === 'string' &&
+    error.includes('Direct STT') &&
+    error.includes(DIRECT_STT_START_BLOCKED_MARKER)
+  );
+}
+
 function markMeetingIntelligenceWaitingForContract(
   current: ReturnType<typeof initialMeetingIntelligence>,
 ): ReturnType<typeof initialMeetingIntelligence> {
@@ -243,6 +252,32 @@ function App() {
   const directStreamConfiguredRef = useRef(false);
   const transcriptSessionIdRef = useRef<string | null>(null);
   const pendingLiveTranscriptEventsRef = useRef<LiveSttTranscriptEvent[]>([]);
+
+  const clearRecoveredDirectSttStartupError = (): void => {
+    const meetingId = recorderConfig?.meetingId;
+    const deviceId = recorderConfig?.deviceId;
+    if (!recorderConfig?.ready || !meetingId || !deviceId) {
+      return;
+    }
+
+    setError((current) => (isRecoverableDirectSttStartupError(current) ? '' : current));
+    setTranscriptSession((current) =>
+      current.lifecycle === 'error' && isRecoverableDirectSttStartupError(current.error)
+        ? markTranscriptReady(current, { meetingId, deviceId })
+        : current,
+    );
+    setMeetingIntelligence((current) =>
+      current.status === 'error' && isRecoverableDirectSttStartupError(current.error)
+        ? {
+            ...current,
+            meetingId,
+            status: 'idle',
+            error: null,
+            result: null,
+          }
+        : current,
+    );
+  };
 
   const enqueuePendingLiveTranscriptEvent = (event: LiveSttTranscriptEvent): void => {
     pendingLiveTranscriptEventsRef.current = [
@@ -712,6 +747,9 @@ function App() {
     const captureOutcome = await captureCheck;
     if (!captureOutcome.ok) {
       return captureOutcome;
+    }
+    if (streamOutcome.ok) {
+      clearRecoveredDirectSttStartupError();
     }
     return streamOutcome;
   };
