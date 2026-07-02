@@ -316,6 +316,58 @@ describe('connectLiveSttStream', () => {
     stream.close();
   });
 
+  it('drops inflected near-duplicate final alternatives when no stable draft exists', () => {
+    vi.stubGlobal('WebSocket', FakeWebSocket);
+    const events: LiveSttTranscriptEvent[] = [];
+
+    const stream = connectLiveSttStream('ws://127.0.0.1:18220/ws/stream', {
+      onTranscriptEvent: (event) => events.push(event),
+    });
+    const ws = FakeWebSocket.instances[0];
+
+    ws?.open();
+    ws?.message({ type: 'ready' });
+    ws?.message({
+      type: 'final',
+      seq: 0,
+      text: 'Benim akışa aktiftim. Benim akışa aktif diyorsun. Elime akışı aktif diyorsunuz.',
+      elapsed_ms: 760,
+      rms: 0.04,
+    });
+
+    expect(events).toEqual([]);
+
+    stream.close();
+  });
+
+  it('keeps normal final speech that mentions the live word flow once', () => {
+    vi.stubGlobal('WebSocket', FakeWebSocket);
+    const events: LiveSttTranscriptEvent[] = [];
+
+    const stream = connectLiveSttStream('ws://127.0.0.1:18220/ws/stream', {
+      onTranscriptEvent: (event) => events.push(event),
+    });
+    const ws = FakeWebSocket.instances[0];
+
+    ws?.open();
+    ws?.message({ type: 'ready' });
+    ws?.message({
+      type: 'final',
+      seq: 0,
+      text: 'Kelime akışı aktif ve doğruluk oranı gayet iyi.',
+      elapsed_ms: 620,
+      rms: 0.04,
+    });
+
+    expect(events.at(-1)).toMatchObject({
+      id: 'stream:0',
+      status: 'final',
+      text: 'Kelime akışı aktif ve doğruluk oranı gayet iyi.',
+    });
+
+    stream.close();
+  });
+
   it('finalizes the stable draft when the final payload is a repetitive decode loop', () => {
     vi.useFakeTimers();
     vi.stubGlobal('WebSocket', FakeWebSocket);

@@ -111,6 +111,45 @@ function normalizedWords(words: string[]): string[] {
   return words.map(normalizeWord).filter(Boolean);
 }
 
+function wordFamily(word: string): string {
+  let family = word;
+  const suffixes = [
+    'siniz',
+    'sınız',
+    'sunuz',
+    'sünüz',
+    'sin',
+    'sın',
+    'sun',
+    'sün',
+    'tim',
+    'tım',
+    'tum',
+    'tüm',
+    'dim',
+    'dım',
+    'dum',
+    'düm',
+  ];
+
+  for (const suffix of suffixes) {
+    if (family.length > suffix.length + 3 && family.endsWith(suffix)) {
+      family = family.slice(0, -suffix.length);
+      break;
+    }
+  }
+
+  if (family.length >= 5 && /[aeıioöuü]$/u.test(family)) {
+    family = family.slice(0, -1);
+  }
+
+  return family;
+}
+
+function normalizedFamilies(words: string[]): string[] {
+  return normalizedWords(words).map(wordFamily).filter(Boolean);
+}
+
 function isLowInformationRepetition(text: string): boolean {
   const words = normalizedWords(splitWords(text));
   if (words.length < 8) {
@@ -122,19 +161,31 @@ function isLowInformationRepetition(text: string): boolean {
     return true;
   }
 
+  const families = normalizedFamilies(splitWords(text));
+  const familyUniqueRatio = new Set(families).size / families.length;
+  if (familyUniqueRatio <= 0.5) {
+    return true;
+  }
+
   const ngramSizes = words.length < 12 ? [2] : [2, 3];
-  return ngramSizes.some((ngramSize) => {
-    const counts = new Map<string, number>();
-    for (let index = 0; index <= words.length - ngramSize; index += 1) {
-      const key = words.slice(index, index + ngramSize).join('\u0000');
-      const nextCount = (counts.get(key) ?? 0) + 1;
-      if (nextCount >= 3) {
-        return true;
+  return [words, families].some((tokens) =>
+    ngramSizes.some((ngramSize) => {
+      if (tokens.length < ngramSize) {
+        return false;
       }
-      counts.set(key, nextCount);
-    }
-    return false;
-  });
+
+      const counts = new Map<string, number>();
+      for (let index = 0; index <= tokens.length - ngramSize; index += 1) {
+        const key = tokens.slice(index, index + ngramSize).join('\u0000');
+        const nextCount = (counts.get(key) ?? 0) + 1;
+        if (nextCount >= 3) {
+          return true;
+        }
+        counts.set(key, nextCount);
+      }
+      return false;
+    }),
+  );
 }
 
 function hasSamePrefix(previousText: string, nextText: string): boolean {
