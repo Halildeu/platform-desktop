@@ -210,13 +210,28 @@ function localSessionId(): string {
 
 function canContinueDirectOnlyAfterRecorderStartupError(message: string): boolean {
   const normalized = message.toLocaleLowerCase('tr-TR');
+  const isLocalContractError =
+    normalized.includes('consent required') ||
+    normalized.includes('invalid format') ||
+    normalized.includes('is required') ||
+    normalized.includes('audio capture setup failed') ||
+    normalized.includes('recording session already active');
+  if (isLocalContractError) {
+    return false;
+  }
   return (
     normalized.includes('direct stt') ||
     normalized.includes('gateway') ||
+    normalized.includes('startsession failed') ||
+    normalized.includes('audio-gateway') ||
+    normalized.includes('kayıt başlatılmadı') ||
+    normalized.includes('kayit baslatilmadi') ||
     normalized.includes('timed out') ||
     normalized.includes('timeout') ||
     normalized.includes('zaman aşımı') ||
     normalized.includes('zaman asimi') ||
+    normalized.includes('bağlantı') ||
+    normalized.includes('baglanti') ||
     normalized.includes('fetch failed') ||
     normalized.includes('network') ||
     normalized.includes('econn') ||

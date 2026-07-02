@@ -385,6 +385,35 @@ describe('startRecording', () => {
     expect(window.electronAPI?.audio.abort).not.toHaveBeenCalled();
   });
 
+  it('falls back to direct-only capture for Electron-wrapped Direct-STT startup failures', async () => {
+    installElectronApiMock();
+    setUserAgent('Mozilla/5.0 (Macintosh; Intel Mac OS X 15_5)');
+    const { micTrack } = installBrowserAudioMocks();
+    vi.stubGlobal('WebSocket', FakeWebSocket);
+    vi.mocked(window.electronAPI!.audio.start).mockRejectedValueOnce(
+      new Error(
+        "Error invoking remote method 'audio:start': Error: Direct STT bağlantı hatası. Kayıt başlatılmadı; mikrofon açılmadı.",
+      ),
+    );
+
+    const recorder = await startRecording('meeting-1', 'desktop-1', {
+      liveSttStreamUrl: 'ws://127.0.0.1:18220/ws/stream',
+    });
+    const ws = FakeWebSocket.instances[0];
+
+    expect(recorder.sessionId).toMatch(/^LOCAL-/);
+    expect(recorder.gatewayActive).toBe(false);
+    expect(recorder.gatewayError).toContain('Direct STT bağlantı hatası');
+    expect(window.electronAPI?.audio.start).toHaveBeenCalledWith('meeting-1', 'desktop-1');
+    expect(ws?.url).toBe('ws://127.0.0.1:18220/ws/stream');
+
+    await recorder.stop();
+
+    expect(micTrack.stop).toHaveBeenCalled();
+    expect(window.electronAPI?.audio.finish).not.toHaveBeenCalled();
+    expect(window.electronAPI?.audio.abort).not.toHaveBeenCalled();
+  });
+
   it('falls back to direct-only capture when recorder preparation fails before microphone opens', async () => {
     installElectronApiMock();
     setUserAgent('Mozilla/5.0 (Macintosh; Intel Mac OS X 15_5)');
