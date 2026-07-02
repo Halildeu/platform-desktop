@@ -398,4 +398,73 @@ describe('TranscriptPanel', () => {
     expect(screen.getByText('Metin gecikiyor (7 sn)')).toBeInTheDocument();
     expect(screen.getByText('Gecikiyor · 7 sn')).toHaveClass('stream-lag-warning');
   });
+
+  it('does not show transcript lag while capture is silent', () => {
+    const recording = startTranscriptSession(initialTranscriptSession(), {
+      sessionId: 'SES-1',
+      meetingId: '22222222-2222-4222-8222-222222222222',
+      deviceId: 'desktop-1',
+      hasLoopback: false,
+      startedAtMs: 1781820000123,
+    });
+    const withTranscript = upsertTranscriptSegment(recording, {
+      id: 'seg-1',
+      speakerLabel: 'Konuşmacı',
+      startedAtMs: 1781820001000,
+      status: 'final',
+      text: 'Son metin geldi',
+      source: 'direct-stream',
+      receivedAtMs: 1781820002000,
+    });
+
+    render(
+      <TranscriptPanel
+        session={withTranscript}
+        stream={{
+          directConfigured: true,
+          directReady: true,
+          directActive: true,
+          audioRms: 0.004,
+          audioActive: false,
+          lastAudioAtMs: 1781820011000,
+          disabledReason: null,
+        }}
+      />,
+    );
+
+    expect(screen.getByText('Sessiz · RMS 0.004')).toBeInTheDocument();
+    expect(screen.queryByText(/Gecikiyor/)).not.toBeInTheDocument();
+  });
+
+  it('hides stale direct STT preflight text once recording stream is active', () => {
+    const recording = startTranscriptSession(initialTranscriptSession(), {
+      sessionId: 'SES-1',
+      meetingId: '22222222-2222-4222-8222-222222222222',
+      deviceId: 'desktop-1',
+      hasLoopback: false,
+      startedAtMs: 1781820000123,
+    });
+
+    render(
+      <TranscriptPanel
+        session={recording}
+        stream={{
+          directConfigured: true,
+          directReady: true,
+          directActive: true,
+          disabledReason: null,
+          preflight: {
+            status: 'checking',
+            message: 'Direct STT kayıt sırasında bağlanacak...',
+            checkedAtMs: null,
+            elapsedMs: null,
+            stage: null,
+          },
+        }}
+      />,
+    );
+
+    expect(screen.getByText('Kelime akışı aktif')).toBeInTheDocument();
+    expect(screen.queryByText('Direct STT kayıt sırasında bağlanacak...')).not.toBeInTheDocument();
+  });
 });

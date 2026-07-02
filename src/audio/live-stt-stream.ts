@@ -208,6 +208,10 @@ function mergeFinalTranscript(previousText: string, finalText: string): string {
     return [...previousRawWords, ...finalRawWords.slice(overlap)].join(' ');
   }
 
+  if (previousRawWords.length > finalRawWords.length) {
+    return mergeRollingPartial(previous, final);
+  }
+
   return final;
 }
 

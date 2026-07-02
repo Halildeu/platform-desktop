@@ -372,6 +372,45 @@ describe('connectLiveSttStream', () => {
     stream.close();
   });
 
+  it('keeps displayed rolling words when a shorter final is a new correction fragment', () => {
+    vi.useFakeTimers();
+    vi.stubGlobal('WebSocket', FakeWebSocket);
+    const events: LiveSttTranscriptEvent[] = [];
+
+    const stream = connectLiveSttStream('ws://127.0.0.1:18220/ws/stream', {
+      onTranscriptEvent: (event) => events.push(event),
+    });
+    const ws = FakeWebSocket.instances[0];
+
+    ws?.open();
+    ws?.message({ type: 'ready' });
+    ws?.message({
+      type: 'partial',
+      seq: 0,
+      confirmed: '',
+      tentative: 'Söylediklerimin yarısını ne söylediklerimin yarısını neden',
+      elapsed_ms: 180,
+      rms: 0.04,
+      source: 'medium',
+    });
+    vi.advanceTimersByTime(500);
+    ws?.message({
+      type: 'final',
+      seq: 0,
+      text: 'Kısmın yarısının neden yok?',
+      elapsed_ms: 760,
+      rms: 0.04,
+    });
+
+    expect(events.at(-1)).toMatchObject({
+      id: 'stream:0',
+      status: 'final',
+      text: 'Söylediklerimin yarısını ne söylediklerimin yarısını neden Kısmın yarısının neden yok?',
+    });
+
+    stream.close();
+  });
+
   it('opens a new local segment when the server reuses a finalized sequence', () => {
     vi.stubGlobal('WebSocket', FakeWebSocket);
     const events: LiveSttTranscriptEvent[] = [];

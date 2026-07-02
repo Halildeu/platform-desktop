@@ -107,6 +107,7 @@ function transcriptLagLabel(
   if (
     !recordingActive ||
     !stream?.directConfigured ||
+    !stream.audioActive ||
     typeof stream.lastAudioAtMs !== 'number' ||
     !Number.isFinite(stream.lastAudioAtMs)
   ) {
@@ -202,8 +203,18 @@ function streamTimestampLabel(value: number | null | undefined): string {
   return formatClock(value);
 }
 
-function preflightStatusLabel(preflight: LiveSttPreflightState | undefined): string | null {
+function preflightStatusLabel(
+  preflight: LiveSttPreflightState | undefined,
+  stream: TranscriptPanelProps['stream'],
+  recordingActive: boolean,
+): string | null {
   if (!preflight || preflight.status === 'idle') {
+    return null;
+  }
+  if (
+    recordingActive &&
+    (stream?.directActive || stream?.directReady || stream?.directStatus?.status === 'ready')
+  ) {
     return null;
   }
   if (preflight.status === 'checking') {
@@ -380,7 +391,7 @@ export function TranscriptPanel({ session, stream }: TranscriptPanelProps): Reac
   const canRunPreflight = Boolean(
     stream?.directConfigured && stream.onPreflight && !recordingActive,
   );
-  const preflightLabel = preflightStatusLabel(stream?.preflight);
+  const preflightLabel = preflightStatusLabel(stream?.preflight, stream, recordingActive);
   const captureLabel = capturePreflightLabel(stream?.capturePreflight);
 
   const handleCopyDiagnostics = async (): Promise<void> => {
