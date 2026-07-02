@@ -173,6 +173,39 @@ function mergeRollingPartial(previousText: string, nextText: string): string {
   return `${previous} ${next}`;
 }
 
+function mergeFinalTranscript(previousText: string, finalText: string): string {
+  const previous = previousText.trim();
+  const final = finalText.trim();
+  if (!previous || !final) {
+    return final || previous;
+  }
+  if (previous === final || hasSamePrefix(previous, final)) {
+    return final;
+  }
+  if (hasSamePrefix(final, previous)) {
+    return previous;
+  }
+
+  const previousRawWords = splitWords(previous);
+  const finalRawWords = splitWords(final);
+  const previousWords = normalizedWords(previousRawWords);
+  const finalWords = normalizedWords(finalRawWords);
+
+  if (contiguousIndex(previousWords, finalWords) >= 0) {
+    return previous;
+  }
+  if (contiguousIndex(finalWords, previousWords) >= 0) {
+    return final;
+  }
+
+  const overlap = suffixPrefixOverlap(previousWords, finalWords);
+  if (overlap >= 2) {
+    return [...previousRawWords, ...finalRawWords.slice(overlap)].join(' ');
+  }
+
+  return final;
+}
+
 function progressivePartialSteps(previousText: string, nextText: string): string[] {
   if (!nextText || previousText === nextText) {
     return [];
@@ -230,6 +263,8 @@ export function connectLiveSttStream(
   const segmentStartedAt = new Map<number, number>();
   const segmentDraftText = new Map<number, string>();
   const segmentKnownText = new Map<number, string>();
+  const segmentGeneration = new Map<number, number>();
+  const finalizedSequences = new Set<number>();
   const pendingPartialTimers = new Map<number, Array<ReturnType<typeof setTimeout>>>();
 
   const emitError = (message: string): void => {
@@ -329,6 +364,7 @@ export function connectLiveSttStream(
         if (!text) {
           return;
         }
+        ensureOpenSegment(event.seq);
         const startedAtMs = segmentStartedAt.get(event.seq) ?? Date.now();
         segmentStartedAt.set(event.seq, startedAtMs);
         emitProgressivePartial(event, text, startedAtMs);
@@ -336,7 +372,10 @@ export function connectLiveSttStream(
       }
 
       if (event.type === 'final') {
-        const text = event.text.trim();
+        const text = mergeFinalTranscript(
+          segmentKnownText.get(event.seq) ?? segmentDraftText.get(event.seq) ?? '',
+          event.text,
+        );
         if (!text) {
           return;
         }
@@ -345,8 +384,9 @@ export function connectLiveSttStream(
         clearPendingPartials(event.seq);
         segmentDraftText.delete(event.seq);
         segmentKnownText.delete(event.seq);
+        finalizedSequences.add(event.seq);
         callbacks.onTranscriptEvent?.({
-          id: `stream:${event.seq}`,
+          id: segmentId(event.seq),
           startedAtMs,
           text,
           status: 'final',
@@ -370,6 +410,25 @@ export function connectLiveSttStream(
     });
   };
 
+  const segmentId = (seq: number): string => {
+    const generation = segmentGeneration.get(seq) ?? 0;
+    return generation === 0 ? `stream:${seq}` : `stream:${seq}:${generation}`;
+  };
+
+  const ensureOpenSegment = (seq: number): void => {
+    if (!finalizedSequences.has(seq)) {
+      return;
+    }
+
+    const nextGeneration = (segmentGeneration.get(seq) ?? 0) + 1;
+    segmentGeneration.set(seq, nextGeneration);
+    finalizedSequences.delete(seq);
+    segmentStartedAt.delete(seq);
+    segmentDraftText.delete(seq);
+    segmentKnownText.delete(seq);
+    clearPendingPartials(seq);
+  };
+
   const clearPendingPartials = (seq: number): void => {
     const timers = pendingPartialTimers.get(seq) ?? [];
     timers.forEach((timer) => clearTimeout(timer));
@@ -386,7 +445,7 @@ export function connectLiveSttStream(
   const emitPartial = (event: LiveSttServerPartial, text: string, startedAtMs: number): void => {
     segmentDraftText.set(event.seq, text);
     callbacks.onTranscriptEvent?.({
-      id: `stream:${event.seq}`,
+      id: segmentId(event.seq),
       startedAtMs,
       text,
       status: 'draft',

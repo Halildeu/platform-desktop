@@ -294,6 +294,99 @@ describe('connectLiveSttStream', () => {
     stream.close();
   });
 
+  it('keeps already displayed rolling-window words when final payload is shorter', () => {
+    vi.useFakeTimers();
+    vi.stubGlobal('WebSocket', FakeWebSocket);
+    const events: LiveSttTranscriptEvent[] = [];
+
+    const stream = connectLiveSttStream('ws://127.0.0.1:18220/ws/stream', {
+      onTranscriptEvent: (event) => events.push(event),
+    });
+    const ws = FakeWebSocket.instances[0];
+
+    ws?.open();
+    ws?.message({ type: 'ready' });
+    ws?.message({
+      type: 'partial',
+      seq: 0,
+      confirmed: '',
+      tentative: 'Merhaba nasılsın bugün toplantıdayız',
+      elapsed_ms: 180,
+      rms: 0.04,
+      source: 'medium',
+    });
+    vi.advanceTimersByTime(280);
+    ws?.message({
+      type: 'final',
+      seq: 0,
+      text: 'bugün toplantıdayız.',
+      elapsed_ms: 320,
+      rms: 0.04,
+    });
+
+    expect(events.at(-1)).toMatchObject({
+      id: 'stream:0',
+      status: 'final',
+      text: 'Merhaba nasılsın bugün toplantıdayız',
+    });
+
+    stream.close();
+  });
+
+  it('opens a new local segment when the server reuses a finalized sequence', () => {
+    vi.stubGlobal('WebSocket', FakeWebSocket);
+    const events: LiveSttTranscriptEvent[] = [];
+
+    const stream = connectLiveSttStream('ws://127.0.0.1:18220/ws/stream', {
+      onTranscriptEvent: (event) => events.push(event),
+    });
+    const ws = FakeWebSocket.instances[0];
+
+    ws?.open();
+    ws?.message({ type: 'ready' });
+    ws?.message({
+      type: 'partial',
+      seq: 0,
+      confirmed: '',
+      tentative: 'İlk konu tamam',
+      elapsed_ms: 140,
+      rms: 0.04,
+      source: 'medium',
+    });
+    ws?.message({
+      type: 'final',
+      seq: 0,
+      text: 'İlk konu tamam.',
+      elapsed_ms: 260,
+      rms: 0.04,
+    });
+    ws?.message({
+      type: 'partial',
+      seq: 0,
+      confirmed: '',
+      tentative: 'İkinci konu başladı',
+      elapsed_ms: 400,
+      rms: 0.04,
+      source: 'medium',
+    });
+    ws?.message({
+      type: 'final',
+      seq: 0,
+      text: 'İkinci konu başladı.',
+      elapsed_ms: 520,
+      rms: 0.04,
+    });
+
+    expect(events.map((event) => [event.id, event.status, event.text])).toEqual([
+      ['stream:0', 'draft', 'İlk'],
+      ['stream:0', 'final', 'İlk konu tamam.'],
+      ['stream:0:1', 'draft', 'İkinci'],
+      ['stream:0:1', 'final', 'İkinci konu başladı.'],
+    ]);
+
+    stream.close();
+  });
+
   it('reconnects after a transient close and flushes buffered audio frames', () => {
     vi.useFakeTimers();
     vi.stubGlobal('WebSocket', FakeWebSocket);
