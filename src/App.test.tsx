@@ -274,7 +274,7 @@ describe('App recorder readiness', () => {
     expect(await screen.findByText('Direct STT stream hazir. · 240 ms')).toBeInTheDocument();
   });
 
-  it('direct STT hazir degilse mikrofonu acmadan kaydi baslatmaz', async () => {
+  it('direct STT hazir degilse uyari gosterir ama mikrofon kaydini baslatir', async () => {
     installElectronApiMock({
       meetingId: '22222222-2222-4222-8222-222222222222',
       deviceId: 'desktop-1',
@@ -290,6 +290,12 @@ describe('App recorder readiness', () => {
       elapsedMs: 500,
       stage: null,
     });
+    vi.mocked(startRecording).mockResolvedValue({
+      sessionId: 'SES-1',
+      hasLoopback: false,
+      stop: vi.fn(),
+      onError: vi.fn(),
+    });
 
     render(<App />);
 
@@ -298,12 +304,20 @@ describe('App recorder readiness', () => {
 
     expect(await screen.findByText('Direct STT baglanti hatasi. · 500 ms')).toBeInTheDocument();
     expect(
-      await screen.findAllByText(
+      await screen.findByText('Kayıt başladı (yalnız mikrofon, oturum SES-1)'),
+    ).toBeInTheDocument();
+    expect(startRecording).toHaveBeenCalledWith(
+      '22222222-2222-4222-8222-222222222222',
+      'desktop-1',
+      expect.objectContaining({
+        liveSttStreamUrl: 'ws://127.0.0.1:18220/ws/stream',
+      }),
+    );
+    expect(
+      screen.queryByText(
         'Kayıt başlatılamadı: Direct STT baglanti hatasi. Kayıt başlatılmadı; mikrofon açılmadı.',
       ),
-    ).not.toHaveLength(0);
-    expect(startRecording).not.toHaveBeenCalled();
-    expect(screen.getByRole('button', { name: 'Kaydet' })).toBeEnabled();
+    ).not.toBeInTheDocument();
   });
 
   it('direct STT gecici baglanti hatasinda tekrar deneyip mikrofona oyle gecer', async () => {
@@ -356,7 +370,7 @@ describe('App recorder readiness', () => {
     expect(screen.queryByText(/Kayıt başlatılamadı:/)).not.toBeInTheDocument();
   });
 
-  it('direct STT baglanti testi toparlaninca eski baslatma hatasini temizler', async () => {
+  it('direct STT baglanti testi toparlaninca eski baglanti hatasini temizler', async () => {
     installElectronApiMock({
       meetingId: '22222222-2222-4222-8222-222222222222',
       deviceId: 'desktop-1',
@@ -394,17 +408,13 @@ describe('App recorder readiness', () => {
 
     render(<App />);
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Kaydet' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Onaylıyorum — Kaydı Başlat' }));
-
-    const startBlockedMessage =
-      'Kayıt başlatılamadı: Direct STT baglanti hatasi. Kayıt başlatılmadı; mikrofon açılmadı.';
-    expect(await screen.findAllByText(startBlockedMessage)).not.toHaveLength(0);
+    await userEvent.click(await screen.findByRole('button', { name: 'Bağlantı testi' }));
+    expect(await screen.findByText('Direct STT baglanti hatasi. · 500 ms')).toBeInTheDocument();
 
     await userEvent.click(screen.getByRole('button', { name: 'Bağlantı testi' }));
 
     expect(await screen.findByText('Direct STT stream hazir. · 80 ms')).toBeInTheDocument();
-    expect(screen.queryByText(startBlockedMessage)).not.toBeInTheDocument();
+    expect(screen.queryByText('Direct STT baglanti hatasi. · 500 ms')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Kaydet' })).toBeEnabled();
   });
 

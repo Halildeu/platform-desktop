@@ -67,6 +67,15 @@ interface MeetingContract {
   status: string;
 }
 
+interface StartupPreflightOutcome {
+  ok: boolean;
+  message: string;
+  captureOk: boolean;
+  captureMessage: string;
+  streamOk: boolean;
+  streamMessage: string;
+}
+
 interface SafeJwtClaims {
   iss?: string;
   aud?: string | string[];
@@ -599,8 +608,8 @@ function App() {
       }
       if (recorderConfig.liveSttStreamUrl) {
         const preflight = await handleLiveStreamPreflight();
-        if (!preflight.ok) {
-          throw new Error(`${preflight.message} Kayıt başlatılmadı; mikrofon açılmadı.`);
+        if (!preflight.captureOk) {
+          throw new Error(preflight.captureMessage);
         }
       }
       const meetingId = recorderConfig.meetingId;
@@ -710,7 +719,7 @@ function App() {
     }
   };
 
-  const handleLiveStreamPreflight = async (): Promise<{ ok: boolean; message: string }> => {
+  const handleLiveStreamPreflight = async (): Promise<StartupPreflightOutcome> => {
     const captureCheck = (async (): Promise<{ ok: boolean; message: string }> => {
       setAudioCapturePreflight({
         status: 'checking',
@@ -754,8 +763,15 @@ function App() {
         elapsedMs: null,
         stage: null,
       });
-      await captureCheck;
-      return { ok: false, message };
+      const captureOutcome = await captureCheck;
+      return {
+        ok: false,
+        message,
+        captureOk: captureOutcome.ok,
+        captureMessage: captureOutcome.message,
+        streamOk: false,
+        streamMessage: message,
+      };
     }
 
     setLiveStreamPreflight({
@@ -804,12 +820,26 @@ function App() {
     }
     const captureOutcome = await captureCheck;
     if (!captureOutcome.ok) {
-      return captureOutcome;
+      return {
+        ok: false,
+        message: captureOutcome.message,
+        captureOk: false,
+        captureMessage: captureOutcome.message,
+        streamOk: streamOutcome.ok,
+        streamMessage: streamOutcome.message,
+      };
     }
     if (streamOutcome.ok) {
       clearRecoveredDirectSttStartupError();
     }
-    return streamOutcome;
+    return {
+      ok: streamOutcome.ok,
+      message: streamOutcome.message,
+      captureOk: true,
+      captureMessage: captureOutcome.message,
+      streamOk: streamOutcome.ok,
+      streamMessage: streamOutcome.message,
+    };
   };
 
   const handleStop = async (): Promise<void> => {
