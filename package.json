@@ -88,6 +88,7 @@
       "category": "public.app-category.business",
       "target": [
         "dmg",
+        "pkg",
         "zip"
       ],
       "hardenedRuntime": true,
@@ -104,9 +105,16 @@
     "linux": {
       "target": [
         "AppImage",
-        "deb"
+        "deb",
+        "rpm"
       ],
-      "category": "Office"
+      "category": "Office",
+      "desktop": {
+        "entry": {
+          "Name": "Workcube Meeting",
+          "Comment": "Meeting Intelligence — Faz 24"
+        }
+      }
     },
     "publish": {
       "provider": "github",
