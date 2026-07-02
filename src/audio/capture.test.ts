@@ -2,7 +2,7 @@
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { startRecording } from './capture';
+import { resolvePcmWorkletModuleUrl, startRecording } from './capture';
 
 class FakeTrack {
   stop = vi.fn();
@@ -165,6 +165,15 @@ afterEach(() => {
 });
 
 describe('startRecording', () => {
+  it('resolves the worklet next to the rendered document for file-backed Electron builds', () => {
+    expect(resolvePcmWorkletModuleUrl('file:///Applications/Meeting/dist/index.html')).toBe(
+      'file:///Applications/Meeting/dist/pcm-worklet.js',
+    );
+    expect(resolvePcmWorkletModuleUrl('http://localhost:5173/')).toBe(
+      'http://localhost:5173/pcm-worklet.js',
+    );
+  });
+
   it('skips loopback capture on macOS and starts mic-only recording', async () => {
     installElectronApiMock();
     setUserAgent('Mozilla/5.0 (Macintosh; Intel Mac OS X 15_5)');

@@ -31,6 +31,10 @@ const CAPTURE_IPC_TIMEOUT_MS = 15_000;
 const LOOPBACK_CAPTURE_TIMEOUT_MS = 5_000;
 const WINDOWS_USER_AGENT_RE = /\bWindows NT\b/i;
 
+export function resolvePcmWorkletModuleUrl(baseUri = document.baseURI): string {
+  return new URL('pcm-worklet.js', baseUri).toString();
+}
+
 export interface Recorder {
   sessionId: string;
   hasLoopback: boolean;
@@ -172,7 +176,7 @@ export async function startRecording(
     ).catch(() => null);
     ctx = new AudioContext();
     await withTimeout(
-      ctx.audioWorklet.addModule('/pcm-worklet.js'),
+      ctx.audioWorklet.addModule(resolvePcmWorkletModuleUrl()),
       CAPTURE_IPC_TIMEOUT_MS,
       'Audio worklet yükleme zaman aşımına uğradı.',
     );
