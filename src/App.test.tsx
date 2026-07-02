@@ -719,6 +719,35 @@ describe('App recorder readiness', () => {
     expect(screen.getAllByRole('article')).toHaveLength(1);
   });
 
+  it('gateway baslangici direct-STT hatasi verirse kaydi direct stream modunda baslatir', async () => {
+    installElectronApiMock({
+      meetingId: '22222222-2222-4222-8222-222222222222',
+      deviceId: 'desktop-1',
+      ready: true,
+      reason: null,
+      liveSttStreamUrl: 'ws://127.0.0.1:18220/ws/stream',
+      liveSttStreamReason: null,
+    });
+    vi.mocked(startRecording).mockResolvedValue({
+      sessionId: 'LOCAL-1',
+      hasLoopback: false,
+      gatewayActive: false,
+      gatewayError: 'Direct STT baglanti hatasi',
+      stop: vi.fn(),
+      onError: vi.fn(),
+    });
+
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Kaydet' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Onaylıyorum — Kaydı Başlat' }));
+
+    expect(
+      await screen.findByText('Kayıt başladı (yalnız mikrofon, direct stream, oturum LOCAL-1)'),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/Kayıt başlatılamadı/)).not.toBeInTheDocument();
+  });
+
   it('client saati serverdan ilerideyse transcript satirinda server zamanini kullanir', async () => {
     installElectronApiMock({
       meetingId: '22222222-2222-4222-8222-222222222222',

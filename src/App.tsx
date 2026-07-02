@@ -676,7 +676,8 @@ function App() {
         markIntelligenceRecording(current, { meetingId, sessionId: rec.sessionId }),
       );
       const mode = rec.hasLoopback ? 'mikrofon + sistem sesi' : 'yalnız mikrofon';
-      setStatus(`Kayıt başladı (${mode}, oturum ${rec.sessionId})`);
+      const gatewayMode = rec.gatewayActive === false ? ', direct stream' : '';
+      setStatus(`Kayıt başladı (${mode}${gatewayMode}, oturum ${rec.sessionId})`);
     } catch (e) {
       const message = `Kayıt başlatılamadı: ${(e as Error).message}`;
       transcriptSessionIdRef.current = null;

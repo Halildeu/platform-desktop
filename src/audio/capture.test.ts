@@ -347,4 +347,61 @@ describe('startRecording', () => {
 
     expect(window.electronAPI?.audio.finish).toHaveBeenCalledWith('CAP-1');
   });
+
+  it('falls back to direct-only capture when gateway start fails and Direct-STT is configured', async () => {
+    installElectronApiMock();
+    setUserAgent('Mozilla/5.0 (Macintosh; Intel Mac OS X 15_5)');
+    const { micTrack } = installBrowserAudioMocks();
+    vi.stubGlobal('WebSocket', FakeWebSocket);
+    vi.mocked(window.electronAPI!.audio.start).mockRejectedValueOnce(
+      new Error('Direct STT baglanti hatasi'),
+    );
+
+    const recorder = await startRecording('meeting-1', 'desktop-1', {
+      liveSttStreamUrl: 'ws://127.0.0.1:18220/ws/stream',
+    });
+    const captureNode = FakeAudioWorkletNode.lastInstance;
+    const ws = FakeWebSocket.instances[0];
+
+    expect(recorder.sessionId).toMatch(/^LOCAL-/);
+    expect(recorder.gatewayActive).toBe(false);
+    expect(recorder.gatewayError).toBe('Direct STT baglanti hatasi');
+    expect(window.electronAPI?.audio.start).toHaveBeenCalledWith('meeting-1', 'desktop-1');
+    expect(ws?.url).toBe('ws://127.0.0.1:18220/ws/stream');
+
+    ws?.open();
+    ws?.message({ type: 'ready' });
+    captureNode?.port.onmessage?.({
+      data: new Float32Array(48_000),
+    } as MessageEvent<Float32Array>);
+
+    expect(ws?.sent).toHaveLength(10);
+    expect(window.electronAPI?.audio.sendChunk).not.toHaveBeenCalled();
+
+    await recorder.stop();
+
+    expect(micTrack.stop).toHaveBeenCalled();
+    expect(window.electronAPI?.audio.finish).not.toHaveBeenCalled();
+    expect(window.electronAPI?.audio.abort).not.toHaveBeenCalled();
+  });
+
+  it('does not use direct-only fallback for recorder contract errors', async () => {
+    installElectronApiMock();
+    setUserAgent('Mozilla/5.0 (Macintosh; Intel Mac OS X 15_5)');
+    const { micTrack } = installBrowserAudioMocks();
+    vi.stubGlobal('WebSocket', FakeWebSocket);
+    vi.mocked(window.electronAPI!.audio.start).mockRejectedValueOnce(
+      new Error('consent required before recording'),
+    );
+
+    await expect(
+      startRecording('meeting-1', 'desktop-1', {
+        liveSttStreamUrl: 'ws://127.0.0.1:18220/ws/stream',
+      }),
+    ).rejects.toThrow('consent required before recording');
+
+    expect(micTrack.stop).toHaveBeenCalled();
+    expect(FakeWebSocket.instances).toHaveLength(0);
+    expect(window.electronAPI?.audio.cancelCapture).toHaveBeenCalledTimes(1);
+  });
 });

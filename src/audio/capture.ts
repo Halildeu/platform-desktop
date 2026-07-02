@@ -101,6 +101,8 @@ export async function testAudioCaptureWorklet(
 export interface Recorder {
   sessionId: string;
   hasLoopback: boolean;
+  gatewayActive?: boolean;
+  gatewayError?: string | null;
   stop: () => Promise<void>;
   onError: (handler: (err: Error) => void) => void;
 }
@@ -198,6 +200,31 @@ function rms(samples: Float32Array): number {
   return Math.sqrt(sum / samples.length);
 }
 
+function localSessionId(): string {
+  const randomId =
+    typeof globalThis.crypto?.randomUUID === 'function'
+      ? globalThis.crypto.randomUUID()
+      : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  return `LOCAL-${randomId}`;
+}
+
+function canContinueDirectOnlyAfterGatewayStartError(message: string): boolean {
+  const normalized = message.toLocaleLowerCase('tr-TR');
+  return (
+    normalized.includes('direct stt') ||
+    normalized.includes('gateway') ||
+    normalized.includes('timed out') ||
+    normalized.includes('timeout') ||
+    normalized.includes('zaman aşımı') ||
+    normalized.includes('zaman asimi') ||
+    normalized.includes('fetch failed') ||
+    normalized.includes('network') ||
+    normalized.includes('econn') ||
+    normalized.includes('retryable=true') ||
+    /failed:\s*5\d\d/.test(normalized)
+  );
+}
+
 export async function startRecording(
   meetingId: string,
   deviceId: string,
@@ -288,7 +315,8 @@ export async function startRecording(
   mixedSource.connect(captureNode);
   captureNode.connect(sink).connect(audioContext.destination);
 
-  let session: { sessionId: string; captureId: string };
+  let session: { sessionId: string; captureId: string } | null = null;
+  let gatewayStartError: string | null = null;
   try {
     session = await withTimeout(
       api.audio.start(meetingId, deviceId),
@@ -299,12 +327,17 @@ export async function startRecording(
       },
     );
   } catch (err) {
-    stopAllTracks(micStream, loopbackStream);
-    await audioContext.close();
-    void api.audio.cancelCapture().catch(() => undefined);
-    throw err;
+    const reason = err instanceof Error ? err.message : String(err);
+    if (!options.liveSttStreamUrl || !canContinueDirectOnlyAfterGatewayStartError(reason)) {
+      stopAllTracks(micStream, loopbackStream);
+      await audioContext.close();
+      void api.audio.cancelCapture().catch(() => undefined);
+      throw err;
+    }
+    gatewayStartError = reason;
   }
-  const { sessionId, captureId } = session;
+  const sessionId = session?.sessionId ?? localSessionId();
+  const captureId = session?.captureId ?? null;
 
   const frameSamples = Math.round((audioContext.sampleRate * CHUNK_MS) / 1000);
   const fb = new FrameBuffer(frameSamples);
@@ -342,10 +375,15 @@ export async function startRecording(
     liveStream?.close();
     stopAllTracks(micStream, loopbackStream);
     void audioContext.close();
-    void api.audio.abort(captureId).catch(() => {});
+    if (captureId) {
+      void api.audio.abort(captureId).catch(() => {});
+    }
   };
 
   const enqueueChunk = (bytes: Uint8Array, startedAtMs: number): void => {
+    if (!captureId) {
+      return;
+    }
     if (uploadError) {
       return;
     }
@@ -392,9 +430,11 @@ export async function startRecording(
         liveStream.send(frame);
       }
     }
-    for (const chunk of fb.push(ev.data)) {
-      const bytes = encodeChunk(chunk, empty, audioContext.sampleRate, TARGET_RATE);
-      enqueueChunk(bytes, capturedAtMs);
+    if (captureId) {
+      for (const chunk of fb.push(ev.data)) {
+        const bytes = encodeChunk(chunk, empty, audioContext.sampleRate, TARGET_RATE);
+        enqueueChunk(bytes, capturedAtMs);
+      }
     }
   };
 
@@ -403,6 +443,8 @@ export async function startRecording(
   return {
     sessionId,
     hasLoopback: loopback !== null,
+    gatewayActive: captureId !== null,
+    gatewayError: gatewayStartError,
     onError: (handler: (err: Error) => void): void => {
       errorHandler = handler;
     },
@@ -419,10 +461,12 @@ export async function startRecording(
             liveStream.send(restLiveFrame);
           }
         }
-        const rest = fb.flush();
-        if (rest) {
-          const bytes = encodeChunk(rest, empty, audioContext.sampleRate, TARGET_RATE);
-          enqueueChunk(bytes, Date.now());
+        if (captureId) {
+          const rest = fb.flush();
+          if (rest) {
+            const bytes = encodeChunk(rest, empty, audioContext.sampleRate, TARGET_RATE);
+            enqueueChunk(bytes, Date.now());
+          }
         }
       }
 
@@ -438,12 +482,14 @@ export async function startRecording(
       }
 
       if (finalError) {
-        if (!uploadError) {
+        if (captureId) {
           await api.audio.abort(captureId).catch(() => {});
         }
         throw finalError;
       }
-      await api.audio.finish(captureId);
+      if (captureId) {
+        await api.audio.finish(captureId);
+      }
     },
   };
 }
