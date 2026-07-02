@@ -111,6 +111,32 @@ function normalizedWords(words: string[]): string[] {
   return words.map(normalizeWord).filter(Boolean);
 }
 
+function isLowInformationRepetition(text: string): boolean {
+  const words = normalizedWords(splitWords(text));
+  if (words.length < 8) {
+    return false;
+  }
+
+  const uniqueRatio = new Set(words).size / words.length;
+  if (uniqueRatio <= 0.45) {
+    return true;
+  }
+
+  const ngramSizes = words.length < 12 ? [2] : [2, 3];
+  return ngramSizes.some((ngramSize) => {
+    const counts = new Map<string, number>();
+    for (let index = 0; index <= words.length - ngramSize; index += 1) {
+      const key = words.slice(index, index + ngramSize).join('\u0000');
+      const nextCount = (counts.get(key) ?? 0) + 1;
+      if (nextCount >= 3) {
+        return true;
+      }
+      counts.set(key, nextCount);
+    }
+    return false;
+  });
+}
+
 function hasSamePrefix(previousText: string, nextText: string): boolean {
   return nextText.toLocaleLowerCase('tr-TR').startsWith(previousText.toLocaleLowerCase('tr-TR'));
 }
@@ -170,7 +196,7 @@ function mergeRollingPartial(previousText: string, nextText: string): string {
     return [...previousRawWords, ...nextRawWords.slice(overlap)].join(' ');
   }
 
-  return `${previous} ${next}`;
+  return next;
 }
 
 function mergeFinalTranscript(previousText: string, finalText: string): string {
@@ -206,10 +232,6 @@ function mergeFinalTranscript(previousText: string, finalText: string): string {
   const overlap = suffixPrefixOverlap(previousWords, finalWords);
   if (overlap >= 2) {
     return [...previousRawWords, ...finalRawWords.slice(overlap)].join(' ');
-  }
-
-  if (previousRawWords.length > finalRawWords.length) {
-    return mergeRollingPartial(previous, final);
   }
 
   return final;
@@ -381,11 +403,17 @@ export function connectLiveSttStream(
       }
 
       if (event.type === 'final') {
-        const text = mergeFinalTranscript(
-          segmentKnownText.get(event.seq) ?? segmentDraftText.get(event.seq) ?? '',
-          event.text,
-        );
-        if (!text) {
+        const previousText =
+          segmentKnownText.get(event.seq) ?? segmentDraftText.get(event.seq) ?? '';
+        let finalText = event.text;
+        if (isLowInformationRepetition(event.text)) {
+          if (!previousText || isLowInformationRepetition(previousText)) {
+            return;
+          }
+          finalText = previousText;
+        }
+        const text = mergeFinalTranscript(previousText, finalText);
+        if (!text || isLowInformationRepetition(text)) {
           return;
         }
         const startedAtMs = segmentStartedAt.get(event.seq) ?? Date.now();

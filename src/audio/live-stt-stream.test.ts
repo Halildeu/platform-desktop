@@ -255,6 +255,106 @@ describe('connectLiveSttStream', () => {
     stream.close();
   });
 
+  it('replaces unrelated rolling partial alternatives instead of appending variants', () => {
+    vi.useFakeTimers();
+    vi.stubGlobal('WebSocket', FakeWebSocket);
+    const events: LiveSttTranscriptEvent[] = [];
+
+    const stream = connectLiveSttStream('ws://127.0.0.1:18220/ws/stream', {
+      onTranscriptEvent: (event) => events.push(event),
+    });
+    const ws = FakeWebSocket.instances[0];
+
+    ws?.open();
+    ws?.message({ type: 'ready' });
+    ws?.message({
+      type: 'partial',
+      seq: 0,
+      confirmed: '',
+      tentative: 'Akşama aktif diyorsun',
+      elapsed_ms: 180,
+      rms: 0.04,
+      source: 'medium',
+    });
+    vi.advanceTimersByTime(210);
+    ws?.message({
+      type: 'partial',
+      seq: 0,
+      confirmed: '',
+      tentative: 'Kelime akışı aktif',
+      elapsed_ms: 210,
+      rms: 0.04,
+      source: 'medium',
+    });
+
+    expect(events.at(-1)?.text).toBe('Kelime akışı aktif');
+
+    stream.close();
+  });
+
+  it('drops repetitive final decode loops when no stable draft exists', () => {
+    vi.stubGlobal('WebSocket', FakeWebSocket);
+    const events: LiveSttTranscriptEvent[] = [];
+
+    const stream = connectLiveSttStream('ws://127.0.0.1:18220/ws/stream', {
+      onTranscriptEvent: (event) => events.push(event),
+    });
+    const ws = FakeWebSocket.instances[0];
+
+    ws?.open();
+    ws?.message({ type: 'ready' });
+    ws?.message({
+      type: 'final',
+      seq: 0,
+      text: 'Akşama aktif diyorsun Akşam aktif diyorsun ya Akşama aktif diyorsun yani Akışa aktif diyorsun yani.',
+      elapsed_ms: 760,
+      rms: 0.04,
+    });
+
+    expect(events).toEqual([]);
+
+    stream.close();
+  });
+
+  it('finalizes the stable draft when the final payload is a repetitive decode loop', () => {
+    vi.useFakeTimers();
+    vi.stubGlobal('WebSocket', FakeWebSocket);
+    const events: LiveSttTranscriptEvent[] = [];
+
+    const stream = connectLiveSttStream('ws://127.0.0.1:18220/ws/stream', {
+      onTranscriptEvent: (event) => events.push(event),
+    });
+    const ws = FakeWebSocket.instances[0];
+
+    ws?.open();
+    ws?.message({ type: 'ready' });
+    ws?.message({
+      type: 'partial',
+      seq: 0,
+      confirmed: '',
+      tentative: 'Kelime akışı aktif',
+      elapsed_ms: 180,
+      rms: 0.04,
+      source: 'medium',
+    });
+    vi.advanceTimersByTime(140);
+    ws?.message({
+      type: 'final',
+      seq: 0,
+      text: 'Akşama aktif diyorsun Akşam aktif diyorsun ya Akşama aktif diyorsun yani Akışa aktif diyorsun yani.',
+      elapsed_ms: 760,
+      rms: 0.04,
+    });
+
+    expect(events.at(-1)).toMatchObject({
+      id: 'stream:0',
+      status: 'final',
+      text: 'Kelime akışı aktif',
+    });
+
+    stream.close();
+  });
+
   it('cancels pending word reveal when final transcript arrives', () => {
     vi.useFakeTimers();
     vi.stubGlobal('WebSocket', FakeWebSocket);
@@ -372,7 +472,7 @@ describe('connectLiveSttStream', () => {
     stream.close();
   });
 
-  it('keeps displayed rolling words when a shorter final is a new correction fragment', () => {
+  it('replaces the draft when a shorter final is an unrelated correction fragment', () => {
     vi.useFakeTimers();
     vi.stubGlobal('WebSocket', FakeWebSocket);
     const events: LiveSttTranscriptEvent[] = [];
@@ -405,7 +505,7 @@ describe('connectLiveSttStream', () => {
     expect(events.at(-1)).toMatchObject({
       id: 'stream:0',
       status: 'final',
-      text: 'Söylediklerimin yarısını ne söylediklerimin yarısını neden Kısmın yarısının neden yok?',
+      text: 'Kısmın yarısının neden yok?',
     });
 
     stream.close();
