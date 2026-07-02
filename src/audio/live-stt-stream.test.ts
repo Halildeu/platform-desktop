@@ -327,7 +327,46 @@ describe('connectLiveSttStream', () => {
     expect(events.at(-1)).toMatchObject({
       id: 'stream:0',
       status: 'final',
-      text: 'Merhaba nasılsın bugün toplantıdayız',
+      text: 'Merhaba nasılsın bugün toplantıdayız.',
+    });
+
+    stream.close();
+  });
+
+  it('applies final suffix punctuation without dropping displayed prefix words', () => {
+    vi.useFakeTimers();
+    vi.stubGlobal('WebSocket', FakeWebSocket);
+    const events: LiveSttTranscriptEvent[] = [];
+
+    const stream = connectLiveSttStream('ws://127.0.0.1:18220/ws/stream', {
+      onTranscriptEvent: (event) => events.push(event),
+    });
+    const ws = FakeWebSocket.instances[0];
+
+    ws?.open();
+    ws?.message({ type: 'ready' });
+    ws?.message({
+      type: 'partial',
+      seq: 0,
+      confirmed: '',
+      tentative: 'Bu cümle doğru şekilde yazılıyor',
+      elapsed_ms: 180,
+      rms: 0.04,
+      source: 'medium',
+    });
+    vi.advanceTimersByTime(280);
+    ws?.message({
+      type: 'final',
+      seq: 0,
+      text: 'doğru şekilde yazılıyor.',
+      elapsed_ms: 320,
+      rms: 0.04,
+    });
+
+    expect(events.at(-1)).toMatchObject({
+      id: 'stream:0',
+      status: 'final',
+      text: 'Bu cümle doğru şekilde yazılıyor.',
     });
 
     stream.close();

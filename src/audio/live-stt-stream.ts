@@ -191,8 +191,13 @@ function mergeFinalTranscript(previousText: string, finalText: string): string {
   const previousWords = normalizedWords(previousRawWords);
   const finalWords = normalizedWords(finalRawWords);
 
-  if (contiguousIndex(previousWords, finalWords) >= 0) {
-    return previous;
+  const containedAt = contiguousIndex(previousWords, finalWords);
+  if (containedAt >= 0) {
+    return [
+      ...previousRawWords.slice(0, containedAt),
+      ...finalRawWords,
+      ...previousRawWords.slice(containedAt + finalRawWords.length),
+    ].join(' ');
   }
   if (contiguousIndex(finalWords, previousWords) >= 0) {
     return final;
