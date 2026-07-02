@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { type Recorder, startRecording } from './audio/capture';
 import {
@@ -339,6 +339,7 @@ function App() {
       rec.onError((err) => {
         recorderRef.current = null;
         setRecording(false);
+        window.electronAPI?.tray.setRecordingActive(false);
         const message = `Kayıt hatası (ses kaybı): ${err.message}`;
         setError(message);
         setStatus('');
@@ -347,6 +348,7 @@ function App() {
       });
       recorderRef.current = rec;
       setRecording(true);
+      window.electronAPI?.tray.setRecordingActive(true);
       setTranscriptSession((current) =>
         startTranscriptSession(current, {
           sessionId: rec.sessionId,
@@ -371,7 +373,7 @@ function App() {
     }
   };
 
-  const handleStop = async (): Promise<void> => {
+  const handleStop = useCallback(async (): Promise<void> => {
     try {
       await recorderRef.current?.stop();
       setStatus('Kayıt tamamlandı, gönderildi.');
@@ -385,8 +387,20 @@ function App() {
     } finally {
       recorderRef.current = null;
       setRecording(false);
+      window.electronAPI?.tray.setRecordingActive(false);
     }
-  };
+  }, []);
+
+  useEffect(() => {
+    // Tray "Kaydı Bitir" tıklaması — sadece aktif kayıt varken menüde etkin
+    // (tray-manager.ts), ama burada da savunmacı kontrol edilir.
+    const offStopRequested = window.electronAPI?.tray.onStopRequested(() => {
+      if (recorderRef.current) {
+        void handleStop();
+      }
+    });
+    return () => offStopRequested?.();
+  }, [handleStop]);
 
   return (
     <div className="app-root">
