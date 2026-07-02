@@ -111,6 +111,13 @@ function normalizedWords(words: string[]): string[] {
   return words.map(normalizeWord).filter(Boolean);
 }
 
+function sameNormalizedText(left: string, right: string): boolean {
+  return (
+    normalizedWords(splitWords(left)).join('\u0000') ===
+    normalizedWords(splitWords(right)).join('\u0000')
+  );
+}
+
 function wordFamily(word: string): string {
   let family = word;
   const suffixes = [
@@ -346,6 +353,7 @@ export function connectLiveSttStream(
   const segmentDraftText = new Map<number, string>();
   const segmentKnownText = new Map<number, string>();
   const segmentGeneration = new Map<number, number>();
+  const segmentFinalText = new Map<number, string>();
   const finalizedSequences = new Set<number>();
   const pendingPartialTimers = new Map<number, Array<ReturnType<typeof setTimeout>>>();
 
@@ -454,6 +462,13 @@ export function connectLiveSttStream(
       }
 
       if (event.type === 'final') {
+        if (finalizedSequences.has(event.seq)) {
+          const previousFinal = segmentFinalText.get(event.seq);
+          if (previousFinal && sameNormalizedText(previousFinal, event.text)) {
+            return;
+          }
+          ensureOpenSegment(event.seq);
+        }
         const previousText =
           segmentKnownText.get(event.seq) ?? segmentDraftText.get(event.seq) ?? '';
         let finalText = event.text;
@@ -473,6 +488,7 @@ export function connectLiveSttStream(
         segmentDraftText.delete(event.seq);
         segmentKnownText.delete(event.seq);
         finalizedSequences.add(event.seq);
+        segmentFinalText.set(event.seq, text);
         callbacks.onTranscriptEvent?.({
           id: segmentId(event.seq),
           startedAtMs,
@@ -514,6 +530,7 @@ export function connectLiveSttStream(
     segmentStartedAt.delete(seq);
     segmentDraftText.delete(seq);
     segmentKnownText.delete(seq);
+    segmentFinalText.delete(seq);
     clearPendingPartials(seq);
   };
 

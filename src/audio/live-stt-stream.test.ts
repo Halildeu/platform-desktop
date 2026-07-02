@@ -617,6 +617,73 @@ describe('connectLiveSttStream', () => {
     stream.close();
   });
 
+  it('opens a new local segment when the server reuses a finalized sequence with a final-only event', () => {
+    vi.stubGlobal('WebSocket', FakeWebSocket);
+    const events: LiveSttTranscriptEvent[] = [];
+
+    const stream = connectLiveSttStream('ws://127.0.0.1:18220/ws/stream', {
+      onTranscriptEvent: (event) => events.push(event),
+    });
+    const ws = FakeWebSocket.instances[0];
+
+    ws?.open();
+    ws?.message({ type: 'ready' });
+    ws?.message({
+      type: 'final',
+      seq: 0,
+      text: 'İlk konu tamam.',
+      elapsed_ms: 260,
+      rms: 0.04,
+    });
+    ws?.message({
+      type: 'final',
+      seq: 0,
+      text: 'İkinci konu başladı.',
+      elapsed_ms: 520,
+      rms: 0.04,
+    });
+
+    expect(events.map((event) => [event.id, event.status, event.text])).toEqual([
+      ['stream:0', 'final', 'İlk konu tamam.'],
+      ['stream:0:1', 'final', 'İkinci konu başladı.'],
+    ]);
+
+    stream.close();
+  });
+
+  it('ignores duplicate final replays for the same finalized sequence', () => {
+    vi.stubGlobal('WebSocket', FakeWebSocket);
+    const events: LiveSttTranscriptEvent[] = [];
+
+    const stream = connectLiveSttStream('ws://127.0.0.1:18220/ws/stream', {
+      onTranscriptEvent: (event) => events.push(event),
+    });
+    const ws = FakeWebSocket.instances[0];
+
+    ws?.open();
+    ws?.message({ type: 'ready' });
+    ws?.message({
+      type: 'final',
+      seq: 0,
+      text: 'İlk konu tamam.',
+      elapsed_ms: 260,
+      rms: 0.04,
+    });
+    ws?.message({
+      type: 'final',
+      seq: 0,
+      text: 'İlk konu tamam',
+      elapsed_ms: 280,
+      rms: 0.04,
+    });
+
+    expect(events.map((event) => [event.id, event.status, event.text])).toEqual([
+      ['stream:0', 'final', 'İlk konu tamam.'],
+    ]);
+
+    stream.close();
+  });
+
   it('reconnects after a transient close and flushes buffered audio frames', () => {
     vi.useFakeTimers();
     vi.stubGlobal('WebSocket', FakeWebSocket);
