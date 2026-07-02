@@ -364,6 +364,69 @@ describe('connectLiveSttStream', () => {
     stream.close();
   });
 
+  it('drops repeated final correction fragments from rolling STT alternatives', () => {
+    vi.stubGlobal('WebSocket', FakeWebSocket);
+    const events: LiveSttTranscriptEvent[] = [];
+
+    const stream = connectLiveSttStream('ws://127.0.0.1:18220/ws/stream', {
+      onTranscriptEvent: (event) => events.push(event),
+    });
+    const ws = FakeWebSocket.instances[0];
+
+    ws?.open();
+    ws?.message({ type: 'ready' });
+    ws?.message({
+      type: 'final',
+      seq: 0,
+      text: 'Kendime Kendimi al. Kendime akışa. Kendime akış al. Kendime akışa akışa Kendimi akışa aktif. Kelime akışı aktif.',
+      elapsed_ms: 760,
+      rms: 0.04,
+    });
+
+    expect(events).toEqual([]);
+
+    stream.close();
+  });
+
+  it('keeps a stable draft when the final correction chain repeats alternatives', () => {
+    vi.useFakeTimers();
+    vi.stubGlobal('WebSocket', FakeWebSocket);
+    const events: LiveSttTranscriptEvent[] = [];
+
+    const stream = connectLiveSttStream('ws://127.0.0.1:18220/ws/stream', {
+      onTranscriptEvent: (event) => events.push(event),
+    });
+    const ws = FakeWebSocket.instances[0];
+
+    ws?.open();
+    ws?.message({ type: 'ready' });
+    ws?.message({
+      type: 'partial',
+      seq: 0,
+      confirmed: '',
+      tentative: 'Kelime akışı aktif',
+      elapsed_ms: 180,
+      rms: 0.04,
+      source: 'medium',
+    });
+    vi.advanceTimersByTime(140);
+    ws?.message({
+      type: 'final',
+      seq: 0,
+      text: 'Kendime Kendimi al. Kendime akışa. Kendime akış al. Kendime akışa akışa Kendimi akışa aktif. Kelime akışı aktif.',
+      elapsed_ms: 760,
+      rms: 0.04,
+    });
+
+    expect(events.at(-1)).toMatchObject({
+      id: 'stream:0',
+      status: 'final',
+      text: 'Kelime akışı aktif',
+    });
+
+    stream.close();
+  });
+
   it('keeps normal final speech that mentions the live word flow once', () => {
     vi.stubGlobal('WebSocket', FakeWebSocket);
     const events: LiveSttTranscriptEvent[] = [];

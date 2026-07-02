@@ -157,6 +157,40 @@ function normalizedFamilies(words: string[]): string[] {
   return normalizedWords(words).map(wordFamily).filter(Boolean);
 }
 
+function sharedTokenRatio(left: string[], right: string[]): number {
+  const leftSet = new Set(left);
+  const rightSet = new Set(right);
+  const denominator = Math.min(leftSet.size, rightSet.size);
+  if (denominator === 0) {
+    return 0;
+  }
+
+  let shared = 0;
+  leftSet.forEach((word) => {
+    if (rightSet.has(word)) {
+      shared += 1;
+    }
+  });
+
+  return shared / denominator;
+}
+
+function repeatedFamilyCount(families: string[]): number {
+  const counts = new Map<string, number>();
+  for (const family of families) {
+    counts.set(family, (counts.get(family) ?? 0) + 1);
+  }
+
+  return counts.size === 0 ? 0 : Math.max(...counts.values());
+}
+
+function sentenceFragments(text: string): string[][] {
+  return text
+    .split(/[.!?…]+|\b(?:ya|yani)\b/giu)
+    .map((fragment) => normalizedFamilies(splitWords(fragment)))
+    .filter((words) => words.length >= 2);
+}
+
 function isLowInformationRepetition(text: string): boolean {
   const words = normalizedWords(splitWords(text));
   if (words.length < 8) {
@@ -232,8 +266,41 @@ function isRepeatedDecodeChain(text: string): boolean {
   return [...repeatedBigrams.values()].some((count) => count >= 2) && topFamilyCount >= 3;
 }
 
+function isRepeatedAlternativeChain(text: string): boolean {
+  const families = normalizedFamilies(splitWords(text));
+  if (families.length < 8 || repeatedFamilyCount(families) < 4) {
+    return false;
+  }
+
+  const fragments = sentenceFragments(text);
+  if (fragments.length < 3) {
+    return false;
+  }
+
+  let similarPairs = 0;
+  for (let leftIndex = 0; leftIndex < fragments.length - 1; leftIndex += 1) {
+    for (let rightIndex = leftIndex + 1; rightIndex < fragments.length; rightIndex += 1) {
+      const left = fragments[leftIndex];
+      const right = fragments[rightIndex];
+      const shared = sharedTokenRatio(left, right);
+      if (shared >= 0.6) {
+        similarPairs += 1;
+      }
+      if (similarPairs >= 2) {
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
+
 function isUnstableFinalText(text: string): boolean {
-  return isLowInformationRepetition(text) || isRepeatedDecodeChain(text);
+  return (
+    isLowInformationRepetition(text) ||
+    isRepeatedDecodeChain(text) ||
+    isRepeatedAlternativeChain(text)
+  );
 }
 
 function hasSamePrefix(previousText: string, nextText: string): boolean {
