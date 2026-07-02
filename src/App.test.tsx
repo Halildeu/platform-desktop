@@ -315,6 +315,8 @@ describe('App recorder readiness', () => {
     expect(
       await screen.findByText('Kayıt başladı (yalnız mikrofon, oturum SES-1)'),
     ).toBeInTheDocument();
+    expect(screen.queryByText('Direct STT baglanti hatasi. · 500 ms')).not.toBeInTheDocument();
+    expect(screen.getByText('Direct STT kayıt sırasında bağlanacak...')).toBeInTheDocument();
     expect(startRecording).toHaveBeenCalledWith(
       '22222222-2222-4222-8222-222222222222',
       'desktop-1',
@@ -323,11 +325,7 @@ describe('App recorder readiness', () => {
       }),
     );
     expect(testLiveSttStreamConnection).toHaveBeenCalledTimes(3);
-    expect(
-      screen.queryByText(
-        'Kayıt başlatılamadı: Direct STT baglanti hatasi. Kayıt başlatılmadı; mikrofon açılmadı.',
-      ),
-    ).not.toBeInTheDocument();
+    expect(screen.queryByText(/Kayıt başlatılamadı:/)).not.toBeInTheDocument();
   });
 
   it('kayit baslatirken direct STT preflight retry beklemeden mikrofona gecer', async () => {
@@ -639,8 +637,8 @@ describe('App recorder readiness', () => {
       });
     });
 
-    expect(screen.queryByText('gateway cümle paketi')).not.toBeInTheDocument();
-    expect(screen.queryAllByRole('article')).toHaveLength(0);
+    expect(screen.getByText('gateway cümle paketi')).toBeInTheDocument();
+    expect(screen.getAllByRole('article')).toHaveLength(1);
 
     act(() => {
       options?.onLiveTranscriptEvent?.({
@@ -651,6 +649,8 @@ describe('App recorder readiness', () => {
       });
     });
     expect(await screen.findByText('Merhaba')).toBeInTheDocument();
+    expect(screen.getByText('gateway cümle paketi')).toBeInTheDocument();
+    expect(screen.getAllByRole('article')).toHaveLength(2);
 
     act(() => {
       options?.onLiveTranscriptEvent?.({
@@ -662,7 +662,7 @@ describe('App recorder readiness', () => {
     });
     expect(await screen.findByText('Merhaba nasılsın')).toBeInTheDocument();
     expect(screen.queryByText('Merhaba')).not.toBeInTheDocument();
-    expect(screen.getAllByRole('article')).toHaveLength(1);
+    expect(screen.getAllByRole('article')).toHaveLength(2);
 
     act(() => {
       transcriptEventHandler?.({
@@ -677,8 +677,8 @@ describe('App recorder readiness', () => {
       });
     });
 
-    expect(screen.queryByText('gateway cümle paketi')).not.toBeInTheDocument();
-    expect(screen.getAllByRole('article')).toHaveLength(1);
+    expect(screen.getByText('gateway cümle paketi')).toBeInTheDocument();
+    expect(screen.getAllByRole('article')).toHaveLength(2);
   });
 
   it('direct live STT ilk partial eventini recorder session hazirlanana kadar tamponlar', async () => {

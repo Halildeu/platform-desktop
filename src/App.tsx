@@ -49,7 +49,6 @@ const RECORDER_START_TIMEOUT_MS = 45_000;
 const TRANSCRIPT_CLIENT_CLOCK_SKEW_MS = 30_000;
 const MAX_PENDING_LIVE_TRANSCRIPT_EVENTS = 50;
 const ACTIVE_AUDIO_RMS = 0.006;
-const DIRECT_STT_START_BLOCKED_MARKER = 'Kayıt başlatılmadı; mikrofon açılmadı.';
 const LIVE_STT_PREFLIGHT_MAX_ATTEMPTS = 3;
 const LIVE_STT_PREFLIGHT_RETRY_DELAY_MS = 180;
 
@@ -260,14 +259,6 @@ function isContractCreationExpected(reason: string | null | undefined): boolean 
   return typeof reason === 'string' && reason.includes(RECORDER_MEETING_ID_UNSET_MARKER);
 }
 
-function isRecoverableDirectSttStartupError(error: string | null | undefined): boolean {
-  return (
-    typeof error === 'string' &&
-    error.includes('Direct STT') &&
-    error.includes(DIRECT_STT_START_BLOCKED_MARKER)
-  );
-}
-
 function markMeetingIntelligenceWaitingForContract(
   current: ReturnType<typeof initialMeetingIntelligence>,
 ): ReturnType<typeof initialMeetingIntelligence> {
@@ -312,32 +303,6 @@ function App() {
   const directStreamConfiguredRef = useRef(false);
   const transcriptSessionIdRef = useRef<string | null>(null);
   const pendingLiveTranscriptEventsRef = useRef<LiveSttTranscriptEvent[]>([]);
-
-  const clearRecoveredDirectSttStartupError = (): void => {
-    const meetingId = recorderConfig?.meetingId;
-    const deviceId = recorderConfig?.deviceId;
-    if (!recorderConfig?.ready || !meetingId || !deviceId) {
-      return;
-    }
-
-    setError((current) => (isRecoverableDirectSttStartupError(current) ? '' : current));
-    setTranscriptSession((current) =>
-      current.lifecycle === 'error' && isRecoverableDirectSttStartupError(current.error)
-        ? markTranscriptReady(current, { meetingId, deviceId })
-        : current,
-    );
-    setMeetingIntelligence((current) =>
-      current.status === 'error' && isRecoverableDirectSttStartupError(current.error)
-        ? {
-            ...current,
-            meetingId,
-            status: 'idle',
-            error: null,
-            result: null,
-          }
-        : current,
-    );
-  };
 
   const enqueuePendingLiveTranscriptEvent = (event: LiveSttTranscriptEvent): void => {
     pendingLiveTranscriptEventsRef.current = [
@@ -436,7 +401,7 @@ function App() {
         if (!current.sessionId || event.sessionId !== current.sessionId) {
           return current;
         }
-        if (directStreamConfiguredRef.current || liveStreamHasEventsRef.current) {
+        if (liveStreamHasEventsRef.current) {
           return current;
         }
         if (!event.text.trim() || !Number.isFinite(event.chunkStartedAtMs)) {
@@ -613,17 +578,13 @@ function App() {
       }
       const liveSttStreamUrlForSession = recorderConfig.liveSttStreamUrl;
       if (recorderConfig.liveSttStreamUrl) {
-        setLiveStreamPreflight((current) =>
-          current.status === 'idle'
-            ? {
-                status: 'checking',
-                message: 'Direct STT kayıt sırasında bağlanacak...',
-                checkedAtMs: null,
-                elapsedMs: null,
-                stage: null,
-              }
-            : current,
-        );
+        setLiveStreamPreflight({
+          status: 'checking',
+          message: 'Direct STT kayıt sırasında bağlanacak...',
+          checkedAtMs: null,
+          elapsedMs: null,
+          stage: null,
+        });
       }
       const meetingId = recorderConfig.meetingId;
       const deviceId = recorderConfig.deviceId;
@@ -844,9 +805,6 @@ function App() {
         streamOk: streamOutcome.ok,
         streamMessage: streamOutcome.message,
       };
-    }
-    if (streamOutcome.ok) {
-      clearRecoveredDirectSttStartupError();
     }
     return {
       ok: streamOutcome.ok,
