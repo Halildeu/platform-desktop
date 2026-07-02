@@ -2,7 +2,7 @@
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { resolvePcmWorkletModuleUrl, startRecording } from './capture';
+import { resolvePcmWorkletModuleUrl, startRecording, testAudioCaptureWorklet } from './capture';
 
 class FakeTrack {
   stop = vi.fn();
@@ -35,10 +35,12 @@ class FakeAudioNode {
 }
 
 class FakeAudioContext {
+  static addModule = vi.fn().mockResolvedValue(undefined);
+
   sampleRate = 48_000;
   destination = new FakeAudioNode();
   audioWorklet = {
-    addModule: vi.fn().mockResolvedValue(undefined),
+    addModule: FakeAudioContext.addModule,
   };
   close = vi.fn().mockResolvedValue(undefined);
 
@@ -158,6 +160,8 @@ function installElectronApiMock(): void {
 
 afterEach(() => {
   FakeAudioWorkletNode.lastInstance = null;
+  FakeAudioContext.addModule.mockReset();
+  FakeAudioContext.addModule.mockResolvedValue(undefined);
   FakeWebSocket.instances = [];
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
@@ -172,6 +176,42 @@ describe('startRecording', () => {
     expect(resolvePcmWorkletModuleUrl('http://localhost:5173/')).toBe(
       'http://localhost:5173/pcm-worklet.js',
     );
+  });
+
+  it('preflights the capture worklet without opening the microphone', async () => {
+    installElectronApiMock();
+    installBrowserAudioMocks();
+
+    const result = await testAudioCaptureWorklet(
+      500,
+      'file:///Applications/Meeting/dist/index.html',
+    );
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        ok: true,
+        message: 'Ses işleyici hazır.',
+        moduleUrl: 'file:///Applications/Meeting/dist/pcm-worklet.js',
+      }),
+    );
+    expect(result.elapsedMs).toBeGreaterThanOrEqual(0);
+    expect(navigator.mediaDevices.getUserMedia).not.toHaveBeenCalled();
+  });
+
+  it('reports capture worklet preload failures as preflight errors', async () => {
+    installElectronApiMock();
+    installBrowserAudioMocks();
+    FakeAudioContext.addModule.mockRejectedValueOnce(new Error('Unable to load a worklet module'));
+
+    const result = await testAudioCaptureWorklet(
+      500,
+      'file:///Applications/Meeting/dist/index.html',
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.message).toContain('Unable to load a worklet module');
+    expect(result.moduleUrl).toBe('file:///Applications/Meeting/dist/pcm-worklet.js');
+    expect(navigator.mediaDevices.getUserMedia).not.toHaveBeenCalled();
   });
 
   it('skips loopback capture on macOS and starts mic-only recording', async () => {

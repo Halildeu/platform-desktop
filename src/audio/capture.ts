@@ -35,6 +35,69 @@ export function resolvePcmWorkletModuleUrl(baseUri = document.baseURI): string {
   return new URL('pcm-worklet.js', baseUri).toString();
 }
 
+export type AudioCapturePreflightStatus = 'idle' | 'checking' | 'ready' | 'error';
+
+export interface AudioCapturePreflightState {
+  status: AudioCapturePreflightStatus;
+  message: string | null;
+  checkedAtMs: number | null;
+  elapsedMs: number | null;
+  moduleUrl: string | null;
+}
+
+export interface AudioCapturePreflightResult {
+  ok: boolean;
+  message: string;
+  elapsedMs: number;
+  moduleUrl: string;
+}
+
+export const initialAudioCapturePreflightState: AudioCapturePreflightState = {
+  status: 'idle',
+  message: null,
+  checkedAtMs: null,
+  elapsedMs: null,
+  moduleUrl: null,
+};
+
+export async function testAudioCaptureWorklet(
+  timeoutMs = 8_000,
+  baseUri = document.baseURI,
+): Promise<AudioCapturePreflightResult> {
+  const startedAtMs = Date.now();
+  const moduleUrl = resolvePcmWorkletModuleUrl(baseUri);
+  let ctx: AudioContext | null = null;
+  const elapsed = (): number => Math.max(0, Date.now() - startedAtMs);
+
+  try {
+    ctx = new AudioContext();
+    await withTimeout(
+      ctx.audioWorklet.addModule(moduleUrl),
+      timeoutMs,
+      'Audio worklet yukleme zaman asimina ugradi.',
+    );
+    return {
+      ok: true,
+      message: 'Ses işleyici hazır.',
+      elapsedMs: elapsed(),
+      moduleUrl,
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      message: `Ses işleyici hazır değil: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+      elapsedMs: elapsed(),
+      moduleUrl,
+    };
+  } finally {
+    if (ctx) {
+      await ctx.close().catch(() => undefined);
+    }
+  }
+}
+
 export interface Recorder {
   sessionId: string;
   hasLoopback: boolean;

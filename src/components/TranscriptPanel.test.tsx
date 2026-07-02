@@ -126,6 +126,39 @@ describe('TranscriptPanel', () => {
     expect(screen.getByText('Direct STT stream hazir. · 240 ms')).toBeInTheDocument();
   });
 
+  it('renders capture worklet preflight separately from direct stream readiness', () => {
+    render(
+      <TranscriptPanel
+        session={initialTranscriptSession()}
+        stream={{
+          directConfigured: true,
+          directActive: false,
+          disabledReason: null,
+          capturePreflight: {
+            status: 'ready',
+            message: 'Ses işleyici hazır.',
+            checkedAtMs: 1781820000000,
+            elapsedMs: 12,
+            moduleUrl: 'file:///app/dist/pcm-worklet.js',
+          },
+          preflight: {
+            status: 'ready',
+            message: 'Direct STT stream hazir.',
+            checkedAtMs: 1781820000000,
+            elapsedMs: 240,
+            stage: 'live_model',
+          },
+          onPreflight: vi.fn(),
+        }}
+      />,
+    );
+
+    expect(screen.getByText('Ses işleyici')).toBeInTheDocument();
+    expect(screen.getAllByText('Hazır').length).toBeGreaterThan(0);
+    expect(screen.getByText('Ses işleyici hazır. · 12 ms')).toBeInTheDocument();
+    expect(screen.getByText('Direct STT stream hazir. · 240 ms')).toBeInTheDocument();
+  });
+
   it('renders direct stream preflight error', () => {
     render(
       <TranscriptPanel
@@ -230,6 +263,13 @@ describe('TranscriptPanel', () => {
           directConfigured: true,
           directReady: true,
           directActive: true,
+          capturePreflight: {
+            status: 'ready',
+            message: 'Ses işleyici hazır.',
+            checkedAtMs: 1781820000000,
+            elapsedMs: 12,
+            moduleUrl: 'file:///app/dist/pcm-worklet.js',
+          },
           audioRms: 0.026,
           audioActive: true,
           lastAudioAtMs: 1781820003000,
@@ -245,6 +285,8 @@ describe('TranscriptPanel', () => {
     expect(snapshot).toContain('meeting-intelligence.transcript.diagnostics.v1');
     expect(snapshot).toContain('lifecycle=recording');
     expect(snapshot).toContain('directReady=true');
+    expect(snapshot).toContain('audioCapturePreflight=ready');
+    expect(snapshot).toContain('audioCaptureWorklet=file:///app/dist/pcm-worklet.js');
     expect(snapshot).toContain('audioRms=0.026');
     expect(snapshot).toContain('segments.total=1');
     expect(snapshot).toContain('segments.draft=1');

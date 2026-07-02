@@ -8,6 +8,7 @@ import {
 } from '../transcript/session-transcript';
 import type { LiveSttPreflightState } from '../audio/live-stt-preflight';
 import type { LiveSttStreamStatusEvent } from '../audio/live-stt-stream';
+import type { AudioCapturePreflightState } from '../audio/capture';
 
 const TRANSCRIPT_LAG_WARN_MS = 5_000;
 
@@ -23,6 +24,7 @@ export interface TranscriptPanelProps {
     lastAudioAtMs?: number | null;
     disabledReason: string | null;
     preflight?: LiveSttPreflightState;
+    capturePreflight?: AudioCapturePreflightState;
     onPreflight?: () => void;
   };
 }
@@ -221,6 +223,40 @@ function preflightMessageClass(preflight: LiveSttPreflightState | undefined): st
   return 'export-message';
 }
 
+function capturePreflightStatusLabel(preflight: AudioCapturePreflightState | undefined): string {
+  if (!preflight || preflight.status === 'idle') {
+    return 'Test edilmedi';
+  }
+  if (preflight.status === 'checking') {
+    return 'Kontrol ediliyor';
+  }
+  if (preflight.status === 'ready') {
+    return 'Hazır';
+  }
+  return 'Hata';
+}
+
+function capturePreflightLabel(preflight: AudioCapturePreflightState | undefined): string | null {
+  if (!preflight || preflight.status === 'idle') {
+    return null;
+  }
+  if (preflight.status === 'checking') {
+    return preflight.message ?? 'Ses işleyici kontrol ediliyor...';
+  }
+  const elapsed =
+    typeof preflight.elapsedMs === 'number' && Number.isFinite(preflight.elapsedMs)
+      ? ` · ${preflight.elapsedMs} ms`
+      : '';
+  return `${preflight.message ?? 'Ses işleyici test sonucu alındı.'}${elapsed}`;
+}
+
+function capturePreflightMessageClass(preflight: AudioCapturePreflightState | undefined): string {
+  if (preflight?.status === 'error') {
+    return 'inline-error';
+  }
+  return 'export-message';
+}
+
 function segmentSourceLabel(source: string | undefined): string {
   if (source === 'direct-stream') {
     return 'Direct STT';
@@ -314,6 +350,8 @@ function buildTranscriptDiagnostics(
     `directStatus=${stream?.directStatus?.status ?? '-'}`,
     `directReady=${Boolean(stream?.directReady)}`,
     `directActive=${Boolean(stream?.directActive)}`,
+    `audioCapturePreflight=${stream?.capturePreflight?.status ?? '-'}`,
+    `audioCaptureWorklet=${stream?.capturePreflight?.moduleUrl ?? '-'}`,
     `audioActive=${Boolean(stream?.audioActive)}`,
     `audioRms=${formatDiagnosticNumber(stream?.audioRms)}`,
     `lastAudioAt=${formatDiagnosticTimestamp(stream?.lastAudioAtMs)}`,
@@ -343,6 +381,7 @@ export function TranscriptPanel({ session, stream }: TranscriptPanelProps): Reac
     stream?.directConfigured && stream.onPreflight && !recordingActive,
   );
   const preflightLabel = preflightStatusLabel(stream?.preflight);
+  const captureLabel = capturePreflightLabel(stream?.capturePreflight);
 
   const handleCopyDiagnostics = async (): Promise<void> => {
     try {
@@ -376,9 +415,15 @@ export function TranscriptPanel({ session, stream }: TranscriptPanelProps): Reac
               className="secondary-action compact-action"
               type="button"
               onClick={stream?.onPreflight}
-              disabled={stream?.preflight?.status === 'checking'}
+              disabled={
+                stream?.preflight?.status === 'checking' ||
+                stream?.capturePreflight?.status === 'checking'
+              }
             >
-              {stream?.preflight?.status === 'checking' ? 'Test ediliyor...' : 'Bağlantı testi'}
+              {stream?.preflight?.status === 'checking' ||
+              stream?.capturePreflight?.status === 'checking'
+                ? 'Test ediliyor...'
+                : 'Bağlantı testi'}
             </button>
           ) : null}
           <button
@@ -435,6 +480,10 @@ export function TranscriptPanel({ session, stream }: TranscriptPanelProps): Reac
           <strong>{streamTimestampLabel(lastTranscriptAtMs)}</strong>
         </div>
         <div>
+          <span>Ses işleyici</span>
+          <strong>{capturePreflightStatusLabel(stream?.capturePreflight)}</strong>
+        </div>
+        <div>
           <span>Gecikme</span>
           <strong className={lagClass}>
             {transcriptLagLabel(stream, lastTranscriptAtMs, recordingActive)}
@@ -442,6 +491,9 @@ export function TranscriptPanel({ session, stream }: TranscriptPanelProps): Reac
         </div>
       </div>
 
+      {captureLabel ? (
+        <p className={capturePreflightMessageClass(stream?.capturePreflight)}>{captureLabel}</p>
+      ) : null}
       {preflightLabel ? (
         <p className={preflightMessageClass(stream?.preflight)}>{preflightLabel}</p>
       ) : null}

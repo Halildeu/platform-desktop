@@ -1,6 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
 
-import { type Recorder, startRecording } from './audio/capture';
+import {
+  initialAudioCapturePreflightState,
+  type AudioCapturePreflightState,
+  type Recorder,
+  startRecording,
+  testAudioCaptureWorklet,
+} from './audio/capture';
 import {
   initialLiveSttPreflightState,
   testLiveSttStreamConnection,
@@ -225,6 +231,9 @@ function App() {
   const [liveStreamStatus, setLiveStreamStatus] = useState<LiveSttStreamStatusEvent | null>(null);
   const [liveStreamPreflight, setLiveStreamPreflight] = useState<LiveSttPreflightState>(
     initialLiveSttPreflightState,
+  );
+  const [audioCapturePreflight, setAudioCapturePreflight] = useState<AudioCapturePreflightState>(
+    initialAudioCapturePreflightState,
   );
   const [audioRms, setAudioRms] = useState<number | null>(null);
   const [lastAudioAtMs, setLastAudioAtMs] = useState<number | null>(null);
@@ -611,6 +620,36 @@ function App() {
   };
 
   const handleLiveStreamPreflight = async (): Promise<void> => {
+    const captureCheck = (async (): Promise<void> => {
+      setAudioCapturePreflight({
+        status: 'checking',
+        message: 'Ses işleyici kontrol ediliyor...',
+        checkedAtMs: null,
+        elapsedMs: null,
+        moduleUrl: null,
+      });
+      try {
+        const result = await testAudioCaptureWorklet();
+        setAudioCapturePreflight({
+          status: result.ok ? 'ready' : 'error',
+          message: result.message,
+          checkedAtMs: Date.now(),
+          elapsedMs: result.elapsedMs,
+          moduleUrl: result.moduleUrl,
+        });
+      } catch (error) {
+        setAudioCapturePreflight({
+          status: 'error',
+          message: `Ses işleyici test hatası: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+          checkedAtMs: Date.now(),
+          elapsedMs: null,
+          moduleUrl: null,
+        });
+      }
+    })();
+
     const streamUrl = recorderConfig?.liveSttStreamUrl;
     if (!streamUrl) {
       setLiveStreamPreflight({
@@ -620,6 +659,7 @@ function App() {
         elapsedMs: null,
         stage: null,
       });
+      await captureCheck;
       return;
     }
 
@@ -650,6 +690,7 @@ function App() {
         stage: null,
       });
     }
+    await captureCheck;
   };
 
   const handleStop = async (): Promise<void> => {
@@ -782,6 +823,7 @@ function App() {
                 lastAudioAtMs,
                 disabledReason: recorderConfig?.liveSttStreamReason ?? null,
                 preflight: liveStreamPreflight,
+                capturePreflight: audioCapturePreflight,
                 onPreflight: recording ? undefined : () => void handleLiveStreamPreflight(),
               }}
             />

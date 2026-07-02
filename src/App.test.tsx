@@ -6,7 +6,15 @@ import userEvent from '@testing-library/user-event';
 import '@testing-library/jest-dom/vitest';
 
 vi.mock('./audio/capture', () => ({
+  initialAudioCapturePreflightState: {
+    status: 'idle',
+    message: null,
+    checkedAtMs: null,
+    elapsedMs: null,
+    moduleUrl: null,
+  },
   startRecording: vi.fn(),
+  testAudioCaptureWorklet: vi.fn(),
 }));
 
 vi.mock('./audio/live-stt-preflight', async (importOriginal) => {
@@ -17,7 +25,7 @@ vi.mock('./audio/live-stt-preflight', async (importOriginal) => {
   };
 });
 
-import { startRecording } from './audio/capture';
+import { startRecording, testAudioCaptureWorklet } from './audio/capture';
 import { testLiveSttStreamConnection } from './audio/live-stt-preflight';
 import App from './App';
 
@@ -105,6 +113,15 @@ afterEach(() => {
   vi.clearAllMocks();
   delete window.electronAPI;
 });
+
+function mockReadyCaptureWorklet(): void {
+  vi.mocked(testAudioCaptureWorklet).mockResolvedValue({
+    ok: true,
+    message: 'Ses işleyici hazır.',
+    elapsedMs: 12,
+    moduleUrl: 'file:///app/dist/pcm-worklet.js',
+  });
+}
 
 describe('App recorder readiness', () => {
   it('canonical meetingId yoksa meeting contract oluşturma aksiyonunu açar', async () => {
@@ -236,12 +253,15 @@ describe('App recorder readiness', () => {
       elapsedMs: 240,
       stage: 'live_model',
     });
+    mockReadyCaptureWorklet();
 
     render(<App />);
 
     await userEvent.click(await screen.findByRole('button', { name: 'Bağlantı testi' }));
 
+    expect(testAudioCaptureWorklet).toHaveBeenCalledTimes(1);
     expect(testLiveSttStreamConnection).toHaveBeenCalledWith('ws://127.0.0.1:18220/ws/stream');
+    expect(await screen.findByText('Ses işleyici hazır. · 12 ms')).toBeInTheDocument();
     expect(await screen.findByText('Direct STT stream hazir. · 240 ms')).toBeInTheDocument();
   });
 
