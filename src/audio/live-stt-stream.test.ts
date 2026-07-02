@@ -149,6 +149,89 @@ describe('connectLiveSttStream', () => {
     stream.close();
   });
 
+  it('merges rolling-window partials without dropping earlier words', () => {
+    vi.useFakeTimers();
+    vi.stubGlobal('WebSocket', FakeWebSocket);
+    const events: LiveSttTranscriptEvent[] = [];
+
+    const stream = connectLiveSttStream('ws://127.0.0.1:18220/ws/stream', {
+      onTranscriptEvent: (event) => events.push(event),
+    });
+    const ws = FakeWebSocket.instances[0];
+
+    ws?.open();
+    ws?.message({ type: 'ready' });
+    ws?.message({
+      type: 'partial',
+      seq: 0,
+      confirmed: '',
+      tentative: 'Bugün toplantıda hızlı şekilde',
+      elapsed_ms: 180,
+      rms: 0.04,
+      source: 'medium',
+    });
+    ws?.message({
+      type: 'partial',
+      seq: 0,
+      confirmed: '',
+      tentative: 'hızlı şekilde yazıya dönüşüyor',
+      elapsed_ms: 210,
+      rms: 0.04,
+      source: 'medium',
+    });
+
+    vi.advanceTimersByTime(280);
+
+    expect(events.map((event) => event.text)).toEqual([
+      'Bugün',
+      'Bugün toplantıda',
+      'Bugün toplantıda hızlı',
+      'Bugün toplantıda hızlı şekilde',
+      'Bugün toplantıda hızlı şekilde yazıya',
+      'Bugün toplantıda hızlı şekilde yazıya dönüşüyor',
+    ]);
+
+    stream.close();
+  });
+
+  it('keeps the longer draft when a later rolling partial is only a suffix', () => {
+    vi.useFakeTimers();
+    vi.stubGlobal('WebSocket', FakeWebSocket);
+    const events: LiveSttTranscriptEvent[] = [];
+
+    const stream = connectLiveSttStream('ws://127.0.0.1:18220/ws/stream', {
+      onTranscriptEvent: (event) => events.push(event),
+    });
+    const ws = FakeWebSocket.instances[0];
+
+    ws?.open();
+    ws?.message({ type: 'ready' });
+    ws?.message({
+      type: 'partial',
+      seq: 0,
+      confirmed: '',
+      tentative: 'Merhaba nasılsın bugün toplantıdayız',
+      elapsed_ms: 180,
+      rms: 0.04,
+      source: 'medium',
+    });
+    vi.advanceTimersByTime(280);
+    ws?.message({
+      type: 'partial',
+      seq: 0,
+      confirmed: '',
+      tentative: 'bugün toplantıdayız',
+      elapsed_ms: 210,
+      rms: 0.04,
+      source: 'medium',
+    });
+
+    expect(events.at(-1)?.text).toBe('Merhaba nasılsın bugün toplantıdayız');
+    expect(events).toHaveLength(4);
+
+    stream.close();
+  });
+
   it('cancels pending word reveal when final transcript arrives', () => {
     vi.useFakeTimers();
     vi.stubGlobal('WebSocket', FakeWebSocket);

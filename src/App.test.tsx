@@ -123,6 +123,15 @@ function mockReadyCaptureWorklet(): void {
   });
 }
 
+function mockReadyLiveSttStream(): void {
+  vi.mocked(testLiveSttStreamConnection).mockResolvedValue({
+    ok: true,
+    message: 'Direct STT stream hazir.',
+    elapsedMs: 120,
+    stage: 'ready',
+  });
+}
+
 describe('App recorder readiness', () => {
   it('canonical meetingId yoksa meeting contract oluşturma aksiyonunu açar', async () => {
     installElectronApiMock({
@@ -265,6 +274,38 @@ describe('App recorder readiness', () => {
     expect(await screen.findByText('Direct STT stream hazir. · 240 ms')).toBeInTheDocument();
   });
 
+  it('direct STT hazir degilse mikrofonu acmadan kaydi baslatmaz', async () => {
+    installElectronApiMock({
+      meetingId: '22222222-2222-4222-8222-222222222222',
+      deviceId: 'desktop-1',
+      ready: true,
+      reason: null,
+      liveSttStreamUrl: 'ws://127.0.0.1:18220/ws/stream',
+      liveSttStreamReason: null,
+    });
+    mockReadyCaptureWorklet();
+    vi.mocked(testLiveSttStreamConnection).mockResolvedValue({
+      ok: false,
+      message: 'Direct STT baglanti hatasi.',
+      elapsedMs: 500,
+      stage: null,
+    });
+
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Kaydet' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Onaylıyorum — Kaydı Başlat' }));
+
+    expect(await screen.findByText('Direct STT baglanti hatasi. · 500 ms')).toBeInTheDocument();
+    expect(
+      await screen.findAllByText(
+        'Kayıt başlatılamadı: Direct STT baglanti hatasi. Kayıt başlatılmadı; mikrofon açılmadı.',
+      ),
+    ).not.toHaveLength(0);
+    expect(startRecording).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: 'Kaydet' })).toBeEnabled();
+  });
+
   it('kayit baslatma cevapsiz kalirsa butonu serbest birakir', async () => {
     installElectronApiMock({
       meetingId: '22222222-2222-4222-8222-222222222222',
@@ -316,6 +357,8 @@ describe('App recorder readiness', () => {
       stop: vi.fn(),
       onError: vi.fn(),
     });
+    mockReadyCaptureWorklet();
+    mockReadyLiveSttStream();
 
     render(<App />);
 
@@ -537,6 +580,8 @@ describe('App recorder readiness', () => {
         onError: vi.fn(),
       };
     });
+    mockReadyCaptureWorklet();
+    mockReadyLiveSttStream();
 
     render(<App />);
 

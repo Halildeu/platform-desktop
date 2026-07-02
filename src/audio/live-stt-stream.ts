@@ -103,12 +103,82 @@ function splitWords(text: string): string[] {
   return text.trim().split(/\s+/).filter(Boolean);
 }
 
+function normalizeWord(word: string): string {
+  return word.toLocaleLowerCase('tr-TR').replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, '');
+}
+
+function normalizedWords(words: string[]): string[] {
+  return words.map(normalizeWord).filter(Boolean);
+}
+
+function hasSamePrefix(previousText: string, nextText: string): boolean {
+  return nextText.toLocaleLowerCase('tr-TR').startsWith(previousText.toLocaleLowerCase('tr-TR'));
+}
+
+function contiguousIndex(haystack: string[], needle: string[]): number {
+  if (needle.length === 0 || needle.length > haystack.length) {
+    return -1;
+  }
+
+  for (let start = 0; start <= haystack.length - needle.length; start += 1) {
+    const matches = needle.every((word, index) => haystack[start + index] === word);
+    if (matches) {
+      return start;
+    }
+  }
+
+  return -1;
+}
+
+function suffixPrefixOverlap(previousWords: string[], nextWords: string[]): number {
+  const maxOverlap = Math.min(previousWords.length, nextWords.length);
+  for (let size = maxOverlap; size > 0; size -= 1) {
+    const previousTail = previousWords.slice(previousWords.length - size);
+    const nextHead = nextWords.slice(0, size);
+    if (previousTail.every((word, index) => word === nextHead[index])) {
+      return size;
+    }
+  }
+
+  return 0;
+}
+
+function mergeRollingPartial(previousText: string, nextText: string): string {
+  const previous = previousText.trim();
+  const next = nextText.trim();
+  if (!previous || !next) {
+    return next || previous;
+  }
+  if (previous === next || hasSamePrefix(previous, next)) {
+    return next;
+  }
+  if (hasSamePrefix(next, previous)) {
+    return previous;
+  }
+
+  const previousRawWords = splitWords(previous);
+  const nextRawWords = splitWords(next);
+  const previousWords = normalizedWords(previousRawWords);
+  const nextWords = normalizedWords(nextRawWords);
+  const containedAt = contiguousIndex(previousWords, nextWords);
+  if (containedAt >= 0) {
+    return previous;
+  }
+
+  const overlap = suffixPrefixOverlap(previousWords, nextWords);
+  if (overlap > 0) {
+    return [...previousRawWords, ...nextRawWords.slice(overlap)].join(' ');
+  }
+
+  return `${previous} ${next}`;
+}
+
 function progressivePartialSteps(previousText: string, nextText: string): string[] {
   if (!nextText || previousText === nextText) {
     return [];
   }
 
-  if (previousText && !nextText.startsWith(previousText)) {
+  if (previousText && !hasSamePrefix(previousText, nextText)) {
     return [nextText];
   }
 
@@ -159,6 +229,7 @@ export function connectLiveSttStream(
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   const segmentStartedAt = new Map<number, number>();
   const segmentDraftText = new Map<number, string>();
+  const segmentKnownText = new Map<number, string>();
   const pendingPartialTimers = new Map<number, Array<ReturnType<typeof setTimeout>>>();
 
   const emitError = (message: string): void => {
@@ -265,6 +336,7 @@ export function connectLiveSttStream(
         segmentStartedAt.set(event.seq, startedAtMs);
         clearPendingPartials(event.seq);
         segmentDraftText.delete(event.seq);
+        segmentKnownText.delete(event.seq);
         callbacks.onTranscriptEvent?.({
           id: `stream:${event.seq}`,
           startedAtMs,
@@ -322,8 +394,11 @@ export function connectLiveSttStream(
     startedAtMs: number,
   ): void => {
     clearPendingPartials(event.seq);
-    const previousText = segmentDraftText.get(event.seq) ?? '';
-    const steps = progressivePartialSteps(previousText, text);
+    const previousDisplayText = segmentDraftText.get(event.seq) ?? '';
+    const previousKnownText = segmentKnownText.get(event.seq) ?? previousDisplayText;
+    const mergedText = mergeRollingPartial(previousKnownText, text);
+    segmentKnownText.set(event.seq, mergedText);
+    const steps = progressivePartialSteps(previousDisplayText, mergedText);
     if (steps.length === 0) {
       return;
     }

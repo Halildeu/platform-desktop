@@ -512,6 +512,12 @@ function App() {
       if (!recorderConfig?.ready || !recorderConfig.meetingId) {
         throw new Error(recorderConfig?.reason ?? MEETING_ID_MISSING_MESSAGE);
       }
+      if (recorderConfig.liveSttStreamUrl) {
+        const preflight = await handleLiveStreamPreflight();
+        if (!preflight.ok) {
+          throw new Error(`${preflight.message} Kayıt başlatılmadı; mikrofon açılmadı.`);
+        }
+      }
       const meetingId = recorderConfig.meetingId;
       const deviceId = recorderConfig.deviceId;
       liveStreamHasEventsRef.current = false;
@@ -619,8 +625,8 @@ function App() {
     }
   };
 
-  const handleLiveStreamPreflight = async (): Promise<void> => {
-    const captureCheck = (async (): Promise<void> => {
+  const handleLiveStreamPreflight = async (): Promise<{ ok: boolean; message: string }> => {
+    const captureCheck = (async (): Promise<{ ok: boolean; message: string }> => {
       setAudioCapturePreflight({
         status: 'checking',
         message: 'Ses işleyici kontrol ediliyor...',
@@ -637,30 +643,34 @@ function App() {
           elapsedMs: result.elapsedMs,
           moduleUrl: result.moduleUrl,
         });
+        return { ok: result.ok, message: result.message };
       } catch (error) {
+        const message = `Ses işleyici test hatası: ${
+          error instanceof Error ? error.message : String(error)
+        }`;
         setAudioCapturePreflight({
           status: 'error',
-          message: `Ses işleyici test hatası: ${
-            error instanceof Error ? error.message : String(error)
-          }`,
+          message,
           checkedAtMs: Date.now(),
           elapsedMs: null,
           moduleUrl: null,
         });
+        return { ok: false, message };
       }
     })();
 
     const streamUrl = recorderConfig?.liveSttStreamUrl;
     if (!streamUrl) {
+      const message = recorderConfig?.liveSttStreamReason ?? 'LIVE_STT_STREAM_URL tanimli degil.';
       setLiveStreamPreflight({
         status: 'error',
-        message: recorderConfig?.liveSttStreamReason ?? 'LIVE_STT_STREAM_URL tanimli degil.',
+        message,
         checkedAtMs: Date.now(),
         elapsedMs: null,
         stage: null,
       });
       await captureCheck;
-      return;
+      return { ok: false, message };
     }
 
     setLiveStreamPreflight({
@@ -670,8 +680,13 @@ function App() {
       elapsedMs: null,
       stage: null,
     });
+    let streamOutcome: { ok: boolean; message: string } = {
+      ok: false,
+      message: 'Direct STT stream kontrol edilemedi.',
+    };
     try {
       const result = await testLiveSttStreamConnection(streamUrl);
+      streamOutcome = { ok: result.ok, message: result.message };
       setLiveStreamPreflight({
         status: result.ok ? 'ready' : 'error',
         message: result.message,
@@ -680,17 +695,25 @@ function App() {
         stage: result.stage,
       });
     } catch (error) {
-      setLiveStreamPreflight({
-        status: 'error',
+      streamOutcome = {
+        ok: false,
         message: `Direct STT test hatasi: ${
           error instanceof Error ? error.message : String(error)
         }`,
+      };
+      setLiveStreamPreflight({
+        status: 'error',
+        message: streamOutcome.message,
         checkedAtMs: Date.now(),
         elapsedMs: null,
         stage: null,
       });
     }
-    await captureCheck;
+    const captureOutcome = await captureCheck;
+    if (!captureOutcome.ok) {
+      return captureOutcome;
+    }
+    return streamOutcome;
   };
 
   const handleStop = async (): Promise<void> => {
