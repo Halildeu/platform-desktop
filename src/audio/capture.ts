@@ -208,7 +208,7 @@ function localSessionId(): string {
   return `LOCAL-${randomId}`;
 }
 
-function canContinueDirectOnlyAfterGatewayStartError(message: string): boolean {
+function canContinueDirectOnlyAfterRecorderStartupError(message: string): boolean {
   const normalized = message.toLocaleLowerCase('tr-TR');
   return (
     normalized.includes('direct stt') ||
@@ -239,17 +239,26 @@ export async function startRecording(
   let loopback: MediaStream | null = null;
   let ctx: AudioContext | null = null;
   let captureLeasePrepared = false;
+  let recorderStartupError: string | null = null;
 
   try {
-    await withTimeout(
-      api.audio.prepareCapture(),
-      CAPTURE_IPC_TIMEOUT_MS,
-      'Recorder izin hazırlığı zaman aşımına uğradı.',
-      () => {
-        void api.audio.cancelCapture().catch(() => undefined);
-      },
-    );
-    captureLeasePrepared = true;
+    try {
+      await withTimeout(
+        api.audio.prepareCapture(),
+        CAPTURE_IPC_TIMEOUT_MS,
+        'Recorder izin hazırlığı zaman aşımına uğradı.',
+        () => {
+          void api.audio.cancelCapture().catch(() => undefined);
+        },
+      );
+      captureLeasePrepared = true;
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
+      if (!options.liveSttStreamUrl || !canContinueDirectOnlyAfterRecorderStartupError(reason)) {
+        throw err;
+      }
+      recorderStartupError = reason;
+    }
     mic = await withTimeout(
       navigator.mediaDevices.getUserMedia({
         audio: { channelCount: 1 },
@@ -316,25 +325,26 @@ export async function startRecording(
   captureNode.connect(sink).connect(audioContext.destination);
 
   let session: { sessionId: string; captureId: string } | null = null;
-  let gatewayStartError: string | null = null;
-  try {
-    session = await withTimeout(
-      api.audio.start(meetingId, deviceId),
-      CAPTURE_IPC_TIMEOUT_MS,
-      'Audio gateway oturumu zaman aşımına uğradı.',
-      (lateSession) => {
-        void api.audio.abort(lateSession.captureId).catch(() => undefined);
-      },
-    );
-  } catch (err) {
-    const reason = err instanceof Error ? err.message : String(err);
-    if (!options.liveSttStreamUrl || !canContinueDirectOnlyAfterGatewayStartError(reason)) {
-      stopAllTracks(micStream, loopbackStream);
-      await audioContext.close();
-      void api.audio.cancelCapture().catch(() => undefined);
-      throw err;
+  if (!recorderStartupError) {
+    try {
+      session = await withTimeout(
+        api.audio.start(meetingId, deviceId),
+        CAPTURE_IPC_TIMEOUT_MS,
+        'Audio gateway oturumu zaman aşımına uğradı.',
+        (lateSession) => {
+          void api.audio.abort(lateSession.captureId).catch(() => undefined);
+        },
+      );
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
+      if (!options.liveSttStreamUrl || !canContinueDirectOnlyAfterRecorderStartupError(reason)) {
+        stopAllTracks(micStream, loopbackStream);
+        await audioContext.close();
+        void api.audio.cancelCapture().catch(() => undefined);
+        throw err;
+      }
+      recorderStartupError = reason;
     }
-    gatewayStartError = reason;
   }
   const sessionId = session?.sessionId ?? localSessionId();
   const captureId = session?.captureId ?? null;
@@ -444,7 +454,7 @@ export async function startRecording(
     sessionId,
     hasLoopback: loopback !== null,
     gatewayActive: captureId !== null,
-    gatewayError: gatewayStartError,
+    gatewayError: recorderStartupError,
     onError: (handler: (err: Error) => void): void => {
       errorHandler = handler;
     },
