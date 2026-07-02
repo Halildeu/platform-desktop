@@ -266,7 +266,15 @@ export function connectLiveSttStream(
 
     ready = false;
     emitStatus(reconnectAttempts > 0 ? { status: 'reconnecting' } : { status: 'connecting' });
-    const socket = new WebSocket(streamUrl);
+    let socket: WebSocket;
+    try {
+      socket = new WebSocket(streamUrl);
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      emitStatus({ status: 'error', reason });
+      emitError(`Live STT stream kurulamadı: ${reason}`);
+      return;
+    }
     ws = socket;
 
     const scheduleReconnect = (reason: string): void => {

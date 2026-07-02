@@ -293,6 +293,59 @@ describe('session transcript state', () => {
     expect(bundle.json).toContain('"can_submit": true');
   });
 
+  it('allows a finished draft-only transcript through the Meeting AI gate with draft-quality labeling', () => {
+    const recording = startTranscriptSession(initialTranscriptSession(), {
+      sessionId: 'SES-3',
+      meetingId: '44444444-4444-4444-8444-444444444444',
+      deviceId: 'desktop-1',
+      hasLoopback: false,
+      startedAtMs: 1781820000000,
+    });
+    const withFirstDraft = upsertTranscriptSegment(recording, {
+      id: 'seg-1',
+      speakerLabel: 'Konuşmacı',
+      startedAtMs: 1781820003000,
+      status: 'draft',
+      source: 'direct-stream',
+      text: 'Direct STT final satır üretmese bile kullanıcı uzun toplantı boyunca yeterli taslak kaynak oluşturdu.',
+    });
+    const finishedDraft = finishTranscriptSession(
+      upsertTranscriptSegment(withFirstDraft, {
+        id: 'seg-2',
+        speakerLabel: 'Konuşmacı',
+        startedAtMs: 1781820021000,
+        status: 'draft',
+        source: 'direct-stream',
+        text: 'Meeting AI sonucu final kanıt gibi değil taslak kalite etiketiyle preview olarak sunulmalı.',
+      }),
+      1781820025000,
+    );
+
+    const readiness = analyzeTranscriptSourceReadiness(finishedDraft);
+    const bundle = buildMeetingAiSourcePackage(finishedDraft, 1781820100000);
+
+    expect(readiness).toMatchObject({
+      level: 'review',
+      label: 'Taslak kaynak kullanılabilir',
+      nextStepLabel: 'Meeting AI taslak gönderimi',
+      finalCount: 0,
+      draftCount: 2,
+    });
+    expect(readiness.warnings).toContain(
+      'Final satır yok; Meeting AI sonucu taslak kaliteyle değerlendirilir.',
+    );
+    expect(bundle.package.gate).toMatchObject({
+      status: 'ready',
+      can_submit: true,
+      label: 'Meeting AI taslak gönderimine hazır',
+      blocked_by: [],
+    });
+    expect(bundle.package.gate.next_action).toContain('taslak kalite');
+    expect(bundle.package.source_quality.level).toBe('review');
+    expect(bundle.json).toContain('"can_submit": true');
+    expect(bundle.json).toContain('"final_count": 0');
+  });
+
   it('rejects source export when no transcript segment exists', () => {
     expect(() => buildTranscriptSourceExport(initialTranscriptSession())).toThrow(
       'Transcript source is not ready',

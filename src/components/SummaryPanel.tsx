@@ -410,7 +410,11 @@ export function SummaryPanel({
               disabled={!meetingAiGate.can_submit || isSubmittingMeetingAi}
               onClick={() => void runMeetingAiSubmit()}
             >
-              {isSubmittingMeetingAi ? 'Gönderiliyor...' : 'Meeting AI gönder'}
+              {isSubmittingMeetingAi
+                ? 'Gönderiliyor...'
+                : transcriptReadiness.level === 'review' && meetingAiGate.can_submit
+                  ? 'Taslakla Meeting AI gönder'
+                  : 'Meeting AI gönder'}
             </button>
             <button
               className="secondary-action"
@@ -470,7 +474,11 @@ export function SummaryPanel({
               <div className="source-ai-package" aria-label="Meeting AI kaynak paketi">
                 <span>Meeting AI kaynak paketi</span>
                 <strong>
-                  {meetingAiGate.can_submit ? 'Gönderime hazır kaynak' : 'Kapı kontrolü bekliyor'}
+                  {meetingAiGate.can_submit
+                    ? transcriptReadiness.level === 'review'
+                      ? 'Taslak kaynakla gönderilebilir'
+                      : 'Gönderime hazır kaynak'
+                    : 'Kapı kontrolü bekliyor'}
                 </strong>
                 <small>
                   Backend gateway -&gt; meeting-ai /analyze kontratı için transcript, meeting_id,

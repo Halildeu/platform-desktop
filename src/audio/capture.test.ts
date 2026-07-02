@@ -309,4 +309,42 @@ describe('startRecording', () => {
 
     await recorder.stop();
   });
+
+  it('keeps microphone recording alive when Direct-STT stream construction fails', async () => {
+    installElectronApiMock();
+    setUserAgent('Mozilla/5.0 (Macintosh; Intel Mac OS X 15_5)');
+    installBrowserAudioMocks();
+    class ThrowingWebSocket {
+      constructor() {
+        throw new Error('invalid direct STT URL');
+      }
+    }
+    vi.stubGlobal('WebSocket', ThrowingWebSocket);
+    const onLiveStreamStatus = vi.fn();
+    const onLiveTranscriptError = vi.fn();
+
+    const recorder = await startRecording('meeting-1', 'desktop-1', {
+      liveSttStreamUrl: 'ws://127.0.0.1:18220/ws/stream',
+      onLiveStreamStatus,
+      onLiveTranscriptError,
+    });
+
+    expect(recorder.sessionId).toBe('SES-1');
+    expect(recorder.hasLoopback).toBe(false);
+    expect(window.electronAPI?.audio.start).toHaveBeenCalledWith('meeting-1', 'desktop-1');
+    expect(onLiveStreamStatus).toHaveBeenCalledWith({ status: 'connecting' });
+    expect(onLiveStreamStatus).toHaveBeenCalledWith({
+      status: 'error',
+      reason: 'invalid direct STT URL',
+    });
+    expect(onLiveTranscriptError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: 'Live STT stream kurulamadı: invalid direct STT URL',
+      }),
+    );
+
+    await recorder.stop();
+
+    expect(window.electronAPI?.audio.finish).toHaveBeenCalledWith('CAP-1');
+  });
 });

@@ -314,12 +314,19 @@ export async function startRecording(
   let liveStream: LiveSttStreamConnection | null = null;
 
   if (options.liveSttStreamUrl) {
-    liveStream = connectLiveSttStream(options.liveSttStreamUrl, {
-      onReady: options.onLiveStreamReady,
-      onStatus: options.onLiveStreamStatus,
-      onTranscriptEvent: options.onLiveTranscriptEvent,
-      onError: options.onLiveTranscriptError,
-    });
+    try {
+      liveStream = connectLiveSttStream(options.liveSttStreamUrl, {
+        onReady: options.onLiveStreamReady,
+        onStatus: options.onLiveStreamStatus,
+        onTranscriptEvent: options.onLiveTranscriptEvent,
+        onError: options.onLiveTranscriptError,
+      });
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      options.onLiveStreamStatus?.({ status: 'error', reason });
+      options.onLiveTranscriptError?.(new Error(`Live STT stream kurulamadı: ${reason}`));
+      liveStream = null;
+    }
   }
 
   let pendingChunks = 0;

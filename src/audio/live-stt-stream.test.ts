@@ -47,6 +47,29 @@ afterEach(() => {
 });
 
 describe('connectLiveSttStream', () => {
+  it('reports constructor failures without throwing so microphone recording can continue', () => {
+    class ThrowingWebSocket {
+      constructor() {
+        throw new Error('invalid direct STT URL');
+      }
+    }
+    vi.stubGlobal('WebSocket', ThrowingWebSocket);
+    const statuses: LiveSttStreamStatusEvent[] = [];
+    const errors: string[] = [];
+
+    const stream = connectLiveSttStream('ws://127.0.0.1:18220/ws/stream', {
+      onStatus: (event) => statuses.push(event),
+      onError: (error) => errors.push(error.message),
+    });
+
+    expect(statuses.map((event) => event.status)).toEqual(['connecting', 'error']);
+    expect(statuses[1]?.reason).toBe('invalid direct STT URL');
+    expect(errors).toEqual(['Live STT stream kurulamadı: invalid direct STT URL']);
+
+    expect(() => stream.send(new Float32Array([0.1]))).not.toThrow();
+    expect(() => stream.close()).not.toThrow();
+  });
+
   it('buffers audio until ready and emits same-id partial/final transcript updates', () => {
     vi.stubGlobal('WebSocket', FakeWebSocket);
     const events: LiveSttTranscriptEvent[] = [];

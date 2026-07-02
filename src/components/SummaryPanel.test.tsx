@@ -13,6 +13,7 @@ import {
   type MeetingIntelligenceState,
 } from '../intelligence/meeting-intelligence';
 import {
+  finishTranscriptSession,
   initialTranscriptSession,
   startTranscriptSession,
   upsertTranscriptSegment,
@@ -115,6 +116,37 @@ function reportReadyTranscriptState(): TranscriptSessionState {
     lifecycle: 'finished',
     finishedAtMs: 1781820025000,
   };
+}
+
+function draftSubmitTranscriptState(): TranscriptSessionState {
+  const recording = startTranscriptSession(initialTranscriptSession(), {
+    sessionId: 'SES-3',
+    meetingId: '44444444-4444-4444-8444-444444444444',
+    deviceId: 'desktop-1',
+    hasLoopback: false,
+    startedAtMs: 1781820000000,
+  });
+
+  const withFirstDraft = upsertTranscriptSegment(recording, {
+    id: 'seg-1',
+    speakerLabel: 'Konuşmacı',
+    startedAtMs: 1781820003000,
+    status: 'draft',
+    source: 'direct-stream',
+    text: 'Direct STT final satır üretmese bile kullanıcı uzun toplantı boyunca yeterli taslak kaynak oluşturdu.',
+  });
+
+  return finishTranscriptSession(
+    upsertTranscriptSegment(withFirstDraft, {
+      id: 'seg-2',
+      speakerLabel: 'Konuşmacı',
+      startedAtMs: 1781820021000,
+      status: 'draft',
+      source: 'direct-stream',
+      text: 'Meeting AI sonucu final kanıt gibi değil taslak kalite etiketiyle preview olarak sunulmalı.',
+    }),
+    1781820025000,
+  );
 }
 
 afterEach(() => {
@@ -299,6 +331,60 @@ describe('SummaryPanel', () => {
     expect(within(sourceSummary).getByText('2 final / 0 taslak')).toBeInTheDocument();
     expect(within(sourceSummary).getByText('18 sn')).toBeInTheDocument();
     expect(within(sourceSummary).getByText('%100')).toBeInTheDocument();
+  });
+
+  it('allows finished draft-only transcript submission while labeling the source as draft quality', async () => {
+    const adapter: MeetingAiSubmitAdapter = {
+      analyze: vi.fn().mockResolvedValue({
+        schema_version: '5-adr0043',
+        summary: 'Taslak transcript üzerinden preview toplantı çıktısı üretildi.',
+        decisions: ['Taslak kaynak Meeting AI preview akışında kullanılacak'],
+        action_items: [],
+        citations: [
+          {
+            claim: 'Taslak kaynak Meeting AI preview akışında kullanılacak',
+            source_index: 0,
+            start_sec: 3,
+            grounded: true,
+          },
+        ],
+      }),
+    };
+
+    render(
+      <SummaryPanel
+        intelligence={{ ...initialMeetingIntelligence(), status: 'waiting' }}
+        transcript={draftSubmitTranscriptState()}
+        meetingAiSubmitAdapter={adapter}
+      />,
+    );
+
+    const readiness = screen.getByLabelText('Kaynak hazırlık durumu');
+    expect(within(readiness).getByText('Taslak kaynak kullanılabilir')).toBeInTheDocument();
+    expect(
+      within(readiness).getByText(
+        'Yeterli taslak satır var; çıktı taslak kalite etiketiyle üretilebilir.',
+      ),
+    ).toBeInTheDocument();
+    const aiPackage = screen.getByLabelText('Meeting AI kaynak paketi');
+    expect(within(aiPackage).getByText('Taslak kaynakla gönderilebilir')).toBeInTheDocument();
+    const aiGate = screen.getByLabelText('Meeting AI kapı kontrolü');
+    expect(within(aiGate).getByText('Meeting AI taslak gönderimine hazır')).toBeInTheDocument();
+    expect(within(aiGate).getByText('Yok')).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Taslakla Meeting AI gönder' }));
+
+    await waitFor(() => {
+      expect(adapter.analyze).toHaveBeenCalledWith({
+        meetingId: '44444444-4444-4444-8444-444444444444',
+        request: expect.objectContaining({
+          meeting_id: '44444444-4444-4444-8444-444444444444',
+          session_id: 'SES-3',
+          transcript: expect.stringContaining('Direct STT final satır üretmese bile'),
+        }),
+      });
+    });
+    expect(await screen.findByText('Meeting AI sonucu alındı.')).toBeInTheDocument();
   });
 
   it('submits the ready transcript to Meeting AI via the backend gateway adapter', async () => {

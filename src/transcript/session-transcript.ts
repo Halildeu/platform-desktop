@@ -148,6 +148,29 @@ const STATUS_RANK: Record<TranscriptSegmentStatus, number> = {
 const REPORT_READY_MIN_WORDS = 20;
 const REPORT_READY_MIN_DURATION_MS = 15_000;
 
+function hasMinimumMeetingAiSource(readiness: TranscriptSourceReadiness): boolean {
+  return (
+    readiness.wordCount >= REPORT_READY_MIN_WORDS &&
+    readiness.durationMs >= REPORT_READY_MIN_DURATION_MS
+  );
+}
+
+function isSubmitLifecycle(state: TranscriptSessionState): boolean {
+  return state.lifecycle === 'finished' || state.lifecycle === 'processing';
+}
+
+function canSubmitReviewSource(
+  state: TranscriptSessionState,
+  readiness: TranscriptSourceReadiness,
+): boolean {
+  return (
+    readiness.level === 'review' &&
+    readiness.finalCount === 0 &&
+    hasMinimumMeetingAiSource(readiness) &&
+    isSubmitLifecycle(state)
+  );
+}
+
 export function initialTranscriptSession(): TranscriptSessionState {
   return {
     lifecycle: 'idle',
@@ -401,8 +424,17 @@ export function analyzeTranscriptSourceReadiness(
     segments[segments.length - 1].startedAtMs - segments[0].startedAtMs,
   );
   const finalRatio = finalCount / segments.length;
+  const hasMinimumSource =
+    wordCount >= REPORT_READY_MIN_WORDS && durationMs >= REPORT_READY_MIN_DURATION_MS;
+  const draftOnlyCanBeReviewed = finalCount === 0 && hasMinimumSource && isSubmitLifecycle(state);
   const warnings = [
-    ...(finalCount === 0 ? ['Final satır bekleniyor.'] : []),
+    ...(finalCount === 0
+      ? [
+          draftOnlyCanBeReviewed
+            ? 'Final satır yok; Meeting AI sonucu taslak kaliteyle değerlendirilir.'
+            : 'Final satır bekleniyor.',
+        ]
+      : []),
     ...(wordCount < REPORT_READY_MIN_WORDS
       ? [`En az ${REPORT_READY_MIN_WORDS} kelimelik kaynak hedefleniyor.`]
       : []),
@@ -452,16 +484,30 @@ export function analyzeTranscriptSourceReadiness(
 
   return {
     level: 'review',
-    label: finalCount > 0 ? 'Gözden geçirilmeli' : 'Taslak kaynak',
+    label:
+      finalCount > 0
+        ? 'Gözden geçirilmeli'
+        : draftOnlyCanBeReviewed
+          ? 'Taslak kaynak kullanılabilir'
+          : 'Taslak kaynak',
     detail:
       finalCount > 0
         ? 'Kaynak var; rapor/özet öncesi kapsam ve final oranı kontrol edilmeli.'
-        : 'Yalnız taslak satır var; final transcript beklenmeli.',
-    nextStepLabel: finalCount > 0 ? 'Kaynak kalite kontrolü' : 'Final transkript',
+        : draftOnlyCanBeReviewed
+          ? 'Yeterli taslak satır var; çıktı taslak kalite etiketiyle üretilebilir.'
+          : 'Yalnız taslak satır var; final transcript beklenmeli.',
+    nextStepLabel:
+      finalCount > 0
+        ? 'Kaynak kalite kontrolü'
+        : draftOnlyCanBeReviewed
+          ? 'Meeting AI taslak gönderimi'
+          : 'Final transkript',
     nextStepDetail:
       finalCount > 0
         ? 'Meeting AI öncesi kaynak kapsamı, süre ve final oranı netleştirilmeli.'
-        : 'Taslak satırlar final veya revize satıra dönmeden çıktı kapısı açılmıyor.',
+        : draftOnlyCanBeReviewed
+          ? 'Final satır gelmediyse kaynak backend gateway üzerinden taslak kaliteyle gönderilebilir.'
+          : 'Taslak satırlar final veya revize satıra dönmeden çıktı kapısı açılmıyor.',
     wordCount,
     durationMs,
     finalCount,
@@ -475,14 +521,20 @@ export function buildMeetingAiSourceGate(
   state: TranscriptSessionState,
   readiness: TranscriptSourceReadiness = analyzeTranscriptSourceReadiness(state),
 ): MeetingAiSourceGate {
+  const reviewCanSubmit = canSubmitReviewSource(state, readiness);
   const blockedBy = [
     ...(!state.meetingId ? ['canonical meetingId yok'] : []),
     ...(!state.sessionId ? ['recorder sessionId yok'] : []),
+    ...(!isSubmitLifecycle(state) && readiness.level !== 'empty' && readiness.level !== 'collecting'
+      ? ['kayıt bitişi bekleniyor']
+      : []),
     ...(readiness.level === 'empty' ? ['transkript satırı yok'] : []),
     ...(readiness.level === 'collecting' ? ['kayıt sürüyor'] : []),
-    ...(readiness.level === 'review' ? ['kaynak kalite kontrolü gerekiyor'] : []),
+    ...(readiness.level === 'review' && !reviewCanSubmit
+      ? ['kaynak kalite kontrolü gerekiyor']
+      : []),
   ];
-  const canSubmit = readiness.level === 'ready' && blockedBy.length === 0;
+  const canSubmit = (readiness.level === 'ready' || reviewCanSubmit) && blockedBy.length === 0;
 
   return {
     status: canSubmit
@@ -491,9 +543,15 @@ export function buildMeetingAiSourceGate(
         ? readiness.level
         : 'blocked',
     can_submit: canSubmit,
-    label: canSubmit ? 'Meeting AI gönderimine hazır' : 'Meeting AI kapısı bekliyor',
+    label: canSubmit
+      ? readiness.level === 'review'
+        ? 'Meeting AI taslak gönderimine hazır'
+        : 'Meeting AI gönderimine hazır'
+      : 'Meeting AI kapısı bekliyor',
     next_action: canSubmit
-      ? 'Kaynak backend gateway üzerinden meeting-ai /analyze kontratına iletilebilir.'
+      ? readiness.level === 'review'
+        ? 'Yeterli taslak kaynak backend gateway üzerinden meeting-ai /analyze kontratına iletilebilir; çıktı final transcript yerine taslak kalite etiketiyle değerlendirilir.'
+        : 'Kaynak backend gateway üzerinden meeting-ai /analyze kontratına iletilebilir.'
       : readiness.nextStepDetail,
     blocked_by: blockedBy,
     contract: {
