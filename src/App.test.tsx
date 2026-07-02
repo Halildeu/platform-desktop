@@ -306,6 +306,56 @@ describe('App recorder readiness', () => {
     expect(screen.getByRole('button', { name: 'Kaydet' })).toBeEnabled();
   });
 
+  it('direct STT gecici baglanti hatasinda tekrar deneyip mikrofona oyle gecer', async () => {
+    installElectronApiMock({
+      meetingId: '22222222-2222-4222-8222-222222222222',
+      deviceId: 'desktop-1',
+      ready: true,
+      reason: null,
+      liveSttStreamUrl: 'ws://127.0.0.1:18220/ws/stream',
+      liveSttStreamReason: null,
+    });
+    mockReadyCaptureWorklet();
+    vi.mocked(testLiveSttStreamConnection)
+      .mockResolvedValueOnce({
+        ok: false,
+        message: 'Direct STT baglanti hatasi.',
+        elapsedMs: 2,
+        stage: null,
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        message: 'Direct STT stream hazir.',
+        elapsedMs: 70,
+        stage: 'live_model',
+      });
+    vi.mocked(startRecording).mockResolvedValue({
+      sessionId: 'SES-1',
+      hasLoopback: false,
+      stop: vi.fn(),
+      onError: vi.fn(),
+    });
+
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Kaydet' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Onaylıyorum — Kaydı Başlat' }));
+
+    expect(
+      await screen.findByText('Kayıt başladı (yalnız mikrofon, oturum SES-1)'),
+    ).toBeInTheDocument();
+    expect(testLiveSttStreamConnection).toHaveBeenCalledTimes(2);
+    expect(await screen.findByText('Direct STT stream hazir. · 70 ms')).toBeInTheDocument();
+    expect(startRecording).toHaveBeenCalledWith(
+      '22222222-2222-4222-8222-222222222222',
+      'desktop-1',
+      expect.objectContaining({
+        liveSttStreamUrl: 'ws://127.0.0.1:18220/ws/stream',
+      }),
+    );
+    expect(screen.queryByText(/Kayıt başlatılamadı:/)).not.toBeInTheDocument();
+  });
+
   it('direct STT baglanti testi toparlaninca eski baslatma hatasini temizler', async () => {
     installElectronApiMock({
       meetingId: '22222222-2222-4222-8222-222222222222',
@@ -317,6 +367,18 @@ describe('App recorder readiness', () => {
     });
     mockReadyCaptureWorklet();
     vi.mocked(testLiveSttStreamConnection)
+      .mockResolvedValueOnce({
+        ok: false,
+        message: 'Direct STT baglanti hatasi.',
+        elapsedMs: 500,
+        stage: null,
+      })
+      .mockResolvedValueOnce({
+        ok: false,
+        message: 'Direct STT baglanti hatasi.',
+        elapsedMs: 500,
+        stage: null,
+      })
       .mockResolvedValueOnce({
         ok: false,
         message: 'Direct STT baglanti hatasi.',

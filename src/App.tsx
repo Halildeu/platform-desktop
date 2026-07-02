@@ -10,6 +10,7 @@ import {
 import {
   initialLiveSttPreflightState,
   testLiveSttStreamConnection,
+  type LiveSttPreflightResult,
   type LiveSttPreflightState,
 } from './audio/live-stt-preflight';
 import type { LiveSttStreamStatusEvent, LiveSttTranscriptEvent } from './audio/live-stt-stream';
@@ -48,6 +49,8 @@ const TRANSCRIPT_CLIENT_CLOCK_SKEW_MS = 30_000;
 const MAX_PENDING_LIVE_TRANSCRIPT_EVENTS = 50;
 const ACTIVE_AUDIO_RMS = 0.006;
 const DIRECT_STT_START_BLOCKED_MARKER = 'Kayıt başlatılmadı; mikrofon açılmadı.';
+const LIVE_STT_PREFLIGHT_MAX_ATTEMPTS = 3;
+const LIVE_STT_PREFLIGHT_RETRY_DELAY_MS = 180;
 
 interface RecorderRuntimeConfig {
   meetingId: string | null;
@@ -73,6 +76,53 @@ interface SafeJwtClaims {
   tenantId?: number | string;
   userId?: number | string;
   companyId?: number | string;
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+function isRetryableLiveSttPreflightFailure(message: string): boolean {
+  const normalized = message.toLocaleLowerCase('tr-TR');
+  return (
+    normalized.includes('baglanti') ||
+    normalized.includes('bağlantı') ||
+    normalized.includes('kapandi') ||
+    normalized.includes('kapandı') ||
+    normalized.includes('acilamadi') ||
+    normalized.includes('açılamadı')
+  );
+}
+
+async function testLiveSttStreamConnectionWithRetry(
+  streamUrl: string,
+  onRetry: (attempt: number, previous: LiveSttPreflightResult) => void,
+): Promise<LiveSttPreflightResult> {
+  let lastResult: LiveSttPreflightResult | null = null;
+
+  for (let attempt = 1; attempt <= LIVE_STT_PREFLIGHT_MAX_ATTEMPTS; attempt += 1) {
+    const result = await testLiveSttStreamConnection(streamUrl);
+    lastResult = result;
+    if (result.ok || attempt === LIVE_STT_PREFLIGHT_MAX_ATTEMPTS) {
+      return result;
+    }
+    if (!isRetryableLiveSttPreflightFailure(result.message)) {
+      return result;
+    }
+    onRetry(attempt + 1, result);
+    await delay(LIVE_STT_PREFLIGHT_RETRY_DELAY_MS);
+  }
+
+  return (
+    lastResult ?? {
+      ok: false,
+      message: 'Direct STT stream kontrol edilemedi.',
+      elapsedMs: 0,
+      stage: null,
+    }
+  );
 }
 
 async function startRecordingWithTimeout(
@@ -720,7 +770,15 @@ function App() {
       message: 'Direct STT stream kontrol edilemedi.',
     };
     try {
-      const result = await testLiveSttStreamConnection(streamUrl);
+      const result = await testLiveSttStreamConnectionWithRetry(streamUrl, (attempt, previous) => {
+        setLiveStreamPreflight({
+          status: 'checking',
+          message: `Direct STT bağlantısı tekrar deneniyor (${attempt}/${LIVE_STT_PREFLIGHT_MAX_ATTEMPTS})... Son hata: ${previous.message}`,
+          checkedAtMs: null,
+          elapsedMs: previous.elapsedMs,
+          stage: previous.stage,
+        });
+      });
       streamOutcome = { ok: result.ok, message: result.message };
       setLiveStreamPreflight({
         status: result.ok ? 'ready' : 'error',
