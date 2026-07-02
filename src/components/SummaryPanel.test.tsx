@@ -205,6 +205,12 @@ describe('SummaryPanel', () => {
     expect(within(sourceSummary).getByText('Final oranı')).toBeInTheDocument();
     expect(screen.getByText('Son satır · Taslak · Direct STT')).toBeInTheDocument();
     expect(screen.getByText('"Toplantı notu kaynak transcript olarak hazır."')).toBeInTheDocument();
+    const aiPackage = screen.getByLabelText('Meeting AI kaynak paketi');
+    expect(within(aiPackage).getByText('Kaynak paketi hazırlanabilir')).toBeInTheDocument();
+    expect(
+      within(aiPackage).getByText(/Backend gateway -> meeting-ai \/analyze kontratı/),
+    ).toBeInTheDocument();
+    expect(within(aiPackage).getByText(/doğrudan platform-ai çağırmaz/)).toBeInTheDocument();
     expect(screen.queryByText('Toplantı çıktısı bekleniyor')).not.toBeInTheDocument();
     expect(screen.queryByText('örnek özet')).not.toBeInTheDocument();
 
@@ -220,6 +226,25 @@ describe('SummaryPanel', () => {
       expect.stringMatching(/^meeting-transcript-22222222-2222-4222-8222-222222222222-/),
       expect.stringContaining('Toplantı notu kaynak transcript olarak hazır.'),
       'text/plain',
+    );
+
+    await userEvent.click(screen.getByRole('button', { name: 'AI paketi kopyala' }));
+    await waitFor(() => {
+      expect(adapter.copyText).toHaveBeenLastCalledWith(
+        expect.stringContaining('"schema_version": "platform-desktop.meeting-ai-source.v1"'),
+      );
+    });
+    const copiedPackage = String(vi.mocked(adapter.copyText).mock.calls.at(-1)?.[0]);
+    expect(copiedPackage).toContain('"client_direct_platform_ai": false');
+    expect(copiedPackage).toContain('"meeting_id": "22222222-2222-4222-8222-222222222222"');
+    expect(copiedPackage).toContain('"transcript":');
+    expect(copiedPackage).not.toContain('summaryMarkdown');
+
+    await userEvent.click(screen.getByRole('button', { name: 'AI JSON' }));
+    expect(adapter.downloadText).toHaveBeenCalledWith(
+      expect.stringMatching(/^meeting-ai-source-22222222-2222-4222-8222-222222222222-/),
+      expect.stringContaining('"target": "backend-gateway -> meeting-ai /analyze"'),
+      'application/json',
     );
   });
 
@@ -247,6 +272,8 @@ describe('SummaryPanel', () => {
     ).toBeInTheDocument();
 
     const sourceSummary = screen.getByLabelText('Kaynak transkript özeti');
+    const aiPackage = screen.getByLabelText('Meeting AI kaynak paketi');
+    expect(within(aiPackage).getByText('Gönderime hazır kaynak')).toBeInTheDocument();
     expect(within(sourceSummary).getByText('2 final / 0 taslak')).toBeInTheDocument();
     expect(within(sourceSummary).getByText('18 sn')).toBeInTheDocument();
     expect(within(sourceSummary).getByText('%100')).toBeInTheDocument();

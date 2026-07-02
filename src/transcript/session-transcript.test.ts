@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   analyzeTranscriptSourceReadiness,
+  buildMeetingAiSourcePackage,
   buildTranscriptSourceExport,
   failTranscriptSession,
   finishTranscriptSession,
@@ -175,8 +176,63 @@ describe('session transcript state', () => {
     expect(bundle.text).toContain('Konuşmacı: ilk satır');
   });
 
+  it('builds a meeting-ai analyze source package without fabricating output', () => {
+    const recording = startTranscriptSession(initialTranscriptSession(), {
+      sessionId: 'SES-1',
+      meetingId: '22222222-2222-4222-8222-222222222222',
+      deviceId: 'desktop-1',
+      hasLoopback: false,
+      startedAtMs: 1781820000000,
+    });
+    const withFirst = upsertTranscriptSegment(recording, {
+      id: 'seg-1',
+      speakerLabel: 'Konuşmacı',
+      startedAtMs: 1781820002000,
+      status: 'final',
+      source: 'direct-stream',
+      text: 'İlk karar kaynak pakete girer.',
+    });
+    const withSecond = finishTranscriptSession(
+      upsertTranscriptSegment(withFirst, {
+        id: 'seg-2',
+        speakerLabel: 'Konuşmacı',
+        startedAtMs: 1781820017000,
+        status: 'final',
+        source: 'direct-stream',
+        text: 'İkinci satır zamanlı segment olarak taşınır.',
+      }),
+      1781820020000,
+    );
+
+    const bundle = buildMeetingAiSourcePackage(withSecond, 1781820100000);
+
+    expect(bundle.jsonFileName).toMatch(/^meeting-ai-source-22222222-2222-4222-8222-222222222222-/);
+    expect(bundle.package.schema_version).toBe('platform-desktop.meeting-ai-source.v1');
+    expect(bundle.package.route).toEqual({
+      target: 'backend-gateway -> meeting-ai /analyze',
+      client_direct_platform_ai: false,
+    });
+    expect(bundle.package.request).toEqual({
+      transcript: 'İlk karar kaynak pakete girer.\nİkinci satır zamanlı segment olarak taşınır.',
+      meeting_id: '22222222-2222-4222-8222-222222222222',
+      session_id: 'SES-1',
+      segments: [
+        { text: 'İlk karar kaynak pakete girer.', start: 0, end: 15 },
+        { text: 'İkinci satır zamanlı segment olarak taşınır.', start: 15 },
+      ],
+    });
+    expect(bundle.package.source_quality.final_count).toBe(2);
+    expect(bundle.package.source_quality.warnings).not.toContain('Transkript satırı yok.');
+    expect(bundle.json).toContain('"client_direct_platform_ai": false');
+    expect(bundle.json).not.toContain('summaryMarkdown');
+    expect(bundle.json).not.toContain('actionItems');
+  });
+
   it('rejects source export when no transcript segment exists', () => {
     expect(() => buildTranscriptSourceExport(initialTranscriptSession())).toThrow(
+      'Transcript source is not ready',
+    );
+    expect(() => buildMeetingAiSourcePackage(initialTranscriptSession())).toThrow(
       'Transcript source is not ready',
     );
   });

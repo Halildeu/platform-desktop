@@ -471,6 +471,32 @@ button:disabled {
   line-height: 1.45;
 }
 
+.source-ai-package {
+  display: grid;
+  gap: 4px;
+  margin-bottom: 12px;
+  padding: 10px 12px;
+  border: 1px solid #ccfbf1;
+  border-radius: 6px;
+  background: #f0fdfa;
+}
+
+.source-ai-package span {
+  color: #0f766e;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.source-ai-package strong {
+  color: #17202a;
+  font-size: 14px;
+}
+
+.source-ai-package small {
+  color: #475569;
+  line-height: 1.45;
+}
+
 .source-readiness {
   display: grid;
   gap: 4px;

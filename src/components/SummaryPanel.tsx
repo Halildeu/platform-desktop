@@ -11,6 +11,7 @@ import {
 } from '../intelligence/meeting-intelligence';
 import {
   analyzeTranscriptSourceReadiness,
+  buildMeetingAiSourcePackage,
   buildTranscriptSourceExport,
   transcriptStatusLabel,
   type TranscriptSegment,
@@ -188,6 +189,25 @@ export function SummaryPanel({
     }
   };
 
+  const runMeetingAiPackageExport = async (kind: 'copy' | 'json'): Promise<void> => {
+    setMessage(null);
+    try {
+      if (!transcript) {
+        throw new Error('Transcript source is not ready');
+      }
+      const bundle = buildMeetingAiSourcePackage(transcript);
+      if (kind === 'copy') {
+        await exportAdapter.copyText(bundle.json);
+        setMessage('Meeting AI kaynak paketi panoya kopyalandı.');
+      } else {
+        exportAdapter.downloadText(bundle.jsonFileName, bundle.json, 'application/json');
+        setMessage('Meeting AI kaynak paketi indirildi.');
+      }
+    } catch (error) {
+      setMessage(`Meeting AI paketi hazır değil: ${(error as Error).message}`);
+    }
+  };
+
   return (
     <section className="summary-panel" aria-labelledby="summary-title">
       <div className="panel-header">
@@ -311,6 +331,20 @@ export function SummaryPanel({
             >
               Transkript TXT
             </button>
+            <button
+              className="secondary-action"
+              type="button"
+              onClick={() => void runMeetingAiPackageExport('copy')}
+            >
+              AI paketi kopyala
+            </button>
+            <button
+              className="secondary-action"
+              type="button"
+              onClick={() => void runMeetingAiPackageExport('json')}
+            >
+              AI JSON
+            </button>
           </div>
           {message ? <p className="export-message">{message}</p> : null}
           <div className="summary-content">
@@ -330,6 +364,19 @@ export function SummaryPanel({
                 <span>Sıradaki kapı</span>
                 <strong>{transcriptReadiness.nextStepLabel}</strong>
                 <small>{transcriptReadiness.nextStepDetail}</small>
+              </div>
+              <div className="source-ai-package" aria-label="Meeting AI kaynak paketi">
+                <span>Meeting AI kaynak paketi</span>
+                <strong>
+                  {transcriptReadiness.level === 'ready'
+                    ? 'Gönderime hazır kaynak'
+                    : 'Kaynak paketi hazırlanabilir'}
+                </strong>
+                <small>
+                  Backend gateway -&gt; meeting-ai /analyze kontratı için transcript, meeting_id,
+                  session_id ve zamanlı segmentler paketlenir; desktop client doğrudan platform-ai
+                  çağırmaz.
+                </small>
               </div>
               <div className="source-metrics" aria-label="Kaynak transkript özeti">
                 <div>

@@ -41,6 +41,49 @@ export interface TranscriptSourceExportBundle {
   textFileName: string;
 }
 
+export interface MeetingAiAnalyzeSegment {
+  text: string;
+  start: number;
+  end?: number;
+}
+
+export interface MeetingAiAnalyzeRequest {
+  transcript: string;
+  meeting_id: string | null;
+  session_id: string | null;
+  segments: MeetingAiAnalyzeSegment[];
+}
+
+export interface MeetingAiSourcePackage {
+  schema_version: 'platform-desktop.meeting-ai-source.v1';
+  generated_at: string;
+  route: {
+    target: 'backend-gateway -> meeting-ai /analyze';
+    client_direct_platform_ai: false;
+  };
+  source_quality: {
+    level: TranscriptSourceReadinessLevel;
+    label: string;
+    word_count: number;
+    duration_ms: number;
+    final_count: number;
+    draft_count: number;
+    final_ratio: number;
+    warnings: string[];
+  };
+  meeting_id: string | null;
+  session_id: string | null;
+  device_id: string | null;
+  source: 'microphone' | 'microphone_loopback';
+  request: MeetingAiAnalyzeRequest;
+}
+
+export interface MeetingAiSourcePackageBundle {
+  json: string;
+  jsonFileName: string;
+  package: MeetingAiSourcePackage;
+}
+
 export type TranscriptSourceReadinessLevel = 'empty' | 'collecting' | 'review' | 'ready';
 
 export interface TranscriptSourceReadiness {
@@ -239,6 +282,56 @@ export function buildTranscriptSourceExport(
   };
 }
 
+export function buildMeetingAiSourcePackage(
+  state: TranscriptSessionState,
+  nowMs: number = Date.now(),
+): MeetingAiSourcePackageBundle {
+  const segments = sourceSegments(state);
+  if (segments.length === 0) {
+    throw new Error('Transcript source is not ready');
+  }
+
+  const readiness = analyzeTranscriptSourceReadiness(state);
+  const request: MeetingAiAnalyzeRequest = {
+    transcript: segments.map((segment) => segment.text.trim()).join('\n'),
+    meeting_id: state.meetingId,
+    session_id: state.sessionId,
+    segments: buildAnalyzeSegments(segments),
+  };
+  const generatedAt = new Date(nowMs).toISOString();
+  const payload: MeetingAiSourcePackage = {
+    schema_version: 'platform-desktop.meeting-ai-source.v1',
+    generated_at: generatedAt,
+    route: {
+      target: 'backend-gateway -> meeting-ai /analyze',
+      client_direct_platform_ai: false,
+    },
+    source_quality: {
+      level: readiness.level,
+      label: readiness.label,
+      word_count: readiness.wordCount,
+      duration_ms: readiness.durationMs,
+      final_count: readiness.finalCount,
+      draft_count: readiness.draftCount,
+      final_ratio: readiness.finalRatio,
+      warnings: readiness.warnings,
+    },
+    meeting_id: state.meetingId,
+    session_id: state.sessionId,
+    device_id: state.deviceId,
+    source: state.hasLoopback ? 'microphone_loopback' : 'microphone',
+    request,
+  };
+  const safeMeetingId = safeFilePart(state.meetingId ?? 'meeting');
+  const stamp = generatedAt.replace(/[:.]/g, '-');
+
+  return {
+    json: `${JSON.stringify(payload, null, 2)}\n`,
+    jsonFileName: `meeting-ai-source-${safeMeetingId}-${stamp}.json`,
+    package: payload,
+  };
+}
+
 export function analyzeTranscriptSourceReadiness(
   state: TranscriptSessionState,
 ): TranscriptSourceReadiness {
@@ -347,6 +440,20 @@ function isFinalSegment(segment: TranscriptSegment): boolean {
   return segment.status === 'final' || segment.status === 'revised';
 }
 
+function buildAnalyzeSegments(segments: TranscriptSegment[]): MeetingAiAnalyzeSegment[] {
+  const firstStartedAtMs = segments[0]?.startedAtMs ?? 0;
+  return segments.map((segment, index) => {
+    const start = toSeconds(segment.startedAtMs - firstStartedAtMs);
+    const next = segments[index + 1];
+    const end = next ? toSeconds(next.startedAtMs - firstStartedAtMs) : undefined;
+    return {
+      text: segment.text.trim(),
+      start,
+      ...(end !== undefined && end > start ? { end } : {}),
+    };
+  });
+}
+
 function countWords(text: string): number {
   return text.trim().split(/\s+/).filter(Boolean).length;
 }
@@ -446,6 +553,10 @@ function formatPercent(value: number): string {
     return '-';
   }
   return `%${Math.round(value * 100)}`;
+}
+
+function toSeconds(valueMs: number): number {
+  return Math.max(0, Math.round(valueMs) / 1000);
 }
 
 function safeFilePart(value: string): string {
