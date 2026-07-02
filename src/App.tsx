@@ -607,16 +607,23 @@ function App() {
       if (!recorderConfig?.ready || !recorderConfig.meetingId) {
         throw new Error(recorderConfig?.reason ?? MEETING_ID_MISSING_MESSAGE);
       }
-      let liveSttStreamUrlForSession = recorderConfig.liveSttStreamUrl;
+      const capturePreflight = await handleAudioCapturePreflight();
+      if (!capturePreflight.ok) {
+        throw new Error(capturePreflight.message);
+      }
+      const liveSttStreamUrlForSession = recorderConfig.liveSttStreamUrl;
       if (recorderConfig.liveSttStreamUrl) {
-        const preflight = await handleLiveStreamPreflight();
-        if (!preflight.captureOk) {
-          throw new Error(preflight.captureMessage);
-        }
-        if (!preflight.streamOk) {
-          liveSttStreamUrlForSession = null;
-          directStreamConfiguredRef.current = false;
-        }
+        setLiveStreamPreflight((current) =>
+          current.status === 'idle'
+            ? {
+                status: 'checking',
+                message: 'Direct STT kayıt sırasında bağlanacak...',
+                checkedAtMs: null,
+                elapsedMs: null,
+                stage: null,
+              }
+            : current,
+        );
       }
       const meetingId = recorderConfig.meetingId;
       const deviceId = recorderConfig.deviceId;
@@ -726,39 +733,41 @@ function App() {
     }
   };
 
-  const handleLiveStreamPreflight = async (): Promise<StartupPreflightOutcome> => {
-    const captureCheck = (async (): Promise<{ ok: boolean; message: string }> => {
+  const handleAudioCapturePreflight = async (): Promise<{ ok: boolean; message: string }> => {
+    setAudioCapturePreflight({
+      status: 'checking',
+      message: 'Ses işleyici kontrol ediliyor...',
+      checkedAtMs: null,
+      elapsedMs: null,
+      moduleUrl: null,
+    });
+    try {
+      const result = await testAudioCaptureWorklet();
       setAudioCapturePreflight({
-        status: 'checking',
-        message: 'Ses işleyici kontrol ediliyor...',
-        checkedAtMs: null,
+        status: result.ok ? 'ready' : 'error',
+        message: result.message,
+        checkedAtMs: Date.now(),
+        elapsedMs: result.elapsedMs,
+        moduleUrl: result.moduleUrl,
+      });
+      return { ok: result.ok, message: result.message };
+    } catch (error) {
+      const message = `Ses işleyici test hatası: ${
+        error instanceof Error ? error.message : String(error)
+      }`;
+      setAudioCapturePreflight({
+        status: 'error',
+        message,
+        checkedAtMs: Date.now(),
         elapsedMs: null,
         moduleUrl: null,
       });
-      try {
-        const result = await testAudioCaptureWorklet();
-        setAudioCapturePreflight({
-          status: result.ok ? 'ready' : 'error',
-          message: result.message,
-          checkedAtMs: Date.now(),
-          elapsedMs: result.elapsedMs,
-          moduleUrl: result.moduleUrl,
-        });
-        return { ok: result.ok, message: result.message };
-      } catch (error) {
-        const message = `Ses işleyici test hatası: ${
-          error instanceof Error ? error.message : String(error)
-        }`;
-        setAudioCapturePreflight({
-          status: 'error',
-          message,
-          checkedAtMs: Date.now(),
-          elapsedMs: null,
-          moduleUrl: null,
-        });
-        return { ok: false, message };
-      }
-    })();
+      return { ok: false, message };
+    }
+  };
+
+  const handleLiveStreamPreflight = async (): Promise<StartupPreflightOutcome> => {
+    const captureCheck = handleAudioCapturePreflight();
 
     const streamUrl = recorderConfig?.liveSttStreamUrl;
     if (!streamUrl) {

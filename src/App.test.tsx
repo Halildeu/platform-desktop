@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import '@testing-library/jest-dom/vitest';
@@ -113,6 +113,11 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.clearAllMocks();
   delete window.electronAPI;
+});
+
+beforeEach(() => {
+  vi.resetAllMocks();
+  mockReadyCaptureWorklet();
 });
 
 function mockReadyCaptureWorklet(): void {
@@ -300,10 +305,13 @@ describe('App recorder readiness', () => {
 
     render(<App />);
 
+    await userEvent.click(await screen.findByRole('button', { name: 'Bağlantı testi' }));
+
+    expect(await screen.findByText('Direct STT baglanti hatasi. · 500 ms')).toBeInTheDocument();
+
     fireEvent.click(await screen.findByRole('button', { name: 'Kaydet' }));
     fireEvent.click(screen.getByRole('button', { name: 'Onaylıyorum — Kaydı Başlat' }));
 
-    expect(await screen.findByText('Direct STT baglanti hatasi. · 500 ms')).toBeInTheDocument();
     expect(
       await screen.findByText('Kayıt başladı (yalnız mikrofon, oturum SES-1)'),
     ).toBeInTheDocument();
@@ -311,9 +319,10 @@ describe('App recorder readiness', () => {
       '22222222-2222-4222-8222-222222222222',
       'desktop-1',
       expect.objectContaining({
-        liveSttStreamUrl: null,
+        liveSttStreamUrl: 'ws://127.0.0.1:18220/ws/stream',
       }),
     );
+    expect(testLiveSttStreamConnection).toHaveBeenCalledTimes(3);
     expect(
       screen.queryByText(
         'Kayıt başlatılamadı: Direct STT baglanti hatasi. Kayıt başlatılmadı; mikrofon açılmadı.',
@@ -321,7 +330,7 @@ describe('App recorder readiness', () => {
     ).not.toBeInTheDocument();
   });
 
-  it('direct STT gecici baglanti hatasinda tekrar deneyip mikrofona oyle gecer', async () => {
+  it('kayit baslatirken direct STT preflight retry beklemeden mikrofona gecer', async () => {
     installElectronApiMock({
       meetingId: '22222222-2222-4222-8222-222222222222',
       deviceId: 'desktop-1',
@@ -359,8 +368,8 @@ describe('App recorder readiness', () => {
     expect(
       await screen.findByText('Kayıt başladı (yalnız mikrofon, oturum SES-1)'),
     ).toBeInTheDocument();
-    expect(testLiveSttStreamConnection).toHaveBeenCalledTimes(2);
-    expect(await screen.findByText('Direct STT stream hazir. · 70 ms')).toBeInTheDocument();
+    expect(testLiveSttStreamConnection).not.toHaveBeenCalled();
+    expect(screen.getByText('Direct STT kayıt sırasında bağlanacak...')).toBeInTheDocument();
     expect(startRecording).toHaveBeenCalledWith(
       '22222222-2222-4222-8222-222222222222',
       'desktop-1',
@@ -431,16 +440,13 @@ describe('App recorder readiness', () => {
     render(<App />);
 
     fireEvent.click(await screen.findByRole('button', { name: 'Kaydet' }));
-    const timeoutSpy = vi.spyOn(globalThis, 'setTimeout').mockImplementation((handler) => {
-      if (typeof handler === 'function') {
-        queueMicrotask(() => handler());
-      }
-      return 1 as unknown as ReturnType<typeof setTimeout>;
-    });
+    vi.useFakeTimers();
     fireEvent.click(screen.getByRole('button', { name: 'Onaylıyorum — Kaydı Başlat' }));
 
-    await Promise.resolve();
-    await Promise.resolve();
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
     expect(startRecording).toHaveBeenCalledWith(
       '22222222-2222-4222-8222-222222222222',
       'desktop-1',
@@ -448,9 +454,14 @@ describe('App recorder readiness', () => {
         liveSttStreamUrl: null,
       }),
     );
-    timeoutSpy.mockRestore();
 
-    const timeoutErrors = await screen.findAllByText(
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(45_000);
+      await Promise.resolve();
+    });
+    vi.useRealTimers();
+
+    const timeoutErrors = screen.getAllByText(
       'Kayıt başlatılamadı: Recorder başlatma 45 sn içinde yanıt vermedi; izin/gateway zinciri kontrol edilmeli.',
     );
     expect(timeoutErrors.length).toBeGreaterThan(0);
