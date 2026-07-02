@@ -1,5 +1,6 @@
 import { useState, type ReactElement } from 'react';
 
+import { CONSENT_LOCALE, CONSENT_TEXT_HASH, CONSENT_VERSION } from './ConsentDialog';
 import {
   actionStatusLabel,
   buildIntelligenceExport,
@@ -199,7 +200,11 @@ export function SummaryPanel({
       if (!transcript) {
         throw new Error('Transcript source is not ready');
       }
-      const bundle = buildMeetingAiSourcePackage(transcript);
+      const bundle = buildMeetingAiSourcePackage(transcript, Date.now(), {
+        consentVersion: CONSENT_VERSION,
+        consentTextHash: CONSENT_TEXT_HASH,
+        consentLocale: CONSENT_LOCALE,
+      });
       if (kind === 'copy') {
         await exportAdapter.copyText(bundle.json);
         setMessage('Meeting AI kaynak paketi panoya kopyalandı.');
@@ -408,6 +413,28 @@ export function SummaryPanel({
                   </strong>
                 </div>
                 <p>{meetingAiGate.next_action}</p>
+              </div>
+              <div className="source-privacy-grid" aria-label="KVKK kaynak sınırı">
+                <div>
+                  <span>Veri</span>
+                  <strong>Transcript içerir</strong>
+                </div>
+                <div>
+                  <span>Ses</span>
+                  <strong>Raw audio yok</strong>
+                </div>
+                <div>
+                  <span>Yerel cache</span>
+                  <strong>Yok</strong>
+                </div>
+                <div>
+                  <span>Rıza</span>
+                  <strong>{CONSENT_VERSION}</strong>
+                </div>
+                <p>
+                  Kaynak paketi kullanıcı aksiyonuyla üretilir; desktop ham ses verisini pakete
+                  koymaz.
+                </p>
               </div>
               <div className="source-metrics" aria-label="Kaynak transkript özeti">
                 <div>

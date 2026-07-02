@@ -534,6 +534,43 @@ button:disabled {
   font-size: 13px;
 }
 
+.source-privacy-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: 8px;
+  margin-bottom: 12px;
+  padding: 10px 12px;
+  border: 1px solid #fed7aa;
+  border-radius: 6px;
+  background: #fff7ed;
+}
+
+.source-privacy-grid div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.source-privacy-grid span {
+  color: #9a3412;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.source-privacy-grid strong {
+  color: #17202a;
+  font-size: 13px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.source-privacy-grid p {
+  grid-column: 1 / -1;
+  color: #7c2d12;
+  font-size: 13px;
+}
+
 .source-readiness {
   display: grid;
   gap: 4px;

@@ -69,6 +69,27 @@ export interface MeetingAiSourceGate {
   };
 }
 
+export interface MeetingAiSourcePackageOptions {
+  consentVersion?: string | null;
+  consentTextHash?: string | null;
+  consentLocale?: string | null;
+}
+
+export interface MeetingAiSourcePrivacy {
+  classification: 'confidential_transcript';
+  transcript_included: true;
+  raw_audio_included: false;
+  local_raw_audio_cache: false;
+  export_requires_user_action: true;
+  kvkk_boundary: 'desktop-source-export';
+  consent: {
+    required: true;
+    version: string | null;
+    text_hash: string | null;
+    locale: string | null;
+  };
+}
+
 export interface MeetingAiSourcePackage {
   schema_version: 'platform-desktop.meeting-ai-source.v1';
   generated_at: string;
@@ -77,6 +98,7 @@ export interface MeetingAiSourcePackage {
     client_direct_platform_ai: false;
   };
   gate: MeetingAiSourceGate;
+  privacy: MeetingAiSourcePrivacy;
   source_quality: {
     level: TranscriptSourceReadinessLevel;
     label: string;
@@ -301,6 +323,7 @@ export function buildTranscriptSourceExport(
 export function buildMeetingAiSourcePackage(
   state: TranscriptSessionState,
   nowMs: number = Date.now(),
+  options: MeetingAiSourcePackageOptions = {},
 ): MeetingAiSourcePackageBundle {
   const segments = sourceSegments(state);
   if (segments.length === 0) {
@@ -323,6 +346,7 @@ export function buildMeetingAiSourcePackage(
       client_direct_platform_ai: false,
     },
     gate: buildMeetingAiSourceGate(state, readiness),
+    privacy: buildMeetingAiSourcePrivacy(options),
     source_quality: {
       level: readiness.level,
       label: readiness.label,
@@ -476,6 +500,25 @@ export function buildMeetingAiSourceGate(
       submit_via: 'backend-gateway',
       endpoint: 'meeting-ai /analyze',
       direct_platform_ai_allowed: false,
+    },
+  };
+}
+
+export function buildMeetingAiSourcePrivacy(
+  options: MeetingAiSourcePackageOptions = {},
+): MeetingAiSourcePrivacy {
+  return {
+    classification: 'confidential_transcript',
+    transcript_included: true,
+    raw_audio_included: false,
+    local_raw_audio_cache: false,
+    export_requires_user_action: true,
+    kvkk_boundary: 'desktop-source-export',
+    consent: {
+      required: true,
+      version: options.consentVersion ?? null,
+      text_hash: options.consentTextHash ?? null,
+      locale: options.consentLocale ?? null,
     },
   };
 }

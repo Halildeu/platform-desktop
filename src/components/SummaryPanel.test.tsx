@@ -5,6 +5,7 @@ import { cleanup, render, screen, waitFor, within } from '@testing-library/react
 import userEvent from '@testing-library/user-event';
 import '@testing-library/jest-dom/vitest';
 
+import { CONSENT_TEXT_HASH, CONSENT_VERSION } from './ConsentDialog';
 import { SummaryPanel, type ExportAdapter } from './SummaryPanel';
 import {
   initialMeetingIntelligence,
@@ -216,6 +217,10 @@ describe('SummaryPanel', () => {
     expect(within(aiGate).getByText('backend-gateway -> meeting-ai /analyze')).toBeInTheDocument();
     expect(within(aiGate).getByText('Gateway zorunlu')).toBeInTheDocument();
     expect(within(aiGate).getByText('kayıt sürüyor')).toBeInTheDocument();
+    const privacy = screen.getByLabelText('KVKK kaynak sınırı');
+    expect(within(privacy).getByText('Transcript içerir')).toBeInTheDocument();
+    expect(within(privacy).getByText('Raw audio yok')).toBeInTheDocument();
+    expect(within(privacy).getByText(CONSENT_VERSION)).toBeInTheDocument();
     expect(screen.queryByText('Toplantı çıktısı bekleniyor')).not.toBeInTheDocument();
     expect(screen.queryByText('örnek özet')).not.toBeInTheDocument();
 
@@ -242,6 +247,9 @@ describe('SummaryPanel', () => {
     const copiedPackage = String(vi.mocked(adapter.copyText).mock.calls.at(-1)?.[0]);
     expect(copiedPackage).toContain('"client_direct_platform_ai": false');
     expect(copiedPackage).toContain('"can_submit": false');
+    expect(copiedPackage).toContain('"classification": "confidential_transcript"');
+    expect(copiedPackage).toContain('"raw_audio_included": false');
+    expect(copiedPackage).toContain(`"text_hash": "${CONSENT_TEXT_HASH}"`);
     expect(copiedPackage).toContain('"meeting_id": "22222222-2222-4222-8222-222222222222"');
     expect(copiedPackage).toContain('"transcript":');
     expect(copiedPackage).not.toContain('summaryMarkdown');

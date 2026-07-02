@@ -223,6 +223,20 @@ describe('session transcript state', () => {
         direct_platform_ai_allowed: false,
       },
     });
+    expect(bundle.package.privacy).toEqual({
+      classification: 'confidential_transcript',
+      transcript_included: true,
+      raw_audio_included: false,
+      local_raw_audio_cache: false,
+      export_requires_user_action: true,
+      kvkk_boundary: 'desktop-source-export',
+      consent: {
+        required: true,
+        version: null,
+        text_hash: null,
+        locale: null,
+      },
+    });
     expect(bundle.package.request).toEqual({
       transcript: 'İlk karar kaynak pakete girer.\nİkinci satır zamanlı segment olarak taşınır.',
       meeting_id: '22222222-2222-4222-8222-222222222222',
