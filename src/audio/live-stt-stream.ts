@@ -195,6 +195,47 @@ function isLowInformationRepetition(text: string): boolean {
   );
 }
 
+function isRepeatedDecodeChain(text: string): boolean {
+  const words = normalizedWords(splitWords(text));
+  if (words.length < 8) {
+    return false;
+  }
+
+  const counts = new Map<string, number>();
+  for (const word of words) {
+    counts.set(word, (counts.get(word) ?? 0) + 1);
+  }
+
+  const topWordCount = Math.max(...counts.values());
+  if (topWordCount >= 4 && topWordCount / words.length >= 0.22) {
+    return true;
+  }
+
+  const families = normalizedFamilies(splitWords(text));
+  const familyCounts = new Map<string, number>();
+  for (const family of families) {
+    familyCounts.set(family, (familyCounts.get(family) ?? 0) + 1);
+  }
+
+  const topFamilyCount = Math.max(...familyCounts.values());
+  const familyUniqueRatio = new Set(families).size / families.length;
+  if (topFamilyCount >= 4 && familyUniqueRatio <= 0.65) {
+    return true;
+  }
+
+  const repeatedBigrams = new Map<string, number>();
+  for (let index = 0; index < words.length - 1; index += 1) {
+    const key = words.slice(index, index + 2).join('\u0000');
+    repeatedBigrams.set(key, (repeatedBigrams.get(key) ?? 0) + 1);
+  }
+
+  return [...repeatedBigrams.values()].some((count) => count >= 2) && topFamilyCount >= 3;
+}
+
+function isUnstableFinalText(text: string): boolean {
+  return isLowInformationRepetition(text) || isRepeatedDecodeChain(text);
+}
+
 function hasSamePrefix(previousText: string, nextText: string): boolean {
   return nextText.toLocaleLowerCase('tr-TR').startsWith(previousText.toLocaleLowerCase('tr-TR'));
 }
@@ -472,14 +513,14 @@ export function connectLiveSttStream(
         const previousText =
           segmentKnownText.get(event.seq) ?? segmentDraftText.get(event.seq) ?? '';
         let finalText = event.text;
-        if (isLowInformationRepetition(event.text)) {
-          if (!previousText || isLowInformationRepetition(previousText)) {
+        if (isUnstableFinalText(event.text)) {
+          if (!previousText || isUnstableFinalText(previousText)) {
             return;
           }
           finalText = previousText;
         }
         const text = mergeFinalTranscript(previousText, finalText);
-        if (!text || isLowInformationRepetition(text)) {
+        if (!text || isUnstableFinalText(text)) {
           return;
         }
         const startedAtMs = segmentStartedAt.get(event.seq) ?? Date.now();
