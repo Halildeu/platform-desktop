@@ -163,6 +163,68 @@ function integrationSupportedObjectLabel(): string {
   return MEETING_OUTPUT_SUPPORTED_OBJECTS.join(', ');
 }
 
+function normalizedCitationCoverage(value: number | null | undefined): number | null {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return null;
+  }
+  return Math.min(1, Math.max(0, value));
+}
+
+function outputSourceConfidenceLabel(value: number | null | undefined): string {
+  const coverage = normalizedCitationCoverage(value);
+  if (coverage === null) {
+    return 'Bilinmiyor';
+  }
+  if (coverage >= 0.85) {
+    return 'Kaynak güçlü';
+  }
+  if (coverage >= 0.5) {
+    return 'Kısmi kaynaklı';
+  }
+  return 'Kaynak zayıf';
+}
+
+function outputCitationCoverageLabel(value: number | null | undefined): string {
+  const coverage = normalizedCitationCoverage(value);
+  return coverage === null ? '-' : formatPercent(coverage);
+}
+
+function hasReviewDraftChanges(
+  result: MeetingIntelligenceResult | null,
+  summaryOverride: string | null,
+  decisionDrafts: Record<string, DecisionReviewDraft>,
+  actionDrafts: Record<string, ActionReviewDraft>,
+): boolean {
+  if (!result) {
+    return false;
+  }
+  if (summaryOverride !== null && summaryOverride !== result.summaryMarkdown) {
+    return true;
+  }
+  const decisionMap = new Map(result.decisions.map((decision) => [decision.id, decision]));
+  const hasDecisionChange = Object.entries(decisionDrafts).some(([id, draft]) => {
+    const original = decisionMap.get(id);
+    return (
+      original &&
+      ((draft.owner !== undefined && draft.owner !== original.owner) ||
+        (draft.status !== undefined && draft.status !== original.status))
+    );
+  });
+  if (hasDecisionChange) {
+    return true;
+  }
+  const actionMap = new Map(result.actionItems.map((item) => [item.id, item]));
+  return Object.entries(actionDrafts).some(([id, draft]) => {
+    const original = actionMap.get(id);
+    return (
+      original &&
+      ((draft.assignee !== undefined && draft.assignee !== original.assignee) ||
+        (draft.dueDate !== undefined && draft.dueDate !== original.dueDate) ||
+        (draft.status !== undefined && draft.status !== original.status))
+    );
+  });
+}
+
 function formatDurationMs(value: number): string {
   if (!Number.isFinite(value) || value <= 0) {
     return '-';
@@ -321,6 +383,12 @@ export function SummaryPanel({
   const latestTranscriptKey = latestTranscriptSegment
     ? `${latestTranscriptSegment.id}:${latestTranscriptSegment.status}:${latestTranscriptSegment.text.length}`
     : '-';
+  const hasUserReviewChanges = hasReviewDraftChanges(
+    result,
+    summaryOverride,
+    decisionDrafts,
+    actionDrafts,
+  );
   const autoSubmitKey =
     transcript && meetingAiGate.can_submit
       ? [
@@ -742,6 +810,30 @@ export function SummaryPanel({
                     Teams taslağı
                   </button>
                 </div>
+              </div>
+            </div>
+          ) : null}
+          {displayResult ? (
+            <div className="output-quality" aria-label="Toplantı çıktısı kalite durumu">
+              <div>
+                <span>Kaynak</span>
+                <strong>{outputSourceConfidenceLabel(displayResult.citationCoverage)}</strong>
+              </div>
+              <div>
+                <span>Kapsam</span>
+                <strong>{outputCitationCoverageLabel(displayResult.citationCoverage)}</strong>
+              </div>
+              <div>
+                <span>Üretici</span>
+                <strong>{displayResult.providerLabel ?? 'AI üretimi'}</strong>
+              </div>
+              <div>
+                <span>Üretim</span>
+                <strong>{formatClock(displayResult.generatedAtMs)}</strong>
+              </div>
+              <div>
+                <span>İnsan kontrolü</span>
+                <strong>{hasUserReviewChanges ? 'Revizyonlu' : 'Kontrol bekliyor'}</strong>
               </div>
             </div>
           ) : null}

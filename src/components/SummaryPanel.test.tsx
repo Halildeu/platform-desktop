@@ -177,6 +177,54 @@ describe('SummaryPanel', () => {
     ).toBeInTheDocument();
     expect(screen.getByText('0:30-0:42')).toBeInTheDocument();
     expect(screen.getByText('1:04')).toBeInTheDocument();
+    const outputQuality = screen.getByLabelText('Toplantı çıktısı kalite durumu');
+    expect(within(outputQuality).getByText('Kaynak güçlü')).toBeInTheDocument();
+    expect(within(outputQuality).getByText('%100')).toBeInTheDocument();
+    expect(within(outputQuality).getByText('meeting-ai pilot')).toBeInTheDocument();
+    expect(within(outputQuality).getByText('Kontrol bekliyor')).toBeInTheDocument();
+  });
+
+  it('renders safe output quality fallbacks and confidence bands', () => {
+    const base = readyState();
+    if (!base.result) {
+      throw new Error('readyState fixture must include a result');
+    }
+    const lowCoverage = setMeetingIntelligenceResult(base, {
+      ...base.result,
+      citationCoverage: 0.4,
+      providerLabel: undefined,
+    });
+    const { rerender } = render(<SummaryPanel intelligence={lowCoverage} />);
+
+    let outputQuality = screen.getByLabelText('Toplantı çıktısı kalite durumu');
+    expect(within(outputQuality).getByText('Kaynak zayıf')).toBeInTheDocument();
+    expect(within(outputQuality).getByText('%40')).toBeInTheDocument();
+    expect(within(outputQuality).getByText('AI üretimi')).toBeInTheDocument();
+
+    rerender(
+      <SummaryPanel
+        intelligence={setMeetingIntelligenceResult(base, {
+          ...base.result,
+          citationCoverage: 0.65,
+        })}
+      />,
+    );
+    outputQuality = screen.getByLabelText('Toplantı çıktısı kalite durumu');
+    expect(within(outputQuality).getByText('Kısmi kaynaklı')).toBeInTheDocument();
+    expect(within(outputQuality).getByText('%65')).toBeInTheDocument();
+
+    rerender(
+      <SummaryPanel
+        intelligence={setMeetingIntelligenceResult(base, {
+          ...base.result,
+          citationCoverage: Number.NaN,
+          generatedAtMs: undefined as unknown as number,
+        })}
+      />,
+    );
+    outputQuality = screen.getByLabelText('Toplantı çıktısı kalite durumu');
+    expect(within(outputQuality).getByText('Bilinmiyor')).toBeInTheDocument();
+    expect(within(outputQuality).getAllByText('-')).toHaveLength(2);
   });
 
   it('uses export adapter for copy and file downloads', async () => {
@@ -371,6 +419,8 @@ describe('SummaryPanel', () => {
       status: 'blocked',
       status_label: 'Blokeli',
     });
+    const outputQuality = screen.getByLabelText('Toplantı çıktısı kalite durumu');
+    expect(within(outputQuality).getByText('Revizyonlu')).toBeInTheDocument();
     const readiness = screen.getByLabelText('ERP/CRM entegrasyon hazırlığı');
     expect(within(readiness).getByText('Hedef')).toBeInTheDocument();
     expect(within(readiness).getByText('ERP/CRM adaptör hedefi')).toBeInTheDocument();
