@@ -75,6 +75,15 @@
       "dist/**/*",
       "dist-electron/**/*"
     ],
+    "extraResources": [
+      {
+        "from": "public/icons",
+        "to": "icons",
+        "filter": [
+          "*.png"
+        ]
+      }
+    ],
     "mac": {
       "category": "public.app-category.business",
       "target": [
