@@ -33,6 +33,7 @@ export interface ExportAdapter {
   copyText(text: string): Promise<void>;
   downloadText(fileName: string, content: string, mimeType: string): void;
   print(): void;
+  openExternal?(url: string): void;
 }
 
 export interface MeetingAiSubmitAdapter {
@@ -68,6 +69,9 @@ const browserExportAdapter: ExportAdapter = {
   print() {
     window.print();
   },
+  openExternal(url: string) {
+    window.open(url, '_blank', 'noopener,noreferrer');
+  },
 };
 
 const electronMeetingAiSubmitAdapter: MeetingAiSubmitAdapter = {
@@ -83,6 +87,8 @@ const electronMeetingAiSubmitAdapter: MeetingAiSubmitAdapter = {
 const ACTION_STATUS_OPTIONS: ActionStatus[] = ['open', 'in_progress', 'done', 'blocked'];
 
 type ActionReviewDraft = Partial<Pick<ActionItem, 'assignee' | 'dueDate' | 'status'>>;
+
+type ShareChannel = 'clipboard' | 'email' | 'teams';
 
 function transcriptSegments(transcript: TranscriptSessionState | undefined): TranscriptSegment[] {
   return (
@@ -179,6 +185,37 @@ function applyActionReviewDrafts(
   });
 }
 
+function shareSubject(meetingId: string | null): string {
+  return `Meeting Intelligence - ${meetingId ?? 'meeting'}`;
+}
+
+function normalizedShareRecipients(value: string): string {
+  return value
+    .split(/[\s,;]+/)
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .join(',');
+}
+
+function buildMailtoUrl(args: { recipients: string; subject: string; body: string }): string {
+  const recipients = normalizedShareRecipients(args.recipients);
+  const query = new URLSearchParams({
+    subject: args.subject,
+    body: args.body,
+  });
+  return `mailto:${recipients}?${query.toString()}`;
+}
+
+function buildTeamsShareUrl(args: { recipients: string; body: string }): string {
+  const url = new URL('https://teams.microsoft.com/l/chat/0/0');
+  url.searchParams.set('message', args.body);
+  const recipients = normalizedShareRecipients(args.recipients);
+  if (recipients) {
+    url.searchParams.set('users', recipients);
+  }
+  return url.toString();
+}
+
 export function SummaryPanel({
   intelligence,
   transcript,
@@ -199,7 +236,11 @@ export function SummaryPanel({
   const [summaryDraft, setSummaryDraft] = useState('');
   const [summaryOverride, setSummaryOverride] = useState<string | null>(null);
   const [actionDrafts, setActionDrafts] = useState<Record<string, ActionReviewDraft>>({});
+  const [shareOpen, setShareOpen] = useState(false);
+  const [shareText, setShareText] = useState('');
+  const [shareRecipients, setShareRecipients] = useState('');
   const autoSubmitKeyRef = useRef<string | null>(null);
+  const shareDialogRef = useRef<HTMLDivElement>(null);
   const transcriptSourceSegments = transcriptSegments(transcript);
   const hasTranscriptSource = transcriptSourceSegments.length > 0;
   const transcriptReadiness = transcript
@@ -261,6 +302,9 @@ export function SummaryPanel({
     setSummaryOverride(null);
     setSummaryDraft(result?.summaryMarkdown ?? '');
     setActionDrafts({});
+    setShareOpen(false);
+    setShareText('');
+    setShareRecipients('');
   }, [resultKey, result?.summaryMarkdown]);
 
   const runExport = async (kind: 'copy' | 'markdown' | 'csv' | 'print'): Promise<void> => {
@@ -282,6 +326,47 @@ export function SummaryPanel({
       }
     } catch (error) {
       setMessage(`Export hazır değil: ${(error as Error).message}`);
+    }
+  };
+
+  const openShareDialog = (): void => {
+    setMessage(null);
+    try {
+      const bundle = buildIntelligenceExport(exportIntelligence);
+      setShareText(bundle.markdown);
+      setShareOpen(true);
+    } catch (error) {
+      setMessage(`Paylaşım hazır değil: ${(error as Error).message}`);
+    }
+  };
+
+  const runShare = async (channel: ShareChannel): Promise<void> => {
+    setMessage(null);
+    const body = shareText.trim();
+    if (!body) {
+      setMessage('Paylaşım metni boş bırakılamaz.');
+      return;
+    }
+
+    try {
+      if (channel === 'clipboard') {
+        await exportAdapter.copyText(body);
+        setMessage('Paylaşım metni panoya kopyalandı.');
+        return;
+      }
+
+      const subject = shareSubject(visibleIntelligence.meetingId);
+      const url =
+        channel === 'email'
+          ? buildMailtoUrl({ recipients: shareRecipients, subject, body })
+          : buildTeamsShareUrl({ recipients: shareRecipients, body });
+      if (!exportAdapter.openExternal) {
+        throw new Error('External share adapter is not available');
+      }
+      exportAdapter.openExternal(url);
+      setMessage(channel === 'email' ? 'E-posta taslağı açıldı.' : 'Teams taslağı açıldı.');
+    } catch (error) {
+      setMessage(`Paylaşım hazır değil: ${(error as Error).message}`);
     }
   };
 
@@ -394,6 +479,21 @@ export function SummaryPanel({
     runMeetingAiSubmit,
   ]);
 
+  useEffect(() => {
+    if (!shareOpen) {
+      return undefined;
+    }
+
+    shareDialogRef.current?.focus();
+    const closeOnEscape = (event: KeyboardEvent): void => {
+      if (event.key === 'Escape') {
+        setShareOpen(false);
+      }
+    };
+    document.addEventListener('keydown', closeOnEscape);
+    return () => document.removeEventListener('keydown', closeOnEscape);
+  }, [shareOpen]);
+
   const startSummaryEdit = (): void => {
     setMessage(null);
     setSummaryDraft(effectiveSummaryMarkdown);
@@ -495,8 +595,77 @@ export function SummaryPanel({
             >
               PDF
             </button>
+            <button className="secondary-action" type="button" onClick={openShareDialog}>
+              Paylaş
+            </button>
           </div>
           {message ? <p className="export-message">{message}</p> : null}
+          {shareOpen ? (
+            <div className="share-overlay">
+              <div
+                ref={shareDialogRef}
+                className="share-dialog"
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby="share-title"
+                tabIndex={-1}
+              >
+                <div className="share-dialog-header">
+                  <div>
+                    <h3 id="share-title">Çıktıyı paylaş</h3>
+                    <p>Review edilmiş çıktı paylaşılır; ham ses dosyası eklenmez.</p>
+                  </div>
+                  <button
+                    className="secondary-action compact-action"
+                    type="button"
+                    onClick={() => setShareOpen(false)}
+                  >
+                    Kapat
+                  </button>
+                </div>
+                <label className="share-field">
+                  <span>Alıcılar</span>
+                  <input
+                    aria-label="Paylaşım alıcıları"
+                    value={shareRecipients}
+                    placeholder="zeynep@example.com"
+                    onChange={(event) => setShareRecipients(event.target.value)}
+                  />
+                </label>
+                <label className="share-field">
+                  <span>Metin</span>
+                  <textarea
+                    aria-label="Paylaşım metni"
+                    value={shareText}
+                    onChange={(event) => setShareText(event.target.value)}
+                  />
+                </label>
+                <div className="share-actions">
+                  <button
+                    className="primary-action"
+                    type="button"
+                    onClick={() => void runShare('clipboard')}
+                  >
+                    Panoya kopyala
+                  </button>
+                  <button
+                    className="secondary-action"
+                    type="button"
+                    onClick={() => void runShare('email')}
+                  >
+                    E-posta taslağı
+                  </button>
+                  <button
+                    className="secondary-action"
+                    type="button"
+                    onClick={() => void runShare('teams')}
+                  >
+                    Teams taslağı
+                  </button>
+                </div>
+              </div>
+            </div>
+          ) : null}
           <div className="summary-content">
             <article className="summary-section">
               <div className="summary-section-heading">

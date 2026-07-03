@@ -274,6 +274,53 @@ describe('SummaryPanel', () => {
     expect(screen.getByLabelText(`Durum: ${actionTitle}`)).toHaveValue('open');
   });
 
+  it('shares reviewed meeting output through clipboard email and Teams drafts', async () => {
+    const openExternal = vi.fn();
+    const adapter: ExportAdapter = {
+      copyText: vi.fn().mockResolvedValue(undefined),
+      downloadText: vi.fn(),
+      print: vi.fn(),
+      openExternal,
+    };
+    render(<SummaryPanel intelligence={readyState()} exportAdapter={adapter} />);
+
+    const actionTitle = 'audio_record rolü yeni token claim özetinde doğrulanacak';
+    await userEvent.clear(screen.getByLabelText(`Sahip: ${actionTitle}`));
+    await userEvent.type(screen.getByLabelText(`Sahip: ${actionTitle}`), 'Halil');
+    await userEvent.selectOptions(screen.getByLabelText(`Durum: ${actionTitle}`), 'in_progress');
+
+    await userEvent.click(screen.getByRole('button', { name: 'Paylaş' }));
+
+    const dialog = screen.getByRole('dialog', { name: 'Çıktıyı paylaş' });
+    expect(dialog).toBeInTheDocument();
+    const shareBody = screen.getByLabelText('Paylaşım metni');
+    const shareText = String((shareBody as HTMLTextAreaElement).value);
+    expect(shareText).toContain('@Halil');
+    expect(shareText).toContain('İlerliyor');
+
+    await userEvent.type(screen.getByLabelText('Paylaşım alıcıları'), 'zeynep@example.com');
+    await userEvent.click(screen.getByRole('button', { name: 'Panoya kopyala' }));
+    await waitFor(() => {
+      expect(adapter.copyText).toHaveBeenCalledWith(expect.stringContaining('@Halil'));
+    });
+    expect(screen.getByText('Paylaşım metni panoya kopyalandı.')).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('button', { name: 'E-posta taslağı' }));
+    const emailUrl = String(openExternal.mock.calls.at(-1)?.[0]);
+    expect(emailUrl).toContain('mailto:zeynep@example.com?');
+    expect(emailUrl).toContain('subject=Meeting+Intelligence');
+    expect(emailUrl).toContain('body=');
+
+    await userEvent.click(screen.getByRole('button', { name: 'Teams taslağı' }));
+    const teamsUrl = String(openExternal.mock.calls.at(-1)?.[0]);
+    expect(teamsUrl).toContain('https://teams.microsoft.com/l/chat/0/0');
+    expect(teamsUrl).toContain('message=');
+    expect(teamsUrl).toContain('users=zeynep%40example.com');
+
+    await userEvent.click(screen.getByRole('button', { name: 'Kapat' }));
+    expect(screen.queryByRole('dialog', { name: 'Çıktıyı paylaş' })).not.toBeInTheDocument();
+  });
+
   it('offers source transcript export while meeting intelligence is still waiting', async () => {
     const adapter: ExportAdapter = {
       copyText: vi.fn().mockResolvedValue(undefined),
