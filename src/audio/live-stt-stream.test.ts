@@ -904,6 +904,7 @@ describe('connectLiveSttStream', () => {
 
   it('keeps retrying long enough for a restarted local STT tunnel', () => {
     vi.useFakeTimers();
+    vi.setSystemTime(new Date(0));
     vi.stubGlobal('WebSocket', FakeWebSocket);
     const errors: string[] = [];
     const statuses: LiveSttStreamStatusEvent[] = [];
@@ -928,6 +929,44 @@ describe('connectLiveSttStream', () => {
         reason: 'bağlantı kapandı',
       }),
     );
+
+    stream.close();
+  });
+
+  it('reconnects when active audio stalls without usable transcript events', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(0));
+    vi.stubGlobal('WebSocket', FakeWebSocket);
+    const statuses: LiveSttStreamStatusEvent[] = [];
+
+    const stream = connectLiveSttStream('ws://127.0.0.1:18220/ws/stream', {
+      onStatus: (event) => statuses.push(event),
+    });
+    const first = FakeWebSocket.instances[0];
+    first?.open();
+    first?.message({ type: 'ready' });
+
+    stream.send(new Float32Array([0.1, 0.1]));
+    expect(first?.sent).toHaveLength(1);
+
+    vi.advanceTimersByTime(12_000);
+    stream.send(new Float32Array([0.2, 0.2]));
+
+    expect(first?.readyState).toBe(FakeWebSocket.CLOSED);
+    expect(statuses).toContainEqual(
+      expect.objectContaining({
+        status: 'reconnecting',
+        attempt: 1,
+        maxAttempts: 60,
+        reason: 'transcript akışı gecikti',
+      }),
+    );
+
+    vi.advanceTimersByTime(250);
+    const second = FakeWebSocket.instances[1];
+    second?.open();
+    second?.message({ type: 'ready' });
+    expect(second?.sent).toHaveLength(1);
 
     stream.close();
   });

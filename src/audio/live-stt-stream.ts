@@ -78,6 +78,8 @@ const MAX_PROGRESSIVE_PARTIAL_STEPS = 12;
 const MAX_RECONNECT_ATTEMPTS = 60;
 const RECONNECT_BASE_DELAY_MS = 250;
 const RECONNECT_MAX_DELAY_MS = 2_000;
+const ACTIVE_AUDIO_RMS = 0.006;
+const ACTIVE_AUDIO_TRANSCRIPT_STALL_MS = 12_000;
 const MIN_FALLBACK_DRAFT_WORDS = 4;
 
 function parseEvent(data: unknown): LiveSttServerEvent | null {
@@ -456,6 +458,17 @@ function bufferedSampleCount(frames: Float32Array[]): number {
   return frames.reduce((total, frame) => total + frame.length, 0);
 }
 
+function rms(samples: Float32Array): number {
+  if (samples.length === 0) {
+    return 0;
+  }
+  let sum = 0;
+  for (const sample of samples) {
+    sum += sample * sample;
+  }
+  return Math.sqrt(sum / samples.length);
+}
+
 function pushBounded(frames: Float32Array[], samples: Float32Array): void {
   frames.push(samples.slice());
   while (bufferedSampleCount(frames) > MAX_BUFFERED_SAMPLES && frames.length > 0) {
@@ -473,6 +486,8 @@ export function connectLiveSttStream(
   let closedByClient = false;
   let reconnectAttempts = 0;
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  let closeReconnectReason: string | null = null;
+  let lastUsableTranscriptAtMs: number | null = null;
   const segmentStartedAt = new Map<number, number>();
   const segmentDraftText = new Map<number, string>();
   const segmentKnownText = new Map<number, string>();
@@ -562,6 +577,7 @@ export function connectLiveSttStream(
       if (event.type === 'ready') {
         ready = true;
         reconnectAttempts = 0;
+        lastUsableTranscriptAtMs = Date.now();
         emitStatus({ status: 'ready' });
         callbacks.onReady?.();
         flushPending();
@@ -581,6 +597,7 @@ export function connectLiveSttStream(
         ensureOpenSegment(event.seq);
         const startedAtMs = segmentStartedAt.get(event.seq) ?? Date.now();
         segmentStartedAt.set(event.seq, startedAtMs);
+        lastUsableTranscriptAtMs = Date.now();
         emitProgressivePartial(event, text, startedAtMs);
         return;
       }
@@ -617,6 +634,7 @@ export function connectLiveSttStream(
         segmentKnownText.delete(event.seq);
         finalizedSequences.add(event.seq);
         segmentFinalText.set(event.seq, text);
+        lastUsableTranscriptAtMs = Date.now();
         callbacks.onTranscriptEvent?.({
           id: segmentId(event.seq),
           startedAtMs,
@@ -638,8 +656,22 @@ export function connectLiveSttStream(
     });
 
     socket.addEventListener('close', () => {
-      scheduleReconnect('bağlantı kapandı');
+      const reason = closeReconnectReason ?? 'bağlantı kapandı';
+      closeReconnectReason = null;
+      scheduleReconnect(reason);
     });
+  };
+
+  const shouldRestartForTranscriptStall = (samples: Float32Array): boolean => {
+    const socket = ws;
+    if (!ready || !socket || socket.readyState !== WebSocket.OPEN) {
+      return false;
+    }
+    if (rms(samples) < ACTIVE_AUDIO_RMS) {
+      return false;
+    }
+    const lastUsableAt = lastUsableTranscriptAtMs ?? Date.now();
+    return Date.now() - lastUsableAt >= ACTIVE_AUDIO_TRANSCRIPT_STALL_MS;
   };
 
   const segmentId = (seq: number): string => {
@@ -730,6 +762,12 @@ export function connectLiveSttStream(
       }
       const socket = ws;
       if (ready && socket?.readyState === WebSocket.OPEN) {
+        if (shouldRestartForTranscriptStall(samples)) {
+          pushBounded(pendingFrames, samples);
+          closeReconnectReason = 'transcript akışı gecikti';
+          socket.close();
+          return;
+        }
         socket.send(frameBuffer(samples));
         return;
       }
