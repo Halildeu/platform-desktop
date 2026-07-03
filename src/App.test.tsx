@@ -681,6 +681,109 @@ describe('App recorder readiness', () => {
     expect(screen.getAllByRole('article')).toHaveLength(2);
   });
 
+  it('direct stream seyrek kaldiginda gateway final fallback satirini kabul eder', async () => {
+    installElectronApiMock({
+      meetingId: '22222222-2222-4222-8222-222222222222',
+      deviceId: 'desktop-1',
+      ready: true,
+      reason: null,
+      liveSttStreamUrl: 'ws://127.0.0.1:18220/ws/stream',
+      liveSttStreamReason: null,
+    });
+    vi.mocked(startRecording).mockResolvedValue({
+      sessionId: 'SES-1',
+      hasLoopback: false,
+      stop: vi.fn(),
+      onError: vi.fn(),
+    });
+
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Kaydet' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Onaylıyorum — Kaydı Başlat' }));
+
+    await screen.findByText('Kayıt başladı (yalnız mikrofon, oturum SES-1)');
+    const options = vi.mocked(startRecording).mock.calls[0]?.[2];
+
+    act(() => {
+      options?.onLiveTranscriptEvent?.({
+        id: 'stream:0',
+        startedAtMs: 1781820000000,
+        text: 'Merhaba sesim geliyor mu',
+        status: 'draft',
+      });
+    });
+    expect(await screen.findByText('Merhaba sesim geliyor mu')).toBeInTheDocument();
+
+    act(() => {
+      transcriptEventHandler?.({
+        eventId: '1781820001000-draft',
+        sessionId: 'SES-1',
+        meetingId: '22222222-2222-4222-8222-222222222222',
+        chunkSeq: 4,
+        chunkStartedAtMs: 1781820001000,
+        text: 'gateway taslak atlanmalı',
+        textLength: 23,
+        status: 'DRAFT',
+      });
+    });
+    expect(screen.queryByText('gateway taslak atlanmalı')).not.toBeInTheDocument();
+
+    act(() => {
+      transcriptEventHandler?.({
+        eventId: '1781820002000-final',
+        sessionId: 'SES-1',
+        meetingId: '22222222-2222-4222-8222-222222222222',
+        chunkSeq: 8,
+        chunkStartedAtMs: 1781820002000,
+        text: 'Merhaba sesim geliyor mu bir sürü eksik var yine. Veriler gelmiyor sanki.',
+        textLength: 74,
+        status: 'FINAL',
+      });
+    });
+
+    expect(
+      await screen.findByText(
+        'Merhaba sesim geliyor mu bir sürü eksik var yine. Veriler gelmiyor sanki.',
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByText('Final')).toBeInTheDocument();
+    expect(screen.getAllByRole('article')).toHaveLength(2);
+
+    act(() => {
+      transcriptEventHandler?.({
+        eventId: '1781820003000-final-replay',
+        sessionId: 'SES-1',
+        meetingId: '22222222-2222-4222-8222-222222222222',
+        chunkSeq: 12,
+        chunkStartedAtMs: 1781820003000,
+        text: 'Merhaba sesim geliyor mu bir sürü eksik var yine. Veriler gelmiyor sanki.',
+        textLength: 74,
+        status: 'FINAL',
+      });
+    });
+
+    expect(screen.getAllByRole('article')).toHaveLength(2);
+
+    act(() => {
+      transcriptEventHandler?.({
+        eventId: '1781820004000-revised',
+        sessionId: 'SES-1',
+        meetingId: '22222222-2222-4222-8222-222222222222',
+        chunkSeq: 16,
+        chunkStartedAtMs: 1781820004000,
+        text: 'Revize gateway final satırı da fallback olarak kabul edilir.',
+        textLength: 61,
+        status: 'REVISED',
+      });
+    });
+
+    expect(
+      await screen.findByText('Revize gateway final satırı da fallback olarak kabul edilir.'),
+    ).toBeInTheDocument();
+    expect(screen.getAllByRole('article')).toHaveLength(3);
+  });
+
   it('direct live STT ilk partial eventini recorder session hazirlanana kadar tamponlar', async () => {
     installElectronApiMock({
       meetingId: '22222222-2222-4222-8222-222222222222',

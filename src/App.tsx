@@ -238,6 +238,66 @@ function transcriptSegmentIdFromGateway(event: {
   return event.eventId;
 }
 
+function normalizedTranscriptWords(text: string): string[] {
+  return text
+    .trim()
+    .split(/\s+/)
+    .map((word) => word.toLocaleLowerCase('tr-TR').replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, ''))
+    .filter(Boolean);
+}
+
+function containsContiguousWindow(haystack: string[], needle: string[]): boolean {
+  if (needle.length === 0 || needle.length > haystack.length) {
+    return false;
+  }
+
+  for (let index = 0; index <= haystack.length - needle.length; index += 1) {
+    if (needle.every((word, offset) => haystack[index + offset] === word)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function segmentAlreadyCoversGatewayText(segmentText: string, gatewayText: string): boolean {
+  const segmentWords = normalizedTranscriptWords(segmentText);
+  const gatewayWords = normalizedTranscriptWords(gatewayText);
+  if (segmentWords.length === 0 || gatewayWords.length === 0) {
+    return false;
+  }
+
+  return (
+    segmentWords.join('\u0000') === gatewayWords.join('\u0000') ||
+    containsContiguousWindow(segmentWords, gatewayWords)
+  );
+}
+
+function isGatewayFallbackStatus(status: string): boolean {
+  const normalized = status.toUpperCase();
+  return normalized === 'FINAL' || normalized === 'REVISED';
+}
+
+function shouldApplyGatewayTranscriptEvent(
+  current: ReturnType<typeof initialTranscriptSession>,
+  event: { text: string; status: string; chunkStartedAtMs: number },
+  directStreamHasEvents: boolean,
+): boolean {
+  const text = event.text.trim();
+  if (!text || !Number.isFinite(event.chunkStartedAtMs)) {
+    return false;
+  }
+
+  if (!directStreamHasEvents) {
+    return true;
+  }
+
+  if (!isGatewayFallbackStatus(event.status)) {
+    return false;
+  }
+
+  return !current.segments.some((segment) => segmentAlreadyCoversGatewayText(segment.text, text));
+}
+
 function applyLiveTranscriptEvent(
   current: ReturnType<typeof initialTranscriptSession>,
   event: LiveSttTranscriptEvent,
@@ -401,10 +461,7 @@ function App() {
         if (!current.sessionId || event.sessionId !== current.sessionId) {
           return current;
         }
-        if (liveStreamHasEventsRef.current) {
-          return current;
-        }
-        if (!event.text.trim() || !Number.isFinite(event.chunkStartedAtMs)) {
+        if (!shouldApplyGatewayTranscriptEvent(current, event, liveStreamHasEventsRef.current)) {
           return current;
         }
         return upsertTranscriptSegment(current, {
