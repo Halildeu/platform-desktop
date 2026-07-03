@@ -437,6 +437,30 @@ function mergeFinalTranscript(previousText: string, finalText: string): string {
   return final;
 }
 
+function dropLeadingTailOverlap(previousText: string, nextText: string): string {
+  const previous = previousText.trim();
+  const next = nextText.trim();
+  if (!previous || !next) {
+    return next;
+  }
+
+  const previousRawWords = splitWords(previous);
+  const nextRawWords = splitWords(next);
+  const previousWords = normalizedWords(previousRawWords);
+  const nextWords = normalizedWords(nextRawWords);
+  const overlap = suffixPrefixOverlap(previousWords, nextWords);
+  if (overlap <= 0) {
+    return next;
+  }
+  if (overlap === 1 && previousWords.length > 1) {
+    return next;
+  }
+  if (overlap >= nextRawWords.length) {
+    return next;
+  }
+  return nextRawWords.slice(overlap).join(' ');
+}
+
 function progressivePartialSteps(previousText: string, nextText: string): string[] {
   if (!nextText || previousText === nextText) {
     return [];
@@ -511,6 +535,7 @@ export function connectLiveSttStream(
   const segmentFinalText = new Map<number, string>();
   const finalizedSequences = new Set<number>();
   const pendingPartialTimers = new Map<number, Array<ReturnType<typeof setTimeout>>>();
+  let lastEmittedFinalText = '';
 
   const emitError = (message: string): void => {
     callbacks.onError?.(new Error(message));
@@ -639,8 +664,12 @@ export function connectLiveSttStream(
           }
           finalText = previousText;
         }
-        const text = mergeFinalTranscript(previousText, finalText);
+        let text = mergeFinalTranscript(previousText, finalText);
         if (!text || isUnstableFinalText(text)) {
+          return;
+        }
+        text = dropLeadingTailOverlap(lastEmittedFinalText, text);
+        if (!text) {
           return;
         }
         const startedAtMs = segmentStartedAt.get(event.seq) ?? Date.now();
@@ -650,6 +679,7 @@ export function connectLiveSttStream(
         segmentKnownText.delete(event.seq);
         finalizedSequences.add(event.seq);
         segmentFinalText.set(event.seq, text);
+        lastEmittedFinalText = text;
         lastUsableTranscriptAtMs = Date.now();
         callbacks.onTranscriptEvent?.({
           id: segmentId(event.seq),

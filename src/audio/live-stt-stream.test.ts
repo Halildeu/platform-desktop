@@ -903,6 +903,74 @@ describe('connectLiveSttStream', () => {
     stream.close();
   });
 
+  it('drops leading text carried over from the previous final segment', () => {
+    vi.stubGlobal('WebSocket', FakeWebSocket);
+    const events: LiveSttTranscriptEvent[] = [];
+
+    const stream = connectLiveSttStream('ws://127.0.0.1:18220/ws/stream', {
+      onTranscriptEvent: (event) => events.push(event),
+    });
+    const ws = FakeWebSocket.instances[0];
+
+    ws?.open();
+    ws?.message({ type: 'ready' });
+    ws?.message({
+      type: 'final',
+      seq: 0,
+      text: 'Merhaba.',
+      elapsed_ms: 260,
+      rms: 0.04,
+    });
+    ws?.message({
+      type: 'final',
+      seq: 1,
+      text: 'Merhaba burada hava çok.',
+      elapsed_ms: 520,
+      rms: 0.04,
+    });
+
+    expect(events.map((event) => [event.id, event.status, event.text])).toEqual([
+      ['stream:0', 'final', 'Merhaba.'],
+      ['stream:1', 'final', 'burada hava çok.'],
+    ]);
+
+    stream.close();
+  });
+
+  it('keeps unrelated new final segments after a previous final segment', () => {
+    vi.stubGlobal('WebSocket', FakeWebSocket);
+    const events: LiveSttTranscriptEvent[] = [];
+
+    const stream = connectLiveSttStream('ws://127.0.0.1:18220/ws/stream', {
+      onTranscriptEvent: (event) => events.push(event),
+    });
+    const ws = FakeWebSocket.instances[0];
+
+    ws?.open();
+    ws?.message({ type: 'ready' });
+    ws?.message({
+      type: 'final',
+      seq: 0,
+      text: 'İlk konu tamam.',
+      elapsed_ms: 260,
+      rms: 0.04,
+    });
+    ws?.message({
+      type: 'final',
+      seq: 1,
+      text: 'İkinci konu başladı.',
+      elapsed_ms: 520,
+      rms: 0.04,
+    });
+
+    expect(events.map((event) => [event.id, event.status, event.text])).toEqual([
+      ['stream:0', 'final', 'İlk konu tamam.'],
+      ['stream:1', 'final', 'İkinci konu başladı.'],
+    ]);
+
+    stream.close();
+  });
+
   it('ignores duplicate final replays for the same finalized sequence', () => {
     vi.stubGlobal('WebSocket', FakeWebSocket);
     const events: LiveSttTranscriptEvent[] = [];
