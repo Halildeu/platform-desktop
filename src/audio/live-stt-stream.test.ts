@@ -279,6 +279,44 @@ describe('connectLiveSttStream', () => {
     stream.close();
   });
 
+  it('appends growing no-overlap rolling partials instead of erasing earlier words', () => {
+    vi.useFakeTimers();
+    vi.stubGlobal('WebSocket', FakeWebSocket);
+    const events: LiveSttTranscriptEvent[] = [];
+
+    const stream = connectLiveSttStream('ws://127.0.0.1:18220/ws/stream', {
+      onTranscriptEvent: (event) => events.push(event),
+    });
+    const ws = FakeWebSocket.instances[0];
+
+    ws?.open();
+    ws?.message({ type: 'ready' });
+    ws?.message({
+      type: 'partial',
+      seq: 0,
+      confirmed: '',
+      tentative: 'Merhaba sesim geliyor mu',
+      elapsed_ms: 180,
+      rms: 0.04,
+      source: 'medium',
+    });
+    vi.advanceTimersByTime(210);
+    ws?.message({
+      type: 'partial',
+      seq: 0,
+      confirmed: '',
+      tentative: 'bir sürü eksik var yine',
+      elapsed_ms: 210,
+      rms: 0.04,
+      source: 'medium',
+    });
+    vi.advanceTimersByTime(280);
+
+    expect(events.at(-1)?.text).toBe('Merhaba sesim geliyor mu bir sürü eksik var yine');
+
+    stream.close();
+  });
+
   it('replaces unrelated rolling partial alternatives instead of appending variants', () => {
     vi.useFakeTimers();
     vi.stubGlobal('WebSocket', FakeWebSocket);
@@ -312,6 +350,44 @@ describe('connectLiveSttStream', () => {
     });
 
     expect(events.at(-1)?.text).toBe('Kelime akışı aktif');
+
+    stream.close();
+  });
+
+  it('keeps a short stable draft when an unrelated short final correction arrives', () => {
+    vi.useFakeTimers();
+    vi.stubGlobal('WebSocket', FakeWebSocket);
+    const events: LiveSttTranscriptEvent[] = [];
+
+    const stream = connectLiveSttStream('ws://127.0.0.1:18220/ws/stream', {
+      onTranscriptEvent: (event) => events.push(event),
+    });
+    const ws = FakeWebSocket.instances[0];
+
+    ws?.open();
+    ws?.message({ type: 'ready' });
+    ws?.message({
+      type: 'partial',
+      seq: 0,
+      confirmed: '',
+      tentative: 'Merhaba',
+      elapsed_ms: 180,
+      rms: 0.04,
+      source: 'medium',
+    });
+    ws?.message({
+      type: 'final',
+      seq: 0,
+      text: 'Neroba',
+      elapsed_ms: 700,
+      rms: 0.04,
+    });
+
+    expect(events.at(-1)).toMatchObject({
+      id: 'stream:0',
+      status: 'final',
+      text: 'Merhaba',
+    });
 
     stream.close();
   });

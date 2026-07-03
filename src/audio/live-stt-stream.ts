@@ -380,6 +380,18 @@ function mergeRollingPartial(previousText: string, nextText: string): string {
     return [...previousRawWords, ...nextRawWords.slice(overlap)].join(' ');
   }
 
+  if (previousWords[0] === nextWords[0]) {
+    return next;
+  }
+
+  if (
+    nextWords.length > previousWords.length &&
+    nextWords.length >= 3 &&
+    (previousWords.length >= 2 || nextWords.length >= previousWords.length + 2)
+  ) {
+    return [...previousRawWords, ...nextRawWords].join(' ');
+  }
+
   return next;
 }
 
@@ -416,6 +428,10 @@ function mergeFinalTranscript(previousText: string, finalText: string): string {
   const overlap = suffixPrefixOverlap(previousWords, finalWords);
   if (overlap >= 2) {
     return [...previousRawWords, ...finalRawWords.slice(overlap)].join(' ');
+  }
+
+  if (finalWords.length <= previousWords.length + 1 && finalWords.length <= 3) {
+    return previous;
   }
 
   return final;
