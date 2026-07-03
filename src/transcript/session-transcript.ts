@@ -13,6 +13,7 @@ export interface TranscriptSegment {
   id: string;
   speakerLabel: string;
   startedAtMs: number;
+  endedAtMs?: number | null;
   status: TranscriptSegmentStatus;
   text: string;
   revisedFromId?: string;

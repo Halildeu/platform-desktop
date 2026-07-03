@@ -16,7 +16,7 @@ Repo eşleştirmesi: [README.md](./README.md) "Repo Konumu" tablosu.
 
 Bu repo **standalone değil** — platform servislerinin doğal uzantısı:
 
-- **Auth**: Keycloak SSO (OAuth2 PKCE flow + custom URI scheme callback `workcube://auth`)
+- **Auth**: Keycloak SSO (OAuth2 PKCE flow + marka bağımsız custom URI scheme callback, örn. `platform-meeting://auth`)
 - **Routing**: `audio-gateway-service` üzerinden tüm STT akışı
 - **WebSocket**: persistent connection — main process
 - **State**: Redux Toolkit (platform-web mfe-meeting pattern reuse)

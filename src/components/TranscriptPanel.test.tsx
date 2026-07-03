@@ -233,6 +233,102 @@ describe('TranscriptPanel', () => {
     expect(articles[1]).not.toHaveClass('segment-live');
   });
 
+  it('renders speaker timeline distribution and lets reviewed labels drive the transcript view', async () => {
+    const recording = startTranscriptSession(initialTranscriptSession(), {
+      sessionId: 'SES-1',
+      meetingId: '22222222-2222-4222-8222-222222222222',
+      deviceId: 'desktop-1',
+      hasLoopback: false,
+      startedAtMs: 1781820000000,
+    });
+    const withFirstSpeaker = upsertTranscriptSegment(recording, {
+      id: 'seg-1',
+      speakerLabel: 'Konuşmacı 1',
+      startedAtMs: 1781820000000,
+      endedAtMs: 1781820004000,
+      status: 'final',
+      text: 'İlk gündem maddesi konuşuldu',
+      source: 'gateway-events',
+    });
+    const withSecondSpeaker = upsertTranscriptSegment(withFirstSpeaker, {
+      id: 'seg-2',
+      speakerLabel: 'Konuşmacı 2',
+      startedAtMs: 1781820004000,
+      endedAtMs: 1781820009000,
+      status: 'final',
+      text: 'İkinci konuşmacı aksiyonları anlattı',
+      source: 'gateway-events',
+    });
+    const withSpeakerReturn = upsertTranscriptSegment(withSecondSpeaker, {
+      id: 'seg-3',
+      speakerLabel: 'Konuşmacı 1',
+      startedAtMs: 1781820009000,
+      endedAtMs: 1781820011000,
+      status: 'final',
+      text: 'Kapanış notu alındı',
+      source: 'gateway-events',
+    });
+
+    render(<TranscriptPanel session={withSpeakerReturn} />);
+
+    expect(screen.getByRole('heading', { name: 'Konuşmacı Görünümü' })).toBeInTheDocument();
+    expect(screen.getByLabelText('Konuşma dağılımı pasta grafiği')).toBeInTheDocument();
+    expect(screen.getByLabelText('Konuşmacı zaman çizgisi')).toBeInTheDocument();
+    expect(screen.getByText('55% · 2 tur · 6 sn')).toBeInTheDocument();
+    expect(screen.getByText('45% · 1 tur · 5 sn')).toBeInTheDocument();
+    expect(screen.getByText('Kesin overlap sinyali yok.')).toBeInTheDocument();
+
+    await userEvent.clear(screen.getByLabelText('Konuşmacı adı: Konuşmacı 1'));
+    await userEvent.type(screen.getByLabelText('Konuşmacı adı: Konuşmacı 1'), 'Halil Bey');
+
+    expect(screen.getByRole('button', { name: 'Etiketleri sıfırla' })).toBeInTheDocument();
+    expect(screen.getAllByText('Halil Bey').length).toBeGreaterThan(0);
+    const articles = screen.getAllByRole('article');
+    expect(articles[0]).toHaveTextContent('Halil Bey');
+    expect(articles[0]).toHaveTextContent('Kapanış notu alındı');
+
+    await userEvent.click(screen.getByRole('button', { name: 'Etiketleri sıfırla' }));
+    expect(screen.queryByRole('button', { name: 'Etiketleri sıfırla' })).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Konuşmacı adı: Konuşmacı 1')).toHaveValue('Konuşmacı 1');
+  });
+
+  it('surfaces interruption signals only when segment timing overlaps', () => {
+    const recording = startTranscriptSession(initialTranscriptSession(), {
+      sessionId: 'SES-1',
+      meetingId: '22222222-2222-4222-8222-222222222222',
+      deviceId: 'desktop-1',
+      hasLoopback: false,
+      startedAtMs: 1781820000000,
+    });
+    const withFirstSpeaker = upsertTranscriptSegment(recording, {
+      id: 'seg-1',
+      speakerLabel: 'Konuşmacı 1',
+      startedAtMs: 1781820000000,
+      endedAtMs: 1781820005000,
+      status: 'final',
+      text: 'Konuşmacı uzun bir açıklama yapıyor',
+      source: 'gateway-events',
+    });
+    const withOverlap = upsertTranscriptSegment(withFirstSpeaker, {
+      id: 'seg-2',
+      speakerLabel: 'Konuşmacı 2',
+      startedAtMs: 1781820004500,
+      endedAtMs: 1781820007000,
+      status: 'final',
+      text: 'İkinci konuşmacı araya giriyor',
+      source: 'gateway-events',
+    });
+
+    render(<TranscriptPanel session={withOverlap} />);
+
+    expect(screen.getByText('Söz kesme sinyali')).toBeInTheDocument();
+    expect(
+      screen.getByText((content) =>
+        content.includes('Konuşmacı 2, Konuşmacı 1 üzerine <1 sn bindi'),
+      ),
+    ).toBeInTheDocument();
+  });
+
   it('copies a non-content diagnostic snapshot for live transcript triage', async () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
     Object.defineProperty(navigator, 'clipboard', {

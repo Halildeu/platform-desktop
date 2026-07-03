@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactElement } from 'react';
+import { useEffect, useRef, useState, type CSSProperties, type ReactElement } from 'react';
 
 import {
   lifecycleLabel,
@@ -11,6 +11,7 @@ import type { LiveSttStreamStatusEvent } from '../audio/live-stt-stream';
 import type { AudioCapturePreflightState } from '../audio/capture';
 
 const TRANSCRIPT_LAG_WARN_MS = 5_000;
+const SPEAKER_COLORS = ['#0f766e', '#2563eb', '#b45309', '#7c3aed', '#be123c', '#0f766e'];
 
 export interface TranscriptPanelProps {
   session: TranscriptSessionState;
@@ -288,6 +289,208 @@ function segmentMetricLabel(segment: TranscriptSessionState['segments'][number])
   return null;
 }
 
+function wordCount(text: string): number {
+  return text.trim().split(/\s+/).filter(Boolean).length;
+}
+
+function speakerColor(index: number): string {
+  return SPEAKER_COLORS[index % SPEAKER_COLORS.length];
+}
+
+function formatSpeakerDuration(ms: number): string {
+  if (ms <= 0) {
+    return '-';
+  }
+  if (ms < 1000) {
+    return '<1 sn';
+  }
+  const seconds = Math.round(ms / 1000);
+  const minutes = Math.floor(seconds / 60);
+  const rest = seconds % 60;
+  return minutes > 0 ? `${minutes} dk ${rest} sn` : `${seconds} sn`;
+}
+
+function speakerLabelFor(sourceLabel: string, labels: Record<string, string>): string {
+  const draft = labels[sourceLabel]?.trim();
+  return draft || sourceLabel;
+}
+
+function speakerInputValue(sourceLabel: string, labels: Record<string, string>): string {
+  return Object.prototype.hasOwnProperty.call(labels, sourceLabel)
+    ? (labels[sourceLabel] ?? '')
+    : sourceLabel;
+}
+
+interface SpeakerTimelineEntry {
+  id: string;
+  sourceLabel: string;
+  label: string;
+  color: string;
+  startedAtMs: number;
+  endedAtMs: number | null;
+  durationMs: number;
+  turnWords: number;
+  leftPct: number;
+  widthPct: number;
+}
+
+interface SpeakerSummary {
+  sourceLabel: string;
+  label: string;
+  color: string;
+  turns: number;
+  durationMs: number;
+  words: number;
+  sharePct: number;
+}
+
+interface InterruptionSignal {
+  id: string;
+  atMs: number;
+  label: string;
+  previousLabel: string;
+  overlapMs: number;
+}
+
+function explicitSegmentEnd(segment: TranscriptSessionState['segments'][number]): number | null {
+  if (
+    typeof segment.endedAtMs === 'number' &&
+    Number.isFinite(segment.endedAtMs) &&
+    segment.endedAtMs > segment.startedAtMs
+  ) {
+    return segment.endedAtMs;
+  }
+  return null;
+}
+
+function buildSpeakerTimeline(
+  session: TranscriptSessionState,
+  speakerLabels: Record<string, string>,
+): SpeakerTimelineEntry[] {
+  if (session.segments.length === 0) {
+    return [];
+  }
+
+  const segments = [...session.segments].sort(
+    (a, b) => a.startedAtMs - b.startedAtMs || a.id.localeCompare(b.id),
+  );
+  const labelIndexes = new Map<string, number>();
+  const firstStart = segments[0].startedAtMs;
+
+  const entries = segments.map((segment, index) => {
+    if (!labelIndexes.has(segment.speakerLabel)) {
+      labelIndexes.set(segment.speakerLabel, labelIndexes.size);
+    }
+    const sourceIndex = labelIndexes.get(segment.speakerLabel) ?? 0;
+    const explicitEnd = explicitSegmentEnd(segment);
+    const nextStart = segments[index + 1]?.startedAtMs;
+    const fallbackEnd =
+      typeof nextStart === 'number' && nextStart > segment.startedAtMs
+        ? nextStart
+        : typeof session.finishedAtMs === 'number' && session.finishedAtMs > segment.startedAtMs
+          ? session.finishedAtMs
+          : null;
+    const endedAtMs = explicitEnd ?? fallbackEnd;
+    const durationMs = endedAtMs === null ? 0 : Math.max(0, endedAtMs - segment.startedAtMs);
+
+    return {
+      id: segment.id,
+      sourceLabel: segment.speakerLabel,
+      label: speakerLabelFor(segment.speakerLabel, speakerLabels),
+      color: speakerColor(sourceIndex),
+      startedAtMs: segment.startedAtMs,
+      endedAtMs,
+      durationMs,
+      turnWords: wordCount(segment.text),
+      leftPct: 0,
+      widthPct: 0,
+    };
+  });
+
+  const lastEnd = entries.reduce(
+    (latest, entry) => Math.max(latest, entry.endedAtMs ?? entry.startedAtMs),
+    firstStart,
+  );
+  const spanMs = Math.max(1, lastEnd - firstStart);
+
+  return entries.map((entry) => ({
+    ...entry,
+    leftPct: ((entry.startedAtMs - firstStart) / spanMs) * 100,
+    widthPct: Math.max(2, (Math.max(entry.durationMs, 1) / spanMs) * 100),
+  }));
+}
+
+function buildSpeakerSummaries(entries: SpeakerTimelineEntry[]): SpeakerSummary[] {
+  const bySource = new Map<string, SpeakerSummary>();
+  for (const entry of entries) {
+    const existing = bySource.get(entry.sourceLabel);
+    if (existing) {
+      existing.turns += 1;
+      existing.durationMs += entry.durationMs;
+      existing.words += entry.turnWords;
+    } else {
+      bySource.set(entry.sourceLabel, {
+        sourceLabel: entry.sourceLabel,
+        label: entry.label,
+        color: entry.color,
+        turns: 1,
+        durationMs: entry.durationMs,
+        words: entry.turnWords,
+        sharePct: 0,
+      });
+    }
+  }
+
+  const summaries = [...bySource.values()];
+  const totalDuration = summaries.reduce((total, item) => total + item.durationMs, 0);
+  const totalTurns = summaries.reduce((total, item) => total + item.turns, 0);
+  return summaries.map((item) => ({
+    ...item,
+    sharePct:
+      totalDuration > 0
+        ? (item.durationMs / totalDuration) * 100
+        : totalTurns > 0
+          ? (item.turns / totalTurns) * 100
+          : 0,
+  }));
+}
+
+function speakerDistributionGradient(summaries: SpeakerSummary[]): string {
+  if (summaries.length === 0) {
+    return '#e2e8f0';
+  }
+
+  let cursor = 0;
+  const slices = summaries.map((speaker) => {
+    const start = cursor;
+    cursor += speaker.sharePct;
+    return `${speaker.color} ${start.toFixed(2)}% ${cursor.toFixed(2)}%`;
+  });
+  return `conic-gradient(${slices.join(', ')})`;
+}
+
+function buildInterruptionSignals(entries: SpeakerTimelineEntry[]): InterruptionSignal[] {
+  const signals: InterruptionSignal[] = [];
+  for (let index = 1; index < entries.length; index += 1) {
+    const previous = entries[index - 1];
+    const current = entries[index];
+    if (previous.sourceLabel === current.sourceLabel || previous.endedAtMs === null) {
+      continue;
+    }
+    const overlapMs = previous.endedAtMs - current.startedAtMs;
+    if (overlapMs > 0) {
+      signals.push({
+        id: `${previous.id}-${current.id}`,
+        atMs: current.startedAtMs,
+        label: current.label,
+        previousLabel: previous.label,
+        overlapMs,
+      });
+    }
+  }
+  return signals;
+}
+
 function isLiveDirectDraft(segment: TranscriptSessionState['segments'][number]): boolean {
   return segment.source === 'direct-stream' && segment.status === 'draft';
 }
@@ -384,7 +587,14 @@ export function TranscriptPanel({ session, stream }: TranscriptPanelProps): Reac
   const hasSegments = session.segments.length > 0;
   const listRef = useRef<HTMLDivElement | null>(null);
   const [diagnosticMessage, setDiagnosticMessage] = useState('');
+  const [speakerLabels, setSpeakerLabels] = useState<Record<string, string>>({});
   const visibleSegments = [...session.segments].reverse();
+  const speakerTimeline = buildSpeakerTimeline(session, speakerLabels);
+  const speakerSummaries = buildSpeakerSummaries(speakerTimeline);
+  const interruptionSignals = buildInterruptionSignals(speakerTimeline);
+  const hasSpeakerOverrides = Object.entries(speakerLabels).some(
+    ([sourceLabel, label]) => label.trim() && label.trim() !== sourceLabel,
+  );
   const lastTranscriptAtMs = latestTranscriptReceivedAtMs(session);
   const recordingActive = session.lifecycle === 'recording';
   const lagClass = transcriptLagClass(stream, lastTranscriptAtMs, recordingActive);
@@ -410,6 +620,10 @@ export function TranscriptPanel({ session, stream }: TranscriptPanelProps): Reac
       listRef.current.scrollTop = 0;
     }
   }, [session.segments]);
+
+  useEffect(() => {
+    setSpeakerLabels({});
+  }, [session.meetingId, session.sessionId]);
 
   return (
     <section className="transcript-panel" aria-labelledby="transcript-title">
@@ -511,6 +725,98 @@ export function TranscriptPanel({ session, stream }: TranscriptPanelProps): Reac
       {diagnosticMessage ? <p className="export-message">{diagnosticMessage}</p> : null}
       {session.error ? <p className="inline-error">{session.error}</p> : null}
 
+      {hasSegments ? (
+        <section className="speaker-panel" aria-labelledby="speaker-panel-title">
+          <div className="speaker-panel-header">
+            <div>
+              <h3 id="speaker-panel-title">Konuşmacı Görünümü</h3>
+              <p>Kaynak: transcript speaker etiketi</p>
+            </div>
+            {hasSpeakerOverrides ? (
+              <button
+                className="secondary-action compact-action"
+                type="button"
+                onClick={() => setSpeakerLabels({})}
+              >
+                Etiketleri sıfırla
+              </button>
+            ) : null}
+          </div>
+
+          <div className="speaker-overview">
+            <div
+              className="speaker-distribution-chart"
+              aria-label="Konuşma dağılımı pasta grafiği"
+              style={{ background: speakerDistributionGradient(speakerSummaries) }}
+            />
+            <div className="speaker-stat-list">
+              {speakerSummaries.map((speaker) => (
+                <label className="speaker-stat" key={speaker.sourceLabel}>
+                  <span
+                    className="speaker-color"
+                    aria-hidden="true"
+                    style={{ backgroundColor: speaker.color }}
+                  />
+                  <span className="speaker-stat-body">
+                    <span className="speaker-stat-meta">
+                      {Math.round(speaker.sharePct)}% · {speaker.turns} tur ·{' '}
+                      {formatSpeakerDuration(speaker.durationMs)}
+                    </span>
+                    <input
+                      aria-label={`Konuşmacı adı: ${speaker.sourceLabel}`}
+                      value={speakerInputValue(speaker.sourceLabel, speakerLabels)}
+                      onChange={(event) =>
+                        setSpeakerLabels((current) => ({
+                          ...current,
+                          [speaker.sourceLabel]: event.target.value,
+                        }))
+                      }
+                    />
+                  </span>
+                </label>
+              ))}
+            </div>
+          </div>
+
+          <div className="speaker-timeline" role="img" aria-label="Konuşmacı zaman çizgisi">
+            {speakerTimeline.map((entry) => (
+              <div
+                className="speaker-timeline-block"
+                key={entry.id}
+                style={
+                  {
+                    '--speaker-color': entry.color,
+                    left: `${entry.leftPct}%`,
+                    width: `${Math.min(entry.widthPct, 100 - entry.leftPct)}%`,
+                  } as CSSProperties
+                }
+                title={`${entry.label} · ${formatClock(entry.startedAtMs)} · ${formatSpeakerDuration(
+                  entry.durationMs,
+                )}`}
+              >
+                <span>{entry.label}</span>
+              </div>
+            ))}
+          </div>
+
+          <div className="speaker-interruptions" aria-live="polite">
+            <strong>Söz kesme sinyali</strong>
+            {interruptionSignals.length > 0 ? (
+              <ul>
+                {interruptionSignals.map((signal) => (
+                  <li key={signal.id}>
+                    {formatClock(signal.atMs)} · {signal.label}, {signal.previousLabel} üzerine{' '}
+                    {formatSpeakerDuration(signal.overlapMs)} bindi
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <span>Kesin overlap sinyali yok.</span>
+            )}
+          </div>
+        </section>
+      ) : null}
+
       <div className="transcript-list" aria-live="polite" ref={listRef}>
         {hasSegments ? (
           visibleSegments.map((segment) => {
@@ -525,7 +831,7 @@ export function TranscriptPanel({ session, stream }: TranscriptPanelProps): Reac
                 key={segment.id}
               >
                 <div className="segment-meta">
-                  <span>{segment.speakerLabel}</span>
+                  <span>{speakerLabelFor(segment.speakerLabel, speakerLabels)}</span>
                   <time dateTime={new Date(segment.startedAtMs).toISOString()}>
                     {formatClock(segment.startedAtMs)}
                   </time>
