@@ -237,6 +237,29 @@ function isLowInformationRepetition(text: string): boolean {
   );
 }
 
+function isShortRepeatedDecodeChain(text: string): boolean {
+  const families = normalizedFamilies(splitWords(text));
+  if (families.length < 6 || families.length >= 8) {
+    return false;
+  }
+
+  if (new Set(families).size / families.length > 0.75) {
+    return false;
+  }
+
+  const bigramCounts = new Map<string, number>();
+  for (let index = 0; index < families.length - 1; index += 1) {
+    const key = families.slice(index, index + 2).join('\u0000');
+    const nextCount = (bigramCounts.get(key) ?? 0) + 1;
+    if (nextCount >= 2) {
+      return true;
+    }
+    bigramCounts.set(key, nextCount);
+  }
+
+  return false;
+}
+
 function isRepeatedDecodeChain(text: string): boolean {
   const words = normalizedWords(splitWords(text));
   if (words.length < 8) {
@@ -317,6 +340,7 @@ function isRepeatedAlternativeChain(text: string): boolean {
 function isUnstableFinalText(text: string): boolean {
   return (
     isLowInformationRepetition(text) ||
+    isShortRepeatedDecodeChain(text) ||
     isRepeatedDecodeChain(text) ||
     isRepeatedAlternativeChain(text)
   );
