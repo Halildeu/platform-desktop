@@ -1,4 +1,4 @@
-import { useState, type ReactElement } from 'react';
+import { useEffect, useState, type ReactElement } from 'react';
 
 import { CONSENT_LOCALE, CONSENT_TEXT_HASH, CONSENT_VERSION } from './ConsentDialog';
 import {
@@ -169,6 +169,9 @@ export function SummaryPanel({
     result: MeetingIntelligenceResult;
   } | null>(null);
   const [isSubmittingMeetingAi, setIsSubmittingMeetingAi] = useState(false);
+  const [summaryEditMode, setSummaryEditMode] = useState(false);
+  const [summaryDraft, setSummaryDraft] = useState('');
+  const [summaryOverride, setSummaryOverride] = useState<string | null>(null);
   const transcriptSourceSegments = transcriptSegments(transcript);
   const hasTranscriptSource = transcriptSourceSegments.length > 0;
   const transcriptReadiness = transcript
@@ -192,11 +195,35 @@ export function SummaryPanel({
       )
     : intelligence;
   const result = visibleIntelligence.status === 'ready' ? visibleIntelligence.result : null;
+  const resultKey = result
+    ? [
+        visibleIntelligence.meetingId ?? '',
+        visibleIntelligence.sessionId ?? '',
+        result.generatedAtMs,
+        result.providerLabel,
+      ].join('|')
+    : '';
+  const effectiveSummaryMarkdown = result ? (summaryOverride ?? result.summaryMarkdown) : '';
+  const displayResult = result
+    ? {
+        ...result,
+        summaryMarkdown: effectiveSummaryMarkdown,
+      }
+    : null;
+  const exportIntelligence = displayResult
+    ? setMeetingIntelligenceResult(visibleIntelligence, displayResult)
+    : visibleIntelligence;
+
+  useEffect(() => {
+    setSummaryEditMode(false);
+    setSummaryOverride(null);
+    setSummaryDraft(result?.summaryMarkdown ?? '');
+  }, [resultKey, result?.summaryMarkdown]);
 
   const runExport = async (kind: 'copy' | 'markdown' | 'csv' | 'print'): Promise<void> => {
     setMessage(null);
     try {
-      const bundle = buildIntelligenceExport(visibleIntelligence);
+      const bundle = buildIntelligenceExport(exportIntelligence);
       if (kind === 'copy') {
         await exportAdapter.copyText(bundle.markdown);
         setMessage('Markdown panoya kopyalandı.');
@@ -287,6 +314,9 @@ export function SummaryPanel({
         sessionId: bundle.package.session_id,
         result: submittedResult,
       });
+      setSummaryEditMode(false);
+      setSummaryOverride(null);
+      setSummaryDraft(submittedResult.summaryMarkdown);
       onMeetingAiResult?.(submittedResult);
       setMessage('Meeting AI sonucu alındı.');
     } catch (error) {
@@ -296,6 +326,38 @@ export function SummaryPanel({
     } finally {
       setIsSubmittingMeetingAi(false);
     }
+  };
+
+  const startSummaryEdit = (): void => {
+    setMessage(null);
+    setSummaryDraft(effectiveSummaryMarkdown);
+    setSummaryEditMode(true);
+  };
+
+  const saveSummaryEdit = (): void => {
+    const nextSummary = summaryDraft.trim();
+    if (!nextSummary) {
+      setMessage('Özet boş bırakılamaz.');
+      return;
+    }
+    setSummaryOverride(nextSummary);
+    setSummaryDraft(nextSummary);
+    setSummaryEditMode(false);
+    setMessage('Özet düzenlendi.');
+  };
+
+  const cancelSummaryEdit = (): void => {
+    setSummaryDraft(effectiveSummaryMarkdown);
+    setSummaryEditMode(false);
+    setMessage(null);
+  };
+
+  const resetSummaryEdit = (): void => {
+    const originalSummary = result?.summaryMarkdown ?? '';
+    setSummaryOverride(null);
+    setSummaryDraft(originalSummary);
+    setSummaryEditMode(false);
+    setMessage('Özet orijinal haline döndü.');
   };
 
   return (
@@ -353,8 +415,55 @@ export function SummaryPanel({
           {message ? <p className="export-message">{message}</p> : null}
           <div className="summary-content">
             <article className="summary-section">
-              <h3>Özet</h3>
-              <p>{result.summaryMarkdown}</p>
+              <div className="summary-section-heading">
+                <h3>Özet</h3>
+                <div className="summary-edit-actions">
+                  {summaryOverride ? (
+                    <button
+                      className="secondary-action compact-action"
+                      type="button"
+                      onClick={resetSummaryEdit}
+                    >
+                      Orijinal
+                    </button>
+                  ) : null}
+                  <button
+                    className="secondary-action compact-action"
+                    type="button"
+                    onClick={summaryEditMode ? cancelSummaryEdit : startSummaryEdit}
+                  >
+                    {summaryEditMode ? 'Vazgeç' : 'Düzenle'}
+                  </button>
+                </div>
+              </div>
+              {summaryEditMode ? (
+                <div className="summary-editor">
+                  <textarea
+                    aria-label="Özet metni"
+                    value={summaryDraft}
+                    onChange={(event) => setSummaryDraft(event.target.value)}
+                  />
+                  <div className="summary-editor-actions">
+                    <button
+                      className="primary-action compact-action"
+                      type="button"
+                      disabled={!summaryDraft.trim()}
+                      onClick={saveSummaryEdit}
+                    >
+                      Kaydet
+                    </button>
+                    <button
+                      className="secondary-action compact-action"
+                      type="button"
+                      onClick={cancelSummaryEdit}
+                    >
+                      Vazgeç
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <p>{displayResult?.summaryMarkdown ?? ''}</p>
+              )}
             </article>
 
             <article className="summary-section">

@@ -202,6 +202,42 @@ describe('SummaryPanel', () => {
     );
   });
 
+  it('edits the generated summary and uses the edited text in exports', async () => {
+    const adapter: ExportAdapter = {
+      copyText: vi.fn().mockResolvedValue(undefined),
+      downloadText: vi.fn(),
+      print: vi.fn(),
+    };
+    render(<SummaryPanel intelligence={readyState()} exportAdapter={adapter} />);
+
+    await userEvent.click(screen.getByRole('button', { name: 'Düzenle' }));
+    const editor = screen.getByLabelText('Özet metni');
+    await userEvent.clear(editor);
+    await userEvent.type(editor, 'Düzenlenmiş toplantı özeti ürün yüzeyinden onaylandı.');
+    await userEvent.click(screen.getByRole('button', { name: 'Kaydet' }));
+
+    expect(screen.getByText('Özet düzenlendi.')).toBeInTheDocument();
+    expect(
+      screen.getByText('Düzenlenmiş toplantı özeti ürün yüzeyinden onaylandı.'),
+    ).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Kopyala' }));
+    await waitFor(() => {
+      expect(adapter.copyText).toHaveBeenCalledWith(
+        expect.stringContaining('Düzenlenmiş toplantı özeti ürün yüzeyinden onaylandı.'),
+      );
+    });
+    expect(vi.mocked(adapter.copyText).mock.calls.at(-1)?.[0]).not.toContain(
+      'Toplantıda direct-STT kanıtı ve recorder tekrar denemesi ayrıştırıldı.',
+    );
+
+    await userEvent.click(screen.getByRole('button', { name: 'Orijinal' }));
+    expect(screen.getByText('Özet orijinal haline döndü.')).toBeInTheDocument();
+    expect(
+      screen.getByText('Toplantıda direct-STT kanıtı ve recorder tekrar denemesi ayrıştırıldı.'),
+    ).toBeInTheDocument();
+  });
+
   it('offers source transcript export while meeting intelligence is still waiting', async () => {
     const adapter: ExportAdapter = {
       copyText: vi.fn().mockResolvedValue(undefined),
