@@ -84,6 +84,70 @@ const MIN_FALLBACK_DRAFT_WORDS = 4;
 const MAX_RECENT_FINAL_WORDS = 24;
 const ROLLING_CONTINUATION_MIN_PREVIOUS_WORDS = 4;
 const ROLLING_CONTINUATION_MIN_NEXT_WORDS = 2;
+const OVERLAP_SUFFIXES = [
+  'lerinizden',
+  'larınızdan',
+  'lerinizde',
+  'larınızda',
+  'lerinizin',
+  'larınızın',
+  'leriniz',
+  'larınız',
+  'lerimin',
+  'larımın',
+  'lerimi',
+  'larımı',
+  'lerim',
+  'larım',
+  'sının',
+  'sinin',
+  'sunun',
+  'sünün',
+  'ının',
+  'inin',
+  'unun',
+  'ünün',
+  'sını',
+  'sini',
+  'sunu',
+  'sünü',
+  'ımız',
+  'imiz',
+  'umuz',
+  'ümüz',
+  'imin',
+  'ımın',
+  'umun',
+  'ümün',
+  'nın',
+  'nin',
+  'nun',
+  'nün',
+  'mın',
+  'min',
+  'mun',
+  'mün',
+  'ını',
+  'ini',
+  'unu',
+  'ünü',
+  'nı',
+  'ni',
+  'nu',
+  'nü',
+  'yı',
+  'yi',
+  'yu',
+  'yü',
+  'sı',
+  'si',
+  'su',
+  'sü',
+  'ı',
+  'i',
+  'u',
+  'ü',
+];
 
 function parseEvent(data: unknown): LiveSttServerEvent | null {
   if (typeof data !== 'string') {
@@ -386,6 +450,41 @@ function suffixPrefixOverlap(previousWords: string[], nextWords: string[]): numb
   return 0;
 }
 
+function overlapWordFamily(word: string): string {
+  let family = word;
+  for (let pass = 0; pass < 2; pass += 1) {
+    const suffix = OVERLAP_SUFFIXES.find(
+      (candidate) => family.length > candidate.length + 2 && family.endsWith(candidate),
+    );
+    if (!suffix) {
+      break;
+    }
+    family = family.slice(0, -suffix.length);
+  }
+
+  return family;
+}
+
+function normalizedOverlapFamilies(words: string[]): string[] {
+  return normalizedWords(words).map(overlapWordFamily).filter(Boolean);
+}
+
+function suffixPrefixSpeechOverlap(previousWords: string[], nextWords: string[]): number {
+  const exactOverlap = suffixPrefixOverlap(previousWords, nextWords);
+  if (exactOverlap > 0) {
+    return exactOverlap;
+  }
+
+  // Direct Whisper windows can repeat the previous segment head with Turkish
+  // case or possessive suffixes changed. Keep this fuzzy rule multi-word only
+  // so intentional single-word repeats stay visible.
+  const fuzzyOverlap = suffixPrefixOverlap(
+    normalizedOverlapFamilies(previousWords),
+    normalizedOverlapFamilies(nextWords),
+  );
+  return fuzzyOverlap >= 2 ? fuzzyOverlap : 0;
+}
+
 function mergeRollingPartial(previousText: string, nextText: string): string {
   const previous = previousText.trim();
   const next = nextText.trim();
@@ -408,7 +507,7 @@ function mergeRollingPartial(previousText: string, nextText: string): string {
     return previous;
   }
 
-  const overlap = suffixPrefixOverlap(previousWords, nextWords);
+  const overlap = suffixPrefixSpeechOverlap(previousWords, nextWords);
   if (overlap > 0) {
     return [...previousRawWords, ...nextRawWords.slice(overlap)].join(' ');
   }
@@ -467,7 +566,7 @@ function mergeFinalTranscript(previousText: string, finalText: string): string {
     return final;
   }
 
-  const overlap = suffixPrefixOverlap(previousWords, finalWords);
+  const overlap = suffixPrefixSpeechOverlap(previousWords, finalWords);
   if (overlap >= 2) {
     return [...previousRawWords, ...finalRawWords.slice(overlap)].join(' ');
   }
@@ -494,7 +593,7 @@ function dropLeadingTailOverlap(
   const nextRawWords = splitWords(next);
   const previousWords = normalizedWords(previousRawWords);
   const nextWords = normalizedWords(nextRawWords);
-  const overlap = suffixPrefixOverlap(previousWords, nextWords);
+  const overlap = suffixPrefixSpeechOverlap(previousWords, nextWords);
   if (overlap <= 0) {
     return next;
   }
