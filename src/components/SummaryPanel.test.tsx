@@ -538,7 +538,9 @@ describe('SummaryPanel', () => {
       expect(adapter.analyze).toHaveBeenCalledTimes(1);
     });
     expect(await screen.findByText('Meeting AI sonucu alındı.')).toBeInTheDocument();
-    expect(screen.getByText('Otomatik toplantı çıktısı kayıt bitince üretildi.')).toBeInTheDocument();
+    expect(
+      screen.getByText('Otomatik toplantı çıktısı kayıt bitince üretildi.'),
+    ).toBeInTheDocument();
 
     rerender(
       <SummaryPanel
