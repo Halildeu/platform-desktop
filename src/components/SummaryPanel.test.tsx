@@ -7,6 +7,7 @@ import '@testing-library/jest-dom/vitest';
 
 import { CONSENT_TEXT_HASH, CONSENT_VERSION } from './ConsentDialog';
 import { SummaryPanel, type ExportAdapter, type MeetingAiSubmitAdapter } from './SummaryPanel';
+import { MEETING_OUTPUT_ADAPTER_CONTRACT_VERSION } from '../intelligence/meeting-output-contract';
 import {
   initialMeetingIntelligence,
   setMeetingIntelligenceResult,
@@ -370,6 +371,19 @@ describe('SummaryPanel', () => {
       status: 'blocked',
       status_label: 'Blokeli',
     });
+    const readiness = screen.getByLabelText('ERP/CRM entegrasyon hazırlığı');
+    expect(within(readiness).getByText('Hedef')).toBeInTheDocument();
+    expect(within(readiness).getByText('ERP/CRM adaptör hedefi')).toBeInTheDocument();
+    expect(
+      within(readiness).getByText(MEETING_OUTPUT_ADAPTER_CONTRACT_VERSION),
+    ).toBeInTheDocument();
+    expect(within(readiness).getByText('Adapter seçilecek')).toBeInTheDocument();
+    expect(within(readiness).getByText('Toplantı notu / 1 karar / 1 aksiyon')).toBeInTheDocument();
+    expect(within(readiness).getByText('Onaydan sonra')).toBeInTheDocument();
+    expect(within(readiness).getByText('Ham ses/transkript yok')).toBeInTheDocument();
+    expect(
+      within(readiness).getByText('meeting_note, decision_record, action_task'),
+    ).toBeInTheDocument();
     expect(screen.getByText('Entegrasyon paketi panoya kopyalandı.')).toBeInTheDocument();
 
     await userEvent.click(screen.getByRole('button', { name: 'Entegrasyon JSON' }));

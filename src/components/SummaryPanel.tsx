@@ -2,6 +2,10 @@ import { useCallback, useEffect, useRef, useState, type ReactElement } from 'rea
 
 import { CONSENT_LOCALE, CONSENT_TEXT_HASH, CONSENT_VERSION } from './ConsentDialog';
 import {
+  MEETING_OUTPUT_ADAPTER_CONTRACT_VERSION,
+  MEETING_OUTPUT_SUPPORTED_OBJECTS,
+} from '../intelligence/meeting-output-contract';
+import {
   actionStatusLabel,
   buildIntelligenceExport,
   decisionStatusLabel,
@@ -149,6 +153,14 @@ function finalityLabel(segments: TranscriptSegment[]): string {
   ).length;
   const draftCount = segments.length - finalCount;
   return `${finalCount} final / ${draftCount} taslak`;
+}
+
+function integrationObjectCountLabel(result: MeetingIntelligenceResult): string {
+  return `Toplantı notu / ${result.decisions.length} karar / ${result.actionItems.length} aksiyon`;
+}
+
+function integrationSupportedObjectLabel(): string {
+  return MEETING_OUTPUT_SUPPORTED_OBJECTS.join(', ');
 }
 
 function formatDurationMs(value: number): string {
@@ -731,6 +743,35 @@ export function SummaryPanel({
                   </button>
                 </div>
               </div>
+            </div>
+          ) : null}
+          {displayResult ? (
+            <div className="integration-readiness" aria-label="ERP/CRM entegrasyon hazırlığı">
+              <div>
+                <span>Hedef</span>
+                <strong>ERP/CRM adaptör hedefi</strong>
+              </div>
+              <div>
+                <span>Sözleşme</span>
+                <strong>{MEETING_OUTPUT_ADAPTER_CONTRACT_VERSION}</strong>
+              </div>
+              <div>
+                <span>Vendor</span>
+                <strong>Adapter seçilecek</strong>
+              </div>
+              <div>
+                <span>Nesneler</span>
+                <strong>{integrationObjectCountLabel(displayResult)}</strong>
+              </div>
+              <div>
+                <span>Yazım</span>
+                <strong>Onaydan sonra</strong>
+              </div>
+              <div>
+                <span>Gizlilik</span>
+                <strong>Ham ses/transkript yok</strong>
+              </div>
+              <p>{integrationSupportedObjectLabel()}</p>
             </div>
           ) : null}
           <div className="summary-content">

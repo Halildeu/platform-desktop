@@ -1,3 +1,9 @@
+import {
+  MEETING_OUTPUT_ADAPTER_CONTRACT_VERSION,
+  MEETING_OUTPUT_ADAPTER_TARGET,
+  MEETING_OUTPUT_SUPPORTED_OBJECTS,
+} from './meeting-output-contract';
+
 export type IntelligenceStatus = 'idle' | 'recording' | 'waiting' | 'ready' | 'blocked' | 'error';
 
 export type ActionStatus = 'open' | 'in_progress' | 'done' | 'blocked';
@@ -302,16 +308,16 @@ function buildIntegrationJson(state: MeetingIntelligenceState, nowMs: number): s
       package_type: 'reviewed_meeting_intelligence',
       display_title: displayTitle,
       adapter_contract: {
-        version: 'platform.erp-crm.meeting-output.v1',
+        version: MEETING_OUTPUT_ADAPTER_CONTRACT_VERSION,
         vendor_specific: false,
         idempotency_key: idempotencyKey,
         content_fingerprint: contentFingerprint,
         write_policy: 'review_before_write',
         source_system: 'platform-meeting-intelligence',
-        supported_objects: ['meeting_note', 'decision_record', 'action_task'],
+        supported_objects: MEETING_OUTPUT_SUPPORTED_OBJECTS,
       },
       route: {
-        target: 'Generic ERP/CRM meeting workspace',
+        target: MEETING_OUTPUT_ADAPTER_TARGET,
         expected_authority: 'backend-gateway / meeting-service integration adapter',
         desktop_direct_backend_mutation: false,
       },
