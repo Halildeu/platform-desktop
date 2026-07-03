@@ -317,6 +317,44 @@ describe('connectLiveSttStream', () => {
     stream.close();
   });
 
+  it('appends shorter no-overlap rolling continuations after a stable draft', () => {
+    vi.useFakeTimers();
+    vi.stubGlobal('WebSocket', FakeWebSocket);
+    const events: LiveSttTranscriptEvent[] = [];
+
+    const stream = connectLiveSttStream('ws://127.0.0.1:18220/ws/stream', {
+      onTranscriptEvent: (event) => events.push(event),
+    });
+    const ws = FakeWebSocket.instances[0];
+
+    ws?.open();
+    ws?.message({ type: 'ready' });
+    ws?.message({
+      type: 'partial',
+      seq: 0,
+      confirmed: '',
+      tentative: 'Uzun konuşuyorum burada şimdi',
+      elapsed_ms: 180,
+      rms: 0.04,
+      source: 'medium',
+    });
+    vi.advanceTimersByTime(280);
+    ws?.message({
+      type: 'partial',
+      seq: 0,
+      confirmed: '',
+      tentative: 'kelimeler düşüyor',
+      elapsed_ms: 210,
+      rms: 0.04,
+      source: 'medium',
+    });
+    vi.advanceTimersByTime(70);
+
+    expect(events.at(-1)?.text).toBe('Uzun konuşuyorum burada şimdi kelimeler düşüyor');
+
+    stream.close();
+  });
+
   it('replaces unrelated rolling partial alternatives instead of appending variants', () => {
     vi.useFakeTimers();
     vi.stubGlobal('WebSocket', FakeWebSocket);

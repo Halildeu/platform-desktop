@@ -82,6 +82,8 @@ const ACTIVE_AUDIO_RMS = 0.006;
 const ACTIVE_AUDIO_TRANSCRIPT_STALL_MS = 12_000;
 const MIN_FALLBACK_DRAFT_WORDS = 4;
 const MAX_RECENT_FINAL_WORDS = 24;
+const ROLLING_CONTINUATION_MIN_PREVIOUS_WORDS = 4;
+const ROLLING_CONTINUATION_MIN_NEXT_WORDS = 2;
 
 function parseEvent(data: unknown): LiveSttServerEvent | null {
   if (typeof data !== 'string') {
@@ -415,11 +417,20 @@ function mergeRollingPartial(previousText: string, nextText: string): string {
     return next;
   }
 
-  if (
-    nextWords.length > previousWords.length &&
+  const sharedFamilyRatio = sharedTokenRatio(
+    normalizedFamilies(previousRawWords),
+    normalizedFamilies(nextRawWords),
+  );
+  const nextLooksLikeContinuation =
+    previousWords.length >= ROLLING_CONTINUATION_MIN_PREVIOUS_WORDS &&
+    nextWords.length >= ROLLING_CONTINUATION_MIN_NEXT_WORDS &&
+    sharedFamilyRatio < 0.5;
+  const nextLooksLikeGrowingWindow =
     nextWords.length >= 3 &&
-    (previousWords.length >= 2 || nextWords.length >= previousWords.length + 2)
-  ) {
+    nextWords.length > previousWords.length &&
+    (previousWords.length >= 2 || nextWords.length >= previousWords.length + 2);
+
+  if (nextLooksLikeContinuation || nextLooksLikeGrowingWindow) {
     return [...previousRawWords, ...nextRawWords].join(' ');
   }
 
