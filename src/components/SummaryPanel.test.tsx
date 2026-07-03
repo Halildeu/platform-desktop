@@ -500,4 +500,57 @@ describe('SummaryPanel', () => {
       }),
     );
   });
+
+  it('automatically submits a finished waiting transcript once when enabled', async () => {
+    const adapter: MeetingAiSubmitAdapter = {
+      analyze: vi.fn().mockResolvedValue({
+        schema_version: '5-adr0043',
+        summary: 'Otomatik toplantı çıktısı kayıt bitince üretildi.',
+        decisions: ['Kayıt bitişinde Meeting AI gateway tetiklenecek'],
+        action_items: [],
+        citations: [
+          {
+            claim: 'Kayıt bitişinde Meeting AI gateway tetiklenecek',
+            source_index: 0,
+            start_sec: 3,
+            grounded: true,
+          },
+        ],
+        backend: 'mock-meeting-ai',
+        model: 'unit-test',
+      }),
+    };
+    const onMeetingAiResult = vi.fn();
+    const intelligence = { ...initialMeetingIntelligence(), status: 'waiting' as const };
+    const transcript = reportReadyTranscriptState();
+
+    const { rerender } = render(
+      <SummaryPanel
+        intelligence={intelligence}
+        transcript={transcript}
+        meetingAiSubmitAdapter={adapter}
+        autoSubmitMeetingAi
+        onMeetingAiResult={onMeetingAiResult}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(adapter.analyze).toHaveBeenCalledTimes(1);
+    });
+    expect(await screen.findByText('Meeting AI sonucu alındı.')).toBeInTheDocument();
+    expect(screen.getByText('Otomatik toplantı çıktısı kayıt bitince üretildi.')).toBeInTheDocument();
+
+    rerender(
+      <SummaryPanel
+        intelligence={intelligence}
+        transcript={transcript}
+        meetingAiSubmitAdapter={adapter}
+        autoSubmitMeetingAi
+        onMeetingAiResult={onMeetingAiResult}
+      />,
+    );
+
+    expect(adapter.analyze).toHaveBeenCalledTimes(1);
+    expect(onMeetingAiResult).toHaveBeenCalledTimes(1);
+  });
 });

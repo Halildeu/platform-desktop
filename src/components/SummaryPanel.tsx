@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactElement } from 'react';
+import { useCallback, useEffect, useRef, useState, type ReactElement } from 'react';
 
 import { CONSENT_LOCALE, CONSENT_TEXT_HASH, CONSENT_VERSION } from './ConsentDialog';
 import {
@@ -42,6 +42,7 @@ export interface SummaryPanelProps {
   transcript?: TranscriptSessionState;
   exportAdapter?: ExportAdapter;
   meetingAiSubmitAdapter?: MeetingAiSubmitAdapter;
+  autoSubmitMeetingAi?: boolean;
   onMeetingAiResult?: (result: MeetingIntelligenceResult) => void;
   onMeetingAiError?: (message: string) => void;
 }
@@ -159,6 +160,7 @@ export function SummaryPanel({
   transcript,
   exportAdapter = browserExportAdapter,
   meetingAiSubmitAdapter = electronMeetingAiSubmitAdapter,
+  autoSubmitMeetingAi = false,
   onMeetingAiResult,
   onMeetingAiError,
 }: SummaryPanelProps): ReactElement {
@@ -172,6 +174,7 @@ export function SummaryPanel({
   const [summaryEditMode, setSummaryEditMode] = useState(false);
   const [summaryDraft, setSummaryDraft] = useState('');
   const [summaryOverride, setSummaryOverride] = useState<string | null>(null);
+  const autoSubmitKeyRef = useRef<string | null>(null);
   const transcriptSourceSegments = transcriptSegments(transcript);
   const hasTranscriptSource = transcriptSourceSegments.length > 0;
   const transcriptReadiness = transcript
@@ -213,6 +216,19 @@ export function SummaryPanel({
   const exportIntelligence = displayResult
     ? setMeetingIntelligenceResult(visibleIntelligence, displayResult)
     : visibleIntelligence;
+  const latestTranscriptKey = latestTranscriptSegment
+    ? `${latestTranscriptSegment.id}:${latestTranscriptSegment.status}:${latestTranscriptSegment.text.length}`
+    : '-';
+  const autoSubmitKey =
+    transcript && meetingAiGate.can_submit
+      ? [
+          transcript.meetingId ?? '',
+          transcript.sessionId ?? '',
+          transcript.finishedAtMs ?? '',
+          transcriptSourceSegments.length,
+          latestTranscriptKey,
+        ].join('|')
+      : null;
 
   useEffect(() => {
     setSummaryEditMode(false);
@@ -287,7 +303,7 @@ export function SummaryPanel({
     }
   };
 
-  const runMeetingAiSubmit = async (): Promise<void> => {
+  const runMeetingAiSubmit = useCallback(async (): Promise<void> => {
     setMessage(null);
     setIsSubmittingMeetingAi(true);
     try {
@@ -326,7 +342,30 @@ export function SummaryPanel({
     } finally {
       setIsSubmittingMeetingAi(false);
     }
-  };
+  }, [meetingAiSubmitAdapter, onMeetingAiError, onMeetingAiResult, transcript]);
+
+  useEffect(() => {
+    if (
+      !autoSubmitMeetingAi ||
+      !autoSubmitKey ||
+      !meetingAiGate.can_submit ||
+      result ||
+      isSubmittingMeetingAi ||
+      autoSubmitKeyRef.current === autoSubmitKey
+    ) {
+      return;
+    }
+
+    autoSubmitKeyRef.current = autoSubmitKey;
+    void runMeetingAiSubmit();
+  }, [
+    autoSubmitMeetingAi,
+    autoSubmitKey,
+    isSubmittingMeetingAi,
+    meetingAiGate.can_submit,
+    result,
+    runMeetingAiSubmit,
+  ]);
 
   const startSummaryEdit = (): void => {
     setMessage(null);

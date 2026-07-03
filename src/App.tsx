@@ -954,6 +954,7 @@ function App() {
             <SummaryPanel
               intelligence={meetingIntelligence}
               transcript={transcriptSession}
+              autoSubmitMeetingAi={meetingIntelligence.status === 'waiting'}
               onMeetingAiResult={(result) =>
                 setMeetingIntelligence((current) => setMeetingIntelligenceResult(current, result))
               }
