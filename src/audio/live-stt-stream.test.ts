@@ -355,6 +355,43 @@ describe('connectLiveSttStream', () => {
     stream.close();
   });
 
+  it('appends one-word no-overlap rolling continuations after a stable draft', () => {
+    vi.useFakeTimers();
+    vi.stubGlobal('WebSocket', FakeWebSocket);
+    const events: LiveSttTranscriptEvent[] = [];
+
+    const stream = connectLiveSttStream('ws://127.0.0.1:18220/ws/stream', {
+      onTranscriptEvent: (event) => events.push(event),
+    });
+    const ws = FakeWebSocket.instances[0];
+
+    ws?.open();
+    ws?.message({ type: 'ready' });
+    ws?.message({
+      type: 'partial',
+      seq: 0,
+      confirmed: '',
+      tentative: 'Konuşulanların çok büyük kısmı yazılmıyor',
+      elapsed_ms: 180,
+      rms: 0.04,
+      source: 'medium',
+    });
+    vi.advanceTimersByTime(350);
+    ws?.message({
+      type: 'partial',
+      seq: 0,
+      confirmed: '',
+      tentative: 'düşüyor',
+      elapsed_ms: 210,
+      rms: 0.04,
+      source: 'medium',
+    });
+
+    expect(events.at(-1)?.text).toBe('Konuşulanların çok büyük kısmı yazılmıyor düşüyor');
+
+    stream.close();
+  });
+
   it('replaces unrelated rolling partial alternatives instead of appending variants', () => {
     vi.useFakeTimers();
     vi.stubGlobal('WebSocket', FakeWebSocket);
@@ -741,6 +778,45 @@ describe('connectLiveSttStream', () => {
         text: 'Böyle...',
       }),
     ]);
+
+    stream.close();
+  });
+
+  it('finalizes a clean two-word draft when the final payload is a repetitive decode loop', () => {
+    vi.useFakeTimers();
+    vi.stubGlobal('WebSocket', FakeWebSocket);
+    const events: LiveSttTranscriptEvent[] = [];
+
+    const stream = connectLiveSttStream('ws://127.0.0.1:18220/ws/stream', {
+      onTranscriptEvent: (event) => events.push(event),
+    });
+    const ws = FakeWebSocket.instances[0];
+
+    ws?.open();
+    ws?.message({ type: 'ready' });
+    ws?.message({
+      type: 'partial',
+      seq: 0,
+      confirmed: '',
+      tentative: 'devam edelim',
+      elapsed_ms: 180,
+      rms: 0.04,
+      source: 'medium',
+    });
+    vi.advanceTimersByTime(140);
+    ws?.message({
+      type: 'final',
+      seq: 0,
+      text: 'Akşama aktif diyorsun Akşam aktif diyorsun ya Akşama aktif diyorsun yani Akışa aktif diyorsun yani.',
+      elapsed_ms: 760,
+      rms: 0.04,
+    });
+
+    expect(events.at(-1)).toMatchObject({
+      id: 'stream:0',
+      status: 'final',
+      text: 'devam edelim',
+    });
 
     stream.close();
   });
@@ -1326,7 +1402,7 @@ describe('connectLiveSttStream', () => {
     stream.send(new Float32Array([0.002, 0.002]));
     expect(first?.sent).toHaveLength(1);
 
-    vi.advanceTimersByTime(12_000);
+    vi.advanceTimersByTime(45_000);
     stream.send(new Float32Array([0.002, 0.002]));
 
     expect(first?.readyState).toBe(FakeWebSocket.CLOSED);
