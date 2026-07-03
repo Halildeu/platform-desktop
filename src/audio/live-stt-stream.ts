@@ -81,6 +81,7 @@ const RECONNECT_MAX_DELAY_MS = 2_000;
 const ACTIVE_AUDIO_RMS = 0.006;
 const ACTIVE_AUDIO_TRANSCRIPT_STALL_MS = 12_000;
 const MIN_FALLBACK_DRAFT_WORDS = 4;
+const MAX_RECENT_FINAL_WORDS = 24;
 
 function parseEvent(data: unknown): LiveSttServerEvent | null {
   if (typeof data !== 'string') {
@@ -437,7 +438,11 @@ function mergeFinalTranscript(previousText: string, finalText: string): string {
   return final;
 }
 
-function dropLeadingTailOverlap(previousText: string, nextText: string): string {
+function dropLeadingTailOverlap(
+  previousText: string,
+  nextText: string,
+  options: { allowSingleWord?: boolean } = {},
+): string {
   const previous = previousText.trim();
   const next = nextText.trim();
   if (!previous || !next) {
@@ -452,13 +457,19 @@ function dropLeadingTailOverlap(previousText: string, nextText: string): string 
   if (overlap <= 0) {
     return next;
   }
-  if (overlap === 1 && previousWords.length > 1) {
+  if (overlap === 1 && previousWords.length > 1 && !options.allowSingleWord) {
     return next;
   }
   if (overlap >= nextRawWords.length) {
     return next;
   }
   return nextRawWords.slice(overlap).join(' ');
+}
+
+function appendRecentFinalText(previousText: string, emittedText: string): string {
+  return [...splitWords(previousText), ...splitWords(emittedText)]
+    .slice(-MAX_RECENT_FINAL_WORDS)
+    .join(' ');
 }
 
 function progressivePartialSteps(previousText: string, nextText: string): string[] {
@@ -536,6 +547,7 @@ export function connectLiveSttStream(
   const finalizedSequences = new Set<number>();
   const pendingPartialTimers = new Map<number, Array<ReturnType<typeof setTimeout>>>();
   let lastEmittedFinalText = '';
+  let recentEmittedFinalText = '';
 
   const emitError = (message: string): void => {
     callbacks.onError?.(new Error(message));
@@ -668,7 +680,9 @@ export function connectLiveSttStream(
         if (!text || isUnstableFinalText(text)) {
           return;
         }
-        text = dropLeadingTailOverlap(lastEmittedFinalText, text);
+        text = dropLeadingTailOverlap(recentEmittedFinalText || lastEmittedFinalText, text, {
+          allowSingleWord: true,
+        });
         if (!text) {
           return;
         }
@@ -680,6 +694,7 @@ export function connectLiveSttStream(
         finalizedSequences.add(event.seq);
         segmentFinalText.set(event.seq, text);
         lastEmittedFinalText = text;
+        recentEmittedFinalText = appendRecentFinalText(recentEmittedFinalText, text);
         lastUsableTranscriptAtMs = Date.now();
         callbacks.onTranscriptEvent?.({
           id: segmentId(event.seq),

@@ -937,6 +937,83 @@ describe('connectLiveSttStream', () => {
     stream.close();
   });
 
+  it('drops a single repeated carry-over word when the next segment has new text', () => {
+    vi.stubGlobal('WebSocket', FakeWebSocket);
+    const events: LiveSttTranscriptEvent[] = [];
+
+    const stream = connectLiveSttStream('ws://127.0.0.1:18220/ws/stream', {
+      onTranscriptEvent: (event) => events.push(event),
+    });
+    const ws = FakeWebSocket.instances[0];
+
+    ws?.open();
+    ws?.message({ type: 'ready' });
+    ws?.message({
+      type: 'final',
+      seq: 0,
+      text: 'Ben sana bir kelime merhaba dedim. Sen uc tane ayri merhaba.',
+      elapsed_ms: 260,
+      rms: 0.04,
+    });
+    ws?.message({
+      type: 'final',
+      seq: 1,
+      text: 'Merhaba enteresan seyler yapabiliyor musun?',
+      elapsed_ms: 520,
+      rms: 0.04,
+    });
+
+    expect(events.at(-1)).toMatchObject({
+      id: 'stream:1',
+      status: 'final',
+      text: 'enteresan seyler yapabiliyor musun?',
+    });
+
+    stream.close();
+  });
+
+  it('drops cumulative carried-over final text across consecutive segments', () => {
+    vi.stubGlobal('WebSocket', FakeWebSocket);
+    const events: LiveSttTranscriptEvent[] = [];
+
+    const stream = connectLiveSttStream('ws://127.0.0.1:18220/ws/stream', {
+      onTranscriptEvent: (event) => events.push(event),
+    });
+    const ws = FakeWebSocket.instances[0];
+
+    ws?.open();
+    ws?.message({ type: 'ready' });
+    ws?.message({
+      type: 'final',
+      seq: 0,
+      text: 'Merhaba.',
+      elapsed_ms: 260,
+      rms: 0.04,
+    });
+    ws?.message({
+      type: 'final',
+      seq: 1,
+      text: 'Merhaba burada hava cok.',
+      elapsed_ms: 520,
+      rms: 0.04,
+    });
+    ws?.message({
+      type: 'final',
+      seq: 2,
+      text: 'Merhaba burada hava cok degisik seyler oluyor.',
+      elapsed_ms: 620,
+      rms: 0.04,
+    });
+
+    expect(events.map((event) => [event.id, event.status, event.text])).toEqual([
+      ['stream:0', 'final', 'Merhaba.'],
+      ['stream:1', 'final', 'burada hava cok.'],
+      ['stream:2', 'final', 'degisik seyler oluyor.'],
+    ]);
+
+    stream.close();
+  });
+
   it('keeps unrelated new final segments after a previous final segment', () => {
     vi.stubGlobal('WebSocket', FakeWebSocket);
     const events: LiveSttTranscriptEvent[] = [];
