@@ -392,6 +392,172 @@ describe('connectLiveSttStream', () => {
     stream.close();
   });
 
+  it('keeps a stable draft when a same-opener partial jumps to a new phrase', () => {
+    vi.useFakeTimers();
+    vi.stubGlobal('WebSocket', FakeWebSocket);
+    const events: LiveSttTranscriptEvent[] = [];
+
+    const stream = connectLiveSttStream('ws://127.0.0.1:18220/ws/stream', {
+      onTranscriptEvent: (event) => events.push(event),
+    });
+    const ws = FakeWebSocket.instances[0];
+
+    ws?.open();
+    ws?.message({ type: 'ready' });
+    ws?.message({
+      type: 'partial',
+      seq: 0,
+      confirmed: '',
+      tentative: 'Merhaba sesim geliyor mu beni duyuyor musun',
+      elapsed_ms: 180,
+      rms: 0.04,
+      source: 'medium',
+    });
+    vi.advanceTimersByTime(420);
+    ws?.message({
+      type: 'partial',
+      seq: 0,
+      confirmed: '',
+      tentative: 'Merhaba burada hava çok',
+      elapsed_ms: 240,
+      rms: 0.04,
+      source: 'medium',
+    });
+    vi.advanceTimersByTime(210);
+
+    expect(events.at(-1)?.text).toBe(
+      'Merhaba sesim geliyor mu beni duyuyor musun burada hava çok',
+    );
+
+    stream.close();
+  });
+
+  it('extends a same-opener appended tail without duplicating the tail', () => {
+    vi.useFakeTimers();
+    vi.stubGlobal('WebSocket', FakeWebSocket);
+    const events: LiveSttTranscriptEvent[] = [];
+
+    const stream = connectLiveSttStream('ws://127.0.0.1:18220/ws/stream', {
+      onTranscriptEvent: (event) => events.push(event),
+    });
+    const ws = FakeWebSocket.instances[0];
+
+    ws?.open();
+    ws?.message({ type: 'ready' });
+    ws?.message({
+      type: 'partial',
+      seq: 0,
+      confirmed: '',
+      tentative: 'Merhaba sesim geliyor mu beni duyuyor musun',
+      elapsed_ms: 180,
+      rms: 0.04,
+      source: 'medium',
+    });
+    vi.advanceTimersByTime(210);
+    ws?.message({
+      type: 'partial',
+      seq: 0,
+      confirmed: '',
+      tentative: 'Merhaba burada hava çok',
+      elapsed_ms: 240,
+      rms: 0.04,
+      source: 'medium',
+    });
+    vi.advanceTimersByTime(210);
+    ws?.message({
+      type: 'partial',
+      seq: 0,
+      confirmed: '',
+      tentative: 'Merhaba burada hava çok güzel',
+      elapsed_ms: 310,
+      rms: 0.04,
+      source: 'medium',
+    });
+    vi.advanceTimersByTime(210);
+
+    expect(events.at(-1)?.text).toBe(
+      'Merhaba sesim geliyor mu beni duyuyor musun burada hava çok güzel',
+    );
+
+    stream.close();
+  });
+
+  it('does not keep appending unrelated same-opener text after a long draft', () => {
+    vi.useFakeTimers();
+    vi.stubGlobal('WebSocket', FakeWebSocket);
+    const events: LiveSttTranscriptEvent[] = [];
+
+    const stream = connectLiveSttStream('ws://127.0.0.1:18220/ws/stream', {
+      onTranscriptEvent: (event) => events.push(event),
+    });
+    const ws = FakeWebSocket.instances[0];
+
+    ws?.open();
+    ws?.message({ type: 'ready' });
+    ws?.message({
+      type: 'partial',
+      seq: 0,
+      confirmed: '',
+      tentative:
+        'Merhaba sesim geliyor mu beni duyuyor musun burada uzun bir deneme yapıyorum şimdi devam ediyor',
+      elapsed_ms: 180,
+      rms: 0.04,
+      source: 'medium',
+    });
+    vi.advanceTimersByTime(2_000);
+    ws?.message({
+      type: 'partial',
+      seq: 0,
+      confirmed: '',
+      tentative: 'Merhaba yeni konu başlıyor',
+      elapsed_ms: 260,
+      rms: 0.04,
+      source: 'medium',
+    });
+    vi.advanceTimersByTime(210);
+
+    expect(events.at(-1)?.text).toBe('Merhaba yeni konu başlıyor');
+
+    stream.close();
+  });
+
+  it('still applies same-opener rolling corrections when the new text overlaps the draft', () => {
+    vi.useFakeTimers();
+    vi.stubGlobal('WebSocket', FakeWebSocket);
+    const events: LiveSttTranscriptEvent[] = [];
+
+    const stream = connectLiveSttStream('ws://127.0.0.1:18220/ws/stream', {
+      onTranscriptEvent: (event) => events.push(event),
+    });
+    const ws = FakeWebSocket.instances[0];
+
+    ws?.open();
+    ws?.message({ type: 'ready' });
+    ws?.message({
+      type: 'partial',
+      seq: 0,
+      confirmed: '',
+      tentative: 'Merhaba sesim geliyor',
+      elapsed_ms: 180,
+      rms: 0.04,
+      source: 'medium',
+    });
+    vi.advanceTimersByTime(210);
+    ws?.message({
+      type: 'partial',
+      seq: 0,
+      confirmed: '',
+      tentative: 'Merhaba sesim geliyor mu',
+      elapsed_ms: 240,
+      rms: 0.04,
+      source: 'medium',
+    });
+
+    expect(events.at(-1)?.text).toBe('Merhaba sesim geliyor mu');
+
+    stream.close();
+  });
+
   it('replaces unrelated rolling partial alternatives instead of appending variants', () => {
     vi.useFakeTimers();
     vi.stubGlobal('WebSocket', FakeWebSocket);

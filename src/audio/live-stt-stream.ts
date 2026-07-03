@@ -88,6 +88,11 @@ const CARRY_OVER_DROP_MIN_NEW_WORDS = 3;
 const SHORT_FINAL_PRESERVE_MIN_PREVIOUS_WORDS = 8;
 const SHORT_FINAL_PRESERVE_MAX_RATIO = 0.55;
 const SHORT_FINAL_PRESERVE_MAX_SHARED_RATIO = 0.35;
+const SAME_OPENER_APPEND_MIN_PREVIOUS_WORDS = 4;
+const SAME_OPENER_APPEND_MAX_PREVIOUS_WORDS = 14;
+const SAME_OPENER_APPEND_MIN_NEXT_TAIL_WORDS = 3;
+const SAME_OPENER_APPEND_MAX_SHARED_RATIO = 0.4;
+const SAME_OPENER_TAIL_OVERLAP_MIN_WORDS = 2;
 const OVERLAP_SUFFIXES = [
   'lerinizden',
   'larınızdan',
@@ -506,6 +511,10 @@ function mergeRollingPartial(previousText: string, nextText: string): string {
   const nextRawWords = splitWords(next);
   const previousWords = normalizedWords(previousRawWords);
   const nextWords = normalizedWords(nextRawWords);
+  const sharedFamilyRatio = sharedTokenRatio(
+    normalizedFamilies(previousRawWords),
+    normalizedFamilies(nextRawWords),
+  );
   const containedAt = contiguousIndex(previousWords, nextWords);
   if (containedAt >= 0) {
     return previous;
@@ -517,13 +526,27 @@ function mergeRollingPartial(previousText: string, nextText: string): string {
   }
 
   if (previousWords[0] === nextWords[0]) {
+    const nextTailRawWords = nextRawWords.slice(1);
+    const nextTailWords = normalizedWords(nextTailRawWords);
+    const tailOverlapSize = suffixPrefixSpeechOverlap(previousWords, nextTailWords);
+    if (tailOverlapSize >= SAME_OPENER_TAIL_OVERLAP_MIN_WORDS) {
+      if (tailOverlapSize >= nextTailRawWords.length) {
+        return previous;
+      }
+      return [...previousRawWords, ...nextTailRawWords.slice(tailOverlapSize)].join(' ');
+    }
+
+    if (
+      previousWords.length >= SAME_OPENER_APPEND_MIN_PREVIOUS_WORDS &&
+      previousWords.length <= SAME_OPENER_APPEND_MAX_PREVIOUS_WORDS &&
+      nextTailWords.length >= SAME_OPENER_APPEND_MIN_NEXT_TAIL_WORDS &&
+      sharedFamilyRatio <= SAME_OPENER_APPEND_MAX_SHARED_RATIO
+    ) {
+      return [...previousRawWords, ...nextTailRawWords].join(' ');
+    }
     return next;
   }
 
-  const sharedFamilyRatio = sharedTokenRatio(
-    normalizedFamilies(previousRawWords),
-    normalizedFamilies(nextRawWords),
-  );
   const nextLooksLikeContinuation =
     previousWords.length >= ROLLING_CONTINUATION_MIN_PREVIOUS_WORDS &&
     nextWords.length >= ROLLING_CONTINUATION_MIN_NEXT_WORDS &&
