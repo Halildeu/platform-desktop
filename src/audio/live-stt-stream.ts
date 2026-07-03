@@ -70,7 +70,7 @@ type LiveSttServerEvent =
   | LiveSttServerFinal
   | LiveSttServerError;
 
-const MAX_BUFFERED_STREAM_MS = 3_000;
+const MAX_BUFFERED_STREAM_MS = 60_000;
 const SAMPLE_RATE = 16_000;
 const MAX_BUFFERED_SAMPLES = Math.floor((SAMPLE_RATE * MAX_BUFFERED_STREAM_MS) / 1000);
 const PARTIAL_REVEAL_STEP_MS = 70;

@@ -130,6 +130,30 @@ describe('connectLiveSttStream', () => {
     stream.close();
   });
 
+  it('keeps one minute of direct audio buffered while stream models are loading', () => {
+    vi.stubGlobal('WebSocket', FakeWebSocket);
+
+    const stream = connectLiveSttStream('ws://127.0.0.1:18220/ws/stream');
+    const ws = FakeWebSocket.instances[0];
+
+    ws?.open();
+    ws?.message({ type: 'loading', stage: 'live_model' });
+
+    for (let index = 0; index < 70; index += 1) {
+      stream.send(new Float32Array(16_000).fill(index));
+    }
+    expect(ws?.sent).toHaveLength(0);
+
+    ws?.message({ type: 'ready' });
+
+    expect(ws?.sent).toHaveLength(60);
+    expect((ws?.sent[0] as ArrayBuffer).byteLength).toBe(64_000);
+    expect(new Float32Array(ws?.sent[0] as ArrayBuffer)[0]).toBe(10);
+    expect(new Float32Array(ws?.sent.at(-1) as ArrayBuffer)[0]).toBe(69);
+
+    stream.close();
+  });
+
   it('reveals multi-word partial payloads word-by-word on the same segment id', () => {
     vi.useFakeTimers();
     vi.stubGlobal('WebSocket', FakeWebSocket);
