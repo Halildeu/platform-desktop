@@ -286,11 +286,30 @@ function buildIntegrationJson(state: MeetingIntelligenceState, nowMs: number): s
   if (!result) {
     throw new Error('Meeting intelligence output is not ready');
   }
+  const contentFingerprint = intelligenceContentFingerprint(result);
+  const idempotencyKey = [
+    'meeting-output',
+    state.meetingId ?? 'meeting',
+    state.sessionId ?? 'session',
+    new Date(result.generatedAtMs).toISOString(),
+    contentFingerprint,
+  ].join(':');
+  const displayTitle = `Meeting Intelligence · ${state.meetingId ?? state.sessionId ?? 'meeting'}`;
 
   return `${JSON.stringify(
     {
       schema_version: 'platform-desktop.meeting-output-integration.v1',
       package_type: 'reviewed_meeting_intelligence',
+      display_title: displayTitle,
+      adapter_contract: {
+        version: 'platform.erp-crm.meeting-output.v1',
+        vendor_specific: false,
+        idempotency_key: idempotencyKey,
+        content_fingerprint: contentFingerprint,
+        write_policy: 'review_before_write',
+        source_system: 'platform-meeting-intelligence',
+        supported_objects: ['meeting_note', 'decision_record', 'action_task'],
+      },
       route: {
         target: 'Generic ERP/CRM meeting workspace',
         expected_authority: 'backend-gateway / meeting-service integration adapter',
@@ -311,6 +330,37 @@ function buildIntegrationJson(state: MeetingIntelligenceState, nowMs: number): s
       provider: result.providerLabel ?? null,
       citation_coverage: result.citationCoverage,
       import_targets: ['meeting.summary', 'meeting.decisions', 'meeting.actions'],
+      sync_policy: {
+        mode: 'upsert_by_idempotency_key',
+        requires_human_review: true,
+        desktop_mutates_erp_crm: false,
+        failure_mode: 'fail_closed',
+      },
+      field_mappings: {
+        mapping_type: 'field_pointer',
+        meeting_note: {
+          external_key: 'meeting_id',
+          title: 'display_title',
+          body: 'summary_markdown',
+          source_refs: 'citations',
+        },
+        decision_record: {
+          external_key: 'decision.id',
+          title: 'decision.title',
+          owner: 'decision.owner',
+          status: 'decision.status',
+          source_refs: 'decision.citations',
+        },
+        action_task: {
+          external_key: 'action.id',
+          title: 'action.title',
+          assignee: 'action.assignee',
+          due_date: 'action.due_date',
+          status: 'action.status',
+          priority: 'action.priority',
+          source_refs: 'action.citations',
+        },
+      },
       summary_markdown: result.summaryMarkdown.trim(),
       decisions: result.decisions.map((decision) => ({
         id: decision.id,
@@ -334,6 +384,42 @@ function buildIntegrationJson(state: MeetingIntelligenceState, nowMs: number): s
     null,
     2,
   )}\n`;
+}
+
+function intelligenceContentFingerprint(result: MeetingIntelligenceResult): string {
+  const payload = JSON.stringify({
+    summaryMarkdown: result.summaryMarkdown.trim(),
+    decisions: result.decisions.map((decision) => ({
+      id: decision.id,
+      title: decision.title,
+      owner: decision.owner ?? null,
+      status: decision.status,
+      citations: decision.citations,
+    })),
+    actionItems: result.actionItems.map((item) => ({
+      id: item.id,
+      title: item.title,
+      assignee: item.assignee ?? null,
+      dueDate: item.dueDate ?? null,
+      status: item.status,
+      priority: item.priority ?? null,
+      citations: item.citations,
+    })),
+    providerLabel: result.providerLabel ?? null,
+    citationCoverage: result.citationCoverage,
+  });
+  return `fnv1a64:${fnv1a64(payload)}`;
+}
+
+function fnv1a64(value: string): string {
+  let hash = 0xcbf29ce484222325n;
+  const prime = 0x100000001b3n;
+  const mask = 0xffffffffffffffffn;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= BigInt(value.charCodeAt(index));
+    hash = (hash * prime) & mask;
+  }
+  return hash.toString(16).padStart(16, '0');
 }
 
 function integrationCitation(citation: IntelligenceCitation): {

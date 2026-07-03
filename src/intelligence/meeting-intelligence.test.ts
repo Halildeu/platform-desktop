@@ -110,6 +110,7 @@ describe('meeting intelligence state and exports', () => {
     expect(integrationPackage).toMatchObject({
       schema_version: 'platform-desktop.meeting-output-integration.v1',
       package_type: 'reviewed_meeting_intelligence',
+      display_title: 'Meeting Intelligence · 22222222-2222-4222-8222-222222222222',
       meeting_id: '22222222-2222-4222-8222-222222222222',
       session_id: 'SES-1',
       exported_at: '2026-06-29T14:01:40.000Z',
@@ -122,6 +123,50 @@ describe('meeting intelligence state and exports', () => {
         target: 'Generic ERP/CRM meeting workspace',
         expected_authority: 'backend-gateway / meeting-service integration adapter',
         desktop_direct_backend_mutation: false,
+      },
+      adapter_contract: {
+        version: 'platform.erp-crm.meeting-output.v1',
+        vendor_specific: false,
+        idempotency_key: expect.stringMatching(
+          /^meeting-output:22222222-2222-4222-8222-222222222222:SES-1:2026-06-29T14:00:00\.000Z:fnv1a64:[a-f0-9]{16}$/,
+        ),
+        content_fingerprint: expect.stringMatching(/^fnv1a64:[a-f0-9]{16}$/),
+        write_policy: 'review_before_write',
+        source_system: 'platform-meeting-intelligence',
+        supported_objects: ['meeting_note', 'decision_record', 'action_task'],
+      },
+      sync_policy: {
+        mode: 'upsert_by_idempotency_key',
+        requires_human_review: true,
+        desktop_mutates_erp_crm: false,
+        failure_mode: 'fail_closed',
+      },
+    });
+    const adapterContract = integrationPackage.adapter_contract as Record<string, string>;
+    expect(adapterContract.idempotency_key).toContain(adapterContract.content_fingerprint);
+    expect(integrationPackage.field_mappings).toMatchObject({
+      mapping_type: 'field_pointer',
+      meeting_note: {
+        external_key: 'meeting_id',
+        title: 'display_title',
+        body: 'summary_markdown',
+        source_refs: 'citations',
+      },
+      decision_record: {
+        external_key: 'decision.id',
+        title: 'decision.title',
+        owner: 'decision.owner',
+        status: 'decision.status',
+        source_refs: 'decision.citations',
+      },
+      action_task: {
+        external_key: 'action.id',
+        title: 'action.title',
+        assignee: 'action.assignee',
+        due_date: 'action.due_date',
+        status: 'action.status',
+        priority: 'action.priority',
+        source_refs: 'action.citations',
       },
     });
     expect(bundle.integrationJson).toContain('"import_targets": [');
