@@ -883,7 +883,7 @@ describe('connectLiveSttStream', () => {
     expect(statuses).toContainEqual({
       status: 'reconnecting',
       attempt: 1,
-      maxAttempts: 8,
+      maxAttempts: 60,
       retryDelayMs: 250,
       reason: 'bağlantı kapandı',
     });
@@ -898,6 +898,36 @@ describe('connectLiveSttStream', () => {
 
     expect(onReady).toHaveBeenCalledTimes(2);
     expect(second?.sent).toHaveLength(1);
+
+    stream.close();
+  });
+
+  it('keeps retrying long enough for a restarted local STT tunnel', () => {
+    vi.useFakeTimers();
+    vi.stubGlobal('WebSocket', FakeWebSocket);
+    const errors: string[] = [];
+    const statuses: LiveSttStreamStatusEvent[] = [];
+
+    const stream = connectLiveSttStream('ws://127.0.0.1:18220/ws/stream', {
+      onStatus: (event) => statuses.push(event),
+      onError: (error) => errors.push(error.message),
+    });
+
+    FakeWebSocket.instances[0]?.close();
+    for (let attempt = 1; attempt < 10; attempt += 1) {
+      vi.advanceTimersByTime(2_000);
+      FakeWebSocket.instances[attempt]?.close();
+    }
+
+    expect(errors).toEqual([]);
+    expect(statuses).toContainEqual(
+      expect.objectContaining({
+        status: 'reconnecting',
+        attempt: 10,
+        maxAttempts: 60,
+        reason: 'bağlantı kapandı',
+      }),
+    );
 
     stream.close();
   });
