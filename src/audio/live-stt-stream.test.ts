@@ -392,6 +392,30 @@ describe('connectLiveSttStream', () => {
     stream.close();
   });
 
+  it('drops a known single-word final artifact when no stable draft exists', () => {
+    vi.stubGlobal('WebSocket', FakeWebSocket);
+    const events: LiveSttTranscriptEvent[] = [];
+
+    const stream = connectLiveSttStream('ws://127.0.0.1:18220/ws/stream', {
+      onTranscriptEvent: (event) => events.push(event),
+    });
+    const ws = FakeWebSocket.instances[0];
+
+    ws?.open();
+    ws?.message({ type: 'ready' });
+    ws?.message({
+      type: 'final',
+      seq: 0,
+      text: 'Neroba',
+      elapsed_ms: 700,
+      rms: 0.04,
+    });
+
+    expect(events).toEqual([]);
+
+    stream.close();
+  });
+
   it('drops repetitive final decode loops when no stable draft exists', () => {
     vi.stubGlobal('WebSocket', FakeWebSocket);
     const events: LiveSttTranscriptEvent[] = [];

@@ -337,8 +337,14 @@ function isRepeatedAlternativeChain(text: string): boolean {
   );
 }
 
+function isKnownShortArtifact(text: string): boolean {
+  const normalized = normalizedWords(splitWords(text)).join(' ');
+  return normalized === 'neroba';
+}
+
 function isUnstableFinalText(text: string): boolean {
   return (
+    isKnownShortArtifact(text) ||
     isLowInformationRepetition(text) ||
     isShortRepeatedDecodeChain(text) ||
     isRepeatedDecodeChain(text) ||
@@ -691,9 +697,12 @@ export function connectLiveSttStream(
           segmentKnownText.get(event.seq) ?? segmentDraftText.get(event.seq) ?? '';
         let finalText = event.text;
         if (isUnstableFinalText(event.text)) {
+          const fallbackAllowedForKnownArtifact =
+            isKnownShortArtifact(event.text) && Boolean(previousText);
           if (
             !previousText ||
-            splitWords(previousText).length < MIN_FALLBACK_DRAFT_WORDS ||
+            (!fallbackAllowedForKnownArtifact &&
+              splitWords(previousText).length < MIN_FALLBACK_DRAFT_WORDS) ||
             isUnstableFinalText(previousText)
           ) {
             return;
