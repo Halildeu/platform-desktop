@@ -238,6 +238,45 @@ describe('SummaryPanel', () => {
     ).toBeInTheDocument();
   });
 
+  it('edits decision owner and status and exports reviewed decisions', async () => {
+    const adapter: ExportAdapter = {
+      copyText: vi.fn().mockResolvedValue(undefined),
+      downloadText: vi.fn(),
+      print: vi.fn(),
+    };
+    render(<SummaryPanel intelligence={readyState()} exportAdapter={adapter} />);
+
+    const decisionTitle = 'Recorder fresh login sonrası tekrar denenecek';
+    await userEvent.clear(screen.getByLabelText(`Karar sahibi: ${decisionTitle}`));
+    await userEvent.type(screen.getByLabelText(`Karar sahibi: ${decisionTitle}`), 'Halil');
+    await userEvent.selectOptions(
+      screen.getByLabelText(`Karar durumu: ${decisionTitle}`),
+      'revised',
+    );
+
+    expect(screen.getByLabelText(`Karar sahibi: ${decisionTitle}`)).toHaveValue('Halil');
+    expect(screen.getByLabelText(`Karar durumu: ${decisionTitle}`)).toHaveValue('revised');
+
+    await userEvent.click(screen.getByRole('button', { name: 'Kopyala' }));
+    await waitFor(() => {
+      expect(adapter.copyText).toHaveBeenCalledWith(expect.stringContaining('@Halil'));
+    });
+    const markdown = String(vi.mocked(adapter.copyText).mock.calls.at(-1)?.[0]);
+    expect(markdown).toContain('Recorder fresh login sonrası tekrar denenecek');
+    expect(markdown).toContain('Revize');
+
+    await userEvent.click(screen.getByRole('button', { name: 'CSV' }));
+    const csv = String(vi.mocked(adapter.downloadText).mock.calls.at(-1)?.[1]);
+    expect(csv).toContain('decision,dec-1');
+    expect(csv).toContain('Halil');
+    expect(csv).toContain('Revize');
+
+    await userEvent.click(screen.getByRole('button', { name: 'Orijinal kararlar' }));
+    expect(screen.getByText('Kararlar orijinal haline döndü.')).toBeInTheDocument();
+    expect(screen.getByLabelText(`Karar sahibi: ${decisionTitle}`)).toHaveValue('Zeynep');
+    expect(screen.getByLabelText(`Karar durumu: ${decisionTitle}`)).toHaveValue('accepted');
+  });
+
   it('edits action owner due date and status and exports reviewed actions', async () => {
     const adapter: ExportAdapter = {
       copyText: vi.fn().mockResolvedValue(undefined),

@@ -857,6 +857,10 @@ button:disabled {
   background: #ffffff;
 }
 
+.decision-table .action-row {
+  grid-template-columns: minmax(180px, 1.6fr) minmax(90px, 0.8fr) 110px 90px;
+}
+
 .action-row:first-child {
   border-top: 0;
 }

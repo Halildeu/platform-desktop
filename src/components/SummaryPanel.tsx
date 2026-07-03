@@ -9,6 +9,8 @@ import {
   intelligenceStatusLabel,
   type ActionItem,
   type ActionStatus,
+  type DecisionItem,
+  type DecisionStatus,
   type IntelligenceCitation,
   type MeetingIntelligenceResult,
   type MeetingIntelligenceState,
@@ -85,8 +87,10 @@ const electronMeetingAiSubmitAdapter: MeetingAiSubmitAdapter = {
 };
 
 const ACTION_STATUS_OPTIONS: ActionStatus[] = ['open', 'in_progress', 'done', 'blocked'];
+const DECISION_STATUS_OPTIONS: DecisionStatus[] = ['proposed', 'accepted', 'revised'];
 
 type ActionReviewDraft = Partial<Pick<ActionItem, 'assignee' | 'dueDate' | 'status'>>;
+type DecisionReviewDraft = Partial<Pick<DecisionItem, 'owner' | 'status'>>;
 
 type ShareChannel = 'clipboard' | 'email' | 'teams';
 
@@ -185,6 +189,23 @@ function applyActionReviewDrafts(
   });
 }
 
+function applyDecisionReviewDrafts(
+  decisions: DecisionItem[],
+  drafts: Record<string, DecisionReviewDraft>,
+): DecisionItem[] {
+  return decisions.map((item) => {
+    const draft = drafts[item.id];
+    if (!draft) {
+      return item;
+    }
+    return {
+      ...item,
+      owner: draft.owner ?? item.owner,
+      status: draft.status ?? item.status,
+    };
+  });
+}
+
 function shareSubject(meetingId: string | null): string {
   return `Meeting Intelligence - ${meetingId ?? 'meeting'}`;
 }
@@ -235,6 +256,7 @@ export function SummaryPanel({
   const [summaryEditMode, setSummaryEditMode] = useState(false);
   const [summaryDraft, setSummaryDraft] = useState('');
   const [summaryOverride, setSummaryOverride] = useState<string | null>(null);
+  const [decisionDrafts, setDecisionDrafts] = useState<Record<string, DecisionReviewDraft>>({});
   const [actionDrafts, setActionDrafts] = useState<Record<string, ActionReviewDraft>>({});
   const [shareOpen, setShareOpen] = useState(false);
   const [shareText, setShareText] = useState('');
@@ -277,6 +299,7 @@ export function SummaryPanel({
     ? {
         ...result,
         summaryMarkdown: effectiveSummaryMarkdown,
+        decisions: applyDecisionReviewDrafts(result.decisions, decisionDrafts),
         actionItems: applyActionReviewDrafts(result.actionItems, actionDrafts),
       }
     : null;
@@ -301,6 +324,7 @@ export function SummaryPanel({
     setSummaryEditMode(false);
     setSummaryOverride(null);
     setSummaryDraft(result?.summaryMarkdown ?? '');
+    setDecisionDrafts({});
     setActionDrafts({});
     setShareOpen(false);
     setShareText('');
@@ -526,6 +550,22 @@ export function SummaryPanel({
     setMessage('Özet orijinal haline döndü.');
   };
 
+  const updateDecisionDraft = (decisionId: string, draft: DecisionReviewDraft): void => {
+    setDecisionDrafts((current) => ({
+      ...current,
+      [decisionId]: {
+        ...current[decisionId],
+        ...draft,
+      },
+    }));
+    setMessage(null);
+  };
+
+  const resetDecisionDrafts = (): void => {
+    setDecisionDrafts({});
+    setMessage('Kararlar orijinal haline döndü.');
+  };
+
   const updateActionDraft = (actionId: string, draft: ActionReviewDraft): void => {
     setActionDrafts((current) => ({
       ...current,
@@ -542,6 +582,7 @@ export function SummaryPanel({
     setMessage('Aksiyonlar orijinal haline döndü.');
   };
 
+  const hasDecisionDrafts = Object.keys(decisionDrafts).length > 0;
   const hasActionDrafts = Object.keys(actionDrafts).length > 0;
 
   return (
@@ -720,17 +761,64 @@ export function SummaryPanel({
             </article>
 
             <article className="summary-section">
-              <h3>Kararlar</h3>
-              {result.decisions.length > 0 ? (
-                <ul className="decision-list">
-                  {result.decisions.map((decision) => (
-                    <li key={decision.id}>
-                      <strong>{decision.title}</strong>
-                      <span>{decisionStatusLabel(decision.status)}</span>
-                      <small>{formatCitations(decision.citations)}</small>
-                    </li>
+              <div className="summary-section-heading">
+                <h3>Kararlar</h3>
+                {hasDecisionDrafts ? (
+                  <button
+                    className="secondary-action compact-action"
+                    type="button"
+                    onClick={resetDecisionDrafts}
+                  >
+                    Orijinal kararlar
+                  </button>
+                ) : null}
+              </div>
+              {displayResult && displayResult.decisions.length > 0 ? (
+                <div className="decision-table action-table" role="table" aria-label="Kararlar">
+                  <div className="action-row action-row-head" role="row">
+                    <span role="columnheader">Karar</span>
+                    <span role="columnheader">Sahip</span>
+                    <span role="columnheader">Durum</span>
+                    <span role="columnheader">Kaynak</span>
+                  </div>
+                  {displayResult.decisions.map((decision) => (
+                    <div className="action-row" role="row" key={decision.id}>
+                      <span role="cell">
+                        <strong>{decision.title}</strong>
+                      </span>
+                      <span className="action-field" role="cell">
+                        <input
+                          className="action-input"
+                          aria-label={`Karar sahibi: ${decision.title}`}
+                          value={decision.owner ?? ''}
+                          placeholder="-"
+                          onChange={(event) =>
+                            updateDecisionDraft(decision.id, { owner: event.target.value })
+                          }
+                        />
+                      </span>
+                      <span className="action-field" role="cell">
+                        <select
+                          className="action-input"
+                          aria-label={`Karar durumu: ${decision.title}`}
+                          value={decision.status}
+                          onChange={(event) =>
+                            updateDecisionDraft(decision.id, {
+                              status: event.target.value as DecisionStatus,
+                            })
+                          }
+                        >
+                          {DECISION_STATUS_OPTIONS.map((status) => (
+                            <option key={status} value={status}>
+                              {decisionStatusLabel(status)}
+                            </option>
+                          ))}
+                        </select>
+                      </span>
+                      <span role="cell">{formatCitations(decision.citations)}</span>
+                    </div>
                   ))}
-                </ul>
+                </div>
               ) : (
                 <p className="muted-line">Karar yok.</p>
               )}

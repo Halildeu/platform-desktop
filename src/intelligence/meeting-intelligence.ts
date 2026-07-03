@@ -226,8 +226,9 @@ function buildMarkdown(state: MeetingIntelligenceState): string {
     lines.push('_Karar yok._');
   } else {
     for (const decision of result.decisions) {
+      const owner = decision.owner ? ` @${decision.owner}` : '';
       lines.push(
-        `- **${decision.title}** (${decisionStatusLabel(decision.status)})` +
+        `- **${decision.title}**${owner} (${decisionStatusLabel(decision.status)})` +
           citationSuffix(decision.citations),
       );
     }
