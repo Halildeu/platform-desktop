@@ -283,13 +283,102 @@ export function upsertTranscriptSegment(
   }
 
   const segments = existing
-    ? state.segments.map((item) => (item.id === segment.id ? { ...item, ...segment } : item))
+    ? state.segments.map((item) =>
+        item.id === segment.id ? mergeTranscriptSegment(item, segment) : item,
+      )
     : [...state.segments, segment];
 
   return {
     ...state,
     segments: segments.sort((a, b) => a.startedAtMs - b.startedAtMs || a.id.localeCompare(b.id)),
   };
+}
+
+function mergeTranscriptSegment(
+  existing: TranscriptSegment,
+  incoming: TranscriptSegment,
+): TranscriptSegment {
+  if (shouldPreserveDirectDraftText(existing, incoming)) {
+    return {
+      ...existing,
+      ...incoming,
+      text: existing.text,
+      startedAtMs: existing.startedAtMs,
+    };
+  }
+
+  return { ...existing, ...incoming };
+}
+
+function shouldPreserveDirectDraftText(
+  existing: TranscriptSegment,
+  incoming: TranscriptSegment,
+): boolean {
+  if (
+    existing.source !== 'direct-stream' ||
+    incoming.source !== 'direct-stream' ||
+    existing.status !== 'draft' ||
+    incoming.status !== 'draft'
+  ) {
+    return false;
+  }
+
+  const existingWords = normalizedTranscriptWords(existing.text);
+  const incomingWords = normalizedTranscriptWords(incoming.text);
+  if (existingWords.length < 4 || incomingWords.length === 0) {
+    return false;
+  }
+  if (incomingWords.length >= existingWords.length) {
+    return false;
+  }
+
+  const incomingCoversMostExisting = incomingWords.length / existingWords.length >= 0.75;
+  if (incomingCoversMostExisting) {
+    return false;
+  }
+
+  return (
+    hasContiguousWordWindow(existingWords, incomingWords) ||
+    sharedWordRatio(existingWords, incomingWords) >= 0.6
+  );
+}
+
+function normalizedTranscriptWords(text: string): string[] {
+  return text
+    .trim()
+    .split(/\s+/)
+    .map((word) => word.toLocaleLowerCase('tr-TR').replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, ''))
+    .filter(Boolean);
+}
+
+function hasContiguousWordWindow(words: string[], window: string[]): boolean {
+  if (window.length > words.length) {
+    return false;
+  }
+  for (let index = 0; index <= words.length - window.length; index += 1) {
+    if (window.every((word, offset) => words[index + offset] === word)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function sharedWordRatio(left: string[], right: string[]): number {
+  const leftSet = new Set(left);
+  const rightSet = new Set(right);
+  const denominator = Math.min(leftSet.size, rightSet.size);
+  if (denominator === 0) {
+    return 0;
+  }
+
+  let shared = 0;
+  rightSet.forEach((word) => {
+    if (leftSet.has(word)) {
+      shared += 1;
+    }
+  });
+
+  return shared / denominator;
 }
 
 export function transcriptStatusLabel(status: TranscriptSegmentStatus): string {

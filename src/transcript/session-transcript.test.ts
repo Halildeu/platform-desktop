@@ -87,6 +87,95 @@ describe('session transcript state', () => {
     });
   });
 
+  it('keeps a visible direct-stream draft when the same segment regresses to a short fragment', () => {
+    const recording = startTranscriptSession(initialTranscriptSession(), {
+      sessionId: 'SES-1',
+      meetingId: '22222222-2222-4222-8222-222222222222',
+      deviceId: 'desktop-1',
+      hasLoopback: false,
+      startedAtMs: 1000,
+    });
+
+    const visibleDraft = upsertTranscriptSegment(recording, {
+      id: 'stream:1',
+      speakerLabel: 'Konuşmacı',
+      startedAtMs: 2000,
+      status: 'draft',
+      source: 'direct-stream',
+      text: 'Merhaba sesim geliyor mu beni duyuyor musun',
+      elapsedMs: 640,
+      rms: 0.04,
+      receivedAtMs: 3000,
+    });
+    const regressedDraft = upsertTranscriptSegment(visibleDraft, {
+      id: 'stream:1',
+      speakerLabel: 'Konuşmacı',
+      startedAtMs: 2400,
+      status: 'draft',
+      source: 'direct-stream',
+      text: 'beni duyuyor',
+      elapsedMs: 710,
+      rms: 0.05,
+      receivedAtMs: 3300,
+    });
+
+    expect(regressedDraft.segments).toHaveLength(1);
+    expect(regressedDraft.segments[0]).toMatchObject({
+      id: 'stream:1',
+      status: 'draft',
+      source: 'direct-stream',
+      text: 'Merhaba sesim geliyor mu beni duyuyor musun',
+      startedAtMs: 2000,
+      elapsedMs: 710,
+      rms: 0.05,
+      receivedAtMs: 3300,
+    });
+  });
+
+  it('allows direct-stream drafts to grow and final events to correct shorter text', () => {
+    const recording = startTranscriptSession(initialTranscriptSession(), {
+      sessionId: 'SES-1',
+      meetingId: '22222222-2222-4222-8222-222222222222',
+      deviceId: 'desktop-1',
+      hasLoopback: false,
+      startedAtMs: 1000,
+    });
+
+    const visibleDraft = upsertTranscriptSegment(recording, {
+      id: 'stream:1',
+      speakerLabel: 'Konuşmacı',
+      startedAtMs: 2000,
+      status: 'draft',
+      source: 'direct-stream',
+      text: 'Merhaba sesim geliyor mu',
+    });
+    const longerDraft = upsertTranscriptSegment(visibleDraft, {
+      id: 'stream:1',
+      speakerLabel: 'Konuşmacı',
+      startedAtMs: 2000,
+      status: 'draft',
+      source: 'direct-stream',
+      text: 'Merhaba sesim geliyor mu beni duyuyor musun',
+    });
+    const finalCorrection = upsertTranscriptSegment(longerDraft, {
+      id: 'stream:1',
+      speakerLabel: 'Konuşmacı',
+      startedAtMs: 2000,
+      status: 'final',
+      source: 'direct-stream',
+      text: 'Merhaba sesim geliyor mu?',
+    });
+
+    expect(longerDraft.segments[0]).toMatchObject({
+      status: 'draft',
+      text: 'Merhaba sesim geliyor mu beni duyuyor musun',
+    });
+    expect(finalCorrection.segments[0]).toMatchObject({
+      status: 'final',
+      text: 'Merhaba sesim geliyor mu?',
+    });
+  });
+
   it('keeps terminal and error states explicit', () => {
     const finished = finishTranscriptSession(initialTranscriptSession(), 1781820000999);
     expect(finished.lifecycle).toBe('finished');
