@@ -1323,11 +1323,11 @@ describe('connectLiveSttStream', () => {
     first?.open();
     first?.message({ type: 'ready' });
 
-    stream.send(new Float32Array([0.1, 0.1]));
+    stream.send(new Float32Array([0.002, 0.002]));
     expect(first?.sent).toHaveLength(1);
 
     vi.advanceTimersByTime(12_000);
-    stream.send(new Float32Array([0.2, 0.2]));
+    stream.send(new Float32Array([0.002, 0.002]));
 
     expect(first?.readyState).toBe(FakeWebSocket.CLOSED);
     expect(statuses).toContainEqual(
