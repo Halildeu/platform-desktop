@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import '@testing-library/jest-dom/vitest';
 
@@ -236,6 +236,42 @@ describe('SummaryPanel', () => {
     expect(
       screen.getByText('Toplantıda direct-STT kanıtı ve recorder tekrar denemesi ayrıştırıldı.'),
     ).toBeInTheDocument();
+  });
+
+  it('edits action owner due date and status and exports reviewed actions', async () => {
+    const adapter: ExportAdapter = {
+      copyText: vi.fn().mockResolvedValue(undefined),
+      downloadText: vi.fn(),
+      print: vi.fn(),
+    };
+    render(<SummaryPanel intelligence={readyState()} exportAdapter={adapter} />);
+
+    const actionTitle = 'audio_record rolü yeni token claim özetinde doğrulanacak';
+    await userEvent.clear(screen.getByLabelText(`Sahip: ${actionTitle}`));
+    await userEvent.type(screen.getByLabelText(`Sahip: ${actionTitle}`), 'Halil');
+    fireEvent.change(screen.getByLabelText(`Tarih: ${actionTitle}`), {
+      target: { value: '2026-07-04' },
+    });
+    await userEvent.selectOptions(screen.getByLabelText(`Durum: ${actionTitle}`), 'in_progress');
+
+    expect(screen.getByLabelText(`Sahip: ${actionTitle}`)).toHaveValue('Halil');
+    expect(screen.getByLabelText(`Tarih: ${actionTitle}`)).toHaveValue('2026-07-04');
+    expect(screen.getByLabelText(`Durum: ${actionTitle}`)).toHaveValue('in_progress');
+
+    await userEvent.click(screen.getByRole('button', { name: 'CSV' }));
+    expect(adapter.downloadText).toHaveBeenCalledWith(
+      expect.stringMatching(/^meeting-intelligence-actions-.*\.csv$/),
+      expect.stringContaining('Halil'),
+      'text/csv',
+    );
+    const csv = String(vi.mocked(adapter.downloadText).mock.calls.at(-1)?.[1]);
+    expect(csv).toContain('2026-07-04');
+    expect(csv).toContain('İlerliyor');
+
+    await userEvent.click(screen.getByRole('button', { name: 'Orijinal aksiyonlar' }));
+    expect(screen.getByText('Aksiyonlar orijinal haline döndü.')).toBeInTheDocument();
+    expect(screen.getByLabelText(`Sahip: ${actionTitle}`)).toHaveValue('Zeynep');
+    expect(screen.getByLabelText(`Durum: ${actionTitle}`)).toHaveValue('open');
   });
 
   it('offers source transcript export while meeting intelligence is still waiting', async () => {

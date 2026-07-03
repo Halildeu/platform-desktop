@@ -7,6 +7,8 @@ import {
   decisionStatusLabel,
   formatCitationTime,
   intelligenceStatusLabel,
+  type ActionItem,
+  type ActionStatus,
   type IntelligenceCitation,
   type MeetingIntelligenceResult,
   type MeetingIntelligenceState,
@@ -77,6 +79,10 @@ const electronMeetingAiSubmitAdapter: MeetingAiSubmitAdapter = {
     return response as MeetingAiAnalyzeResponse;
   },
 };
+
+const ACTION_STATUS_OPTIONS: ActionStatus[] = ['open', 'in_progress', 'done', 'blocked'];
+
+type ActionReviewDraft = Partial<Pick<ActionItem, 'assignee' | 'dueDate' | 'status'>>;
 
 function transcriptSegments(transcript: TranscriptSessionState | undefined): TranscriptSegment[] {
   return (
@@ -155,6 +161,24 @@ function formatPercent(value: number): string {
   return `%${Math.round(value * 100)}`;
 }
 
+function applyActionReviewDrafts(
+  actionItems: ActionItem[],
+  drafts: Record<string, ActionReviewDraft>,
+): ActionItem[] {
+  return actionItems.map((item) => {
+    const draft = drafts[item.id];
+    if (!draft) {
+      return item;
+    }
+    return {
+      ...item,
+      assignee: draft.assignee ?? item.assignee,
+      dueDate: draft.dueDate ?? item.dueDate,
+      status: draft.status ?? item.status,
+    };
+  });
+}
+
 export function SummaryPanel({
   intelligence,
   transcript,
@@ -174,6 +198,7 @@ export function SummaryPanel({
   const [summaryEditMode, setSummaryEditMode] = useState(false);
   const [summaryDraft, setSummaryDraft] = useState('');
   const [summaryOverride, setSummaryOverride] = useState<string | null>(null);
+  const [actionDrafts, setActionDrafts] = useState<Record<string, ActionReviewDraft>>({});
   const autoSubmitKeyRef = useRef<string | null>(null);
   const transcriptSourceSegments = transcriptSegments(transcript);
   const hasTranscriptSource = transcriptSourceSegments.length > 0;
@@ -211,6 +236,7 @@ export function SummaryPanel({
     ? {
         ...result,
         summaryMarkdown: effectiveSummaryMarkdown,
+        actionItems: applyActionReviewDrafts(result.actionItems, actionDrafts),
       }
     : null;
   const exportIntelligence = displayResult
@@ -234,6 +260,7 @@ export function SummaryPanel({
     setSummaryEditMode(false);
     setSummaryOverride(null);
     setSummaryDraft(result?.summaryMarkdown ?? '');
+    setActionDrafts({});
   }, [resultKey, result?.summaryMarkdown]);
 
   const runExport = async (kind: 'copy' | 'markdown' | 'csv' | 'print'): Promise<void> => {
@@ -399,6 +426,24 @@ export function SummaryPanel({
     setMessage('Özet orijinal haline döndü.');
   };
 
+  const updateActionDraft = (actionId: string, draft: ActionReviewDraft): void => {
+    setActionDrafts((current) => ({
+      ...current,
+      [actionId]: {
+        ...current[actionId],
+        ...draft,
+      },
+    }));
+    setMessage(null);
+  };
+
+  const resetActionDrafts = (): void => {
+    setActionDrafts({});
+    setMessage('Aksiyonlar orijinal haline döndü.');
+  };
+
+  const hasActionDrafts = Object.keys(actionDrafts).length > 0;
+
   return (
     <section className="summary-panel" aria-labelledby="summary-title">
       <div className="panel-header">
@@ -523,8 +568,19 @@ export function SummaryPanel({
             </article>
 
             <article className="summary-section">
-              <h3>Aksiyonlar</h3>
-              {result.actionItems.length > 0 ? (
+              <div className="summary-section-heading">
+                <h3>Aksiyonlar</h3>
+                {hasActionDrafts ? (
+                  <button
+                    className="secondary-action compact-action"
+                    type="button"
+                    onClick={resetActionDrafts}
+                  >
+                    Orijinal aksiyonlar
+                  </button>
+                ) : null}
+              </div>
+              {displayResult && displayResult.actionItems.length > 0 ? (
                 <div className="action-table" role="table" aria-label="Aksiyonlar">
                   <div className="action-row action-row-head" role="row">
                     <span role="columnheader">Aksiyon</span>
@@ -533,12 +589,49 @@ export function SummaryPanel({
                     <span role="columnheader">Durum</span>
                     <span role="columnheader">Kaynak</span>
                   </div>
-                  {result.actionItems.map((item) => (
+                  {displayResult.actionItems.map((item) => (
                     <div className="action-row" role="row" key={item.id}>
                       <span role="cell">{item.title}</span>
-                      <span role="cell">{item.assignee ?? '-'}</span>
-                      <span role="cell">{item.dueDate ?? '-'}</span>
-                      <span role="cell">{actionStatusLabel(item.status)}</span>
+                      <span className="action-field" role="cell">
+                        <input
+                          className="action-input"
+                          aria-label={`Sahip: ${item.title}`}
+                          value={item.assignee ?? ''}
+                          placeholder="-"
+                          onChange={(event) =>
+                            updateActionDraft(item.id, { assignee: event.target.value })
+                          }
+                        />
+                      </span>
+                      <span className="action-field" role="cell">
+                        <input
+                          className="action-input"
+                          aria-label={`Tarih: ${item.title}`}
+                          type="date"
+                          value={item.dueDate ?? ''}
+                          onChange={(event) =>
+                            updateActionDraft(item.id, { dueDate: event.target.value })
+                          }
+                        />
+                      </span>
+                      <span className="action-field" role="cell">
+                        <select
+                          className="action-input"
+                          aria-label={`Durum: ${item.title}`}
+                          value={item.status}
+                          onChange={(event) =>
+                            updateActionDraft(item.id, {
+                              status: event.target.value as ActionStatus,
+                            })
+                          }
+                        >
+                          {ACTION_STATUS_OPTIONS.map((status) => (
+                            <option key={status} value={status}>
+                              {actionStatusLabel(status)}
+                            </option>
+                          ))}
+                        </select>
+                      </span>
                       <span role="cell">{formatCitations(item.citations)}</span>
                     </div>
                   ))}

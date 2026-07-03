@@ -779,6 +779,29 @@ button:disabled {
   font-weight: 750;
 }
 
+.action-field {
+  display: flex;
+}
+
+.action-input {
+  width: 100%;
+  min-width: 0;
+  height: 32px;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  background: #ffffff;
+  color: #111827;
+  font: inherit;
+  font-size: 13px;
+  padding: 0 8px;
+}
+
+.action-input:focus {
+  border-color: #0f766e;
+  box-shadow: 0 0 0 3px rgba(15, 118, 110, 0.12);
+  outline: none;
+}
+
 @media (max-width: 900px) {
   .recorder-shell {
     grid-template-columns: 1fr;
