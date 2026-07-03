@@ -305,9 +305,9 @@ function isRepeatedAlternativeChain(text: string): boolean {
   const dominant = [...counts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0];
   return Boolean(
     dominant &&
-      topFamilyCount >= 4 &&
-      dominantFamilyCountByFragment(fragments, dominant) >= 2 &&
-      fragments.some((fragment) => fragment.length <= 4),
+    topFamilyCount >= 4 &&
+    dominantFamilyCountByFragment(fragments, dominant) >= 2 &&
+    fragments.some((fragment) => fragment.length <= 4),
   );
 }
 
