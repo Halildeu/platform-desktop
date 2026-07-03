@@ -4,7 +4,7 @@ Meeting Intelligence Desktop Client — **Faz 24 bağımsız Meeting Intelligenc
 
 ## Amaç
 
-Toplantı katılımcıları için masaüstü deneyimi (mac/Windows/Linux):
+ERP/CRM bağımsız toplantı zekası için masaüstü deneyimi (mac/Windows/Linux). Belirli bir ERP adı runtime contract'a gömülmez; pilot hedefler entegrasyon adapter'ları üzerinden map edilir.
 
 - 🎙️ Sistem sesi (loopback) + mikrofon yakalama — tüm platform / yüz yüze / hibrit tek client
 - 📡 REST chunk akışı → `audio-gateway-service` (`POST /sessions → /chunks → /finish`)
@@ -16,7 +16,7 @@ Toplantı katılımcıları için masaüstü deneyimi (mac/Windows/Linux):
 
 Faz 24 M6 Integration kapsamında konumlanır.
 
-## Repo Konumu (Workcube ekosistem haritası)
+## Repo Konumu (Platform ekosistem haritası)
 
 | Repo                                                                   | Rol                                                                              |
 | ---------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
@@ -63,7 +63,7 @@ Faz 24 M6 Integration kapsamında konumlanır.
         Renderer canlı UI güncellemesi (status/sonuç; meetingId ile tek dashboard)
 ```
 
-## Reuse — Workcube Ekosisteminden
+## Reuse — Platform Ekosisteminden
 
 - **Keycloak SSO** → OAuth2 PKCE + token refresh (auth-service realm)
 - **api-gateway** → JWT validation + routing
@@ -72,7 +72,7 @@ Faz 24 M6 Integration kapsamında konumlanır.
 - **mfe-meeting** patterns (platform-web) → React component reuse
 - **AG-Grid** → transcript timeline + speaker breakdown
 - **Cross-AI Codex review** → her PR adversarial
-- **Türkçe i18n** → Workcube dil pattern
+- **Türkçe i18n** → Platform dil pattern
 
 ## Yeni Eklemeler (Desktop özel)
 

@@ -8,20 +8,20 @@
 
 ## Proje Bağlamı
 
-`platform-desktop` Workcube ekosisteminde **Faz 24 M6 Integration** kapsamında Electron + React + TypeScript masaüstü Meeting Intelligence client'ı barındırır.
+`platform-desktop`, **Faz 24 M6 Integration** kapsamında ERP/CRM bağımsız Electron + React + TypeScript masaüstü Meeting Intelligence client'ı barındırır.
 
 Repo eşleştirmesi: [README.md](./README.md) "Repo Konumu" tablosu.
 
 ## Ekosistem Reuse
 
-Bu repo **standalone değil** — Workcube altyapısının doğal uzantısı:
+Bu repo **standalone değil** — platform servislerinin doğal uzantısı:
 
 - **Auth**: Keycloak SSO (OAuth2 PKCE flow + custom URI scheme callback `workcube://auth`)
 - **Routing**: `audio-gateway-service` üzerinden tüm STT akışı
 - **WebSocket**: persistent connection — main process
 - **State**: Redux Toolkit (platform-web mfe-meeting pattern reuse)
 - **UI Components**: AG-Grid + mfe-meeting React components
-- **i18n**: Workcube Türkçe pattern
+- **i18n**: Platform Türkçe pattern
 - **Notification**: Faz 23 notification-service event → desktop native push
 
 ## Ana Kurallar (HARD RULE — global ⊕ repo)

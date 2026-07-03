@@ -95,6 +95,9 @@ describe('meeting intelligence state and exports', () => {
     expect(bundle.csvFileName).toMatch(
       /^meeting-intelligence-actions-22222222-2222-4222-8222-222222222222-/,
     );
+    expect(bundle.integrationJsonFileName).toMatch(
+      /^meeting-output-integration-22222222-2222-4222-8222-222222222222-/,
+    );
     expect(bundle.markdown).toContain('# Meeting Intelligence');
     expect(bundle.markdown).toContain('Citation coverage: 100%');
     expect(bundle.markdown).toContain('Desktop recorder fresh login ile tekrar denenecek');
@@ -102,6 +105,31 @@ describe('meeting intelligence state and exports', () => {
     expect(bundle.csv).toContain(
       'action,act-1,audio_record rolü yeni token claim özetinde doğrulanacak,Zeynep,2026-06-30,Açık,high,1:04',
     );
+
+    const integrationPackage = JSON.parse(bundle.integrationJson) as Record<string, unknown>;
+    expect(integrationPackage).toMatchObject({
+      schema_version: 'platform-desktop.meeting-output-integration.v1',
+      package_type: 'reviewed_meeting_intelligence',
+      meeting_id: '22222222-2222-4222-8222-222222222222',
+      session_id: 'SES-1',
+      exported_at: '2026-06-29T14:01:40.000Z',
+      privacy: {
+        classification: 'confidential_meeting_intelligence',
+        raw_audio_included: false,
+        raw_transcript_included: false,
+      },
+      route: {
+        target: 'Generic ERP/CRM meeting workspace',
+        expected_authority: 'backend-gateway / meeting-service integration adapter',
+        desktop_direct_backend_mutation: false,
+      },
+    });
+    expect(bundle.integrationJson).toContain('"import_targets": [');
+    expect(bundle.integrationJson).toContain('"meeting.decisions"');
+    expect(bundle.integrationJson).toContain('"owner": "Zeynep"');
+    expect(bundle.integrationJson).toContain('"status_label": "Karar"');
+    expect(bundle.integrationJson).not.toContain('"transcript"');
+    expect(bundle.integrationJson).not.toContain('"raw_audio":');
   });
 
   it('rejects exports before intelligence output is ready', () => {

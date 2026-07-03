@@ -313,6 +313,73 @@ describe('SummaryPanel', () => {
     expect(screen.getByLabelText(`Durum: ${actionTitle}`)).toHaveValue('open');
   });
 
+  it('exports reviewed output as a generic ERP/CRM handoff package', async () => {
+    const adapter: ExportAdapter = {
+      copyText: vi.fn().mockResolvedValue(undefined),
+      downloadText: vi.fn(),
+      print: vi.fn(),
+    };
+    render(<SummaryPanel intelligence={readyState()} exportAdapter={adapter} />);
+
+    const decisionTitle = 'Recorder fresh login sonrası tekrar denenecek';
+    await userEvent.clear(screen.getByLabelText(`Karar sahibi: ${decisionTitle}`));
+    await userEvent.type(screen.getByLabelText(`Karar sahibi: ${decisionTitle}`), 'Halil');
+    await userEvent.selectOptions(
+      screen.getByLabelText(`Karar durumu: ${decisionTitle}`),
+      'revised',
+    );
+
+    const actionTitle = 'audio_record rolü yeni token claim özetinde doğrulanacak';
+    await userEvent.clear(screen.getByLabelText(`Sahip: ${actionTitle}`));
+    await userEvent.type(screen.getByLabelText(`Sahip: ${actionTitle}`), 'Zeynep Akkılıç');
+    await userEvent.selectOptions(screen.getByLabelText(`Durum: ${actionTitle}`), 'blocked');
+
+    await userEvent.click(screen.getByRole('button', { name: 'Entegrasyon kopyala' }));
+
+    await waitFor(() => {
+      expect(adapter.copyText).toHaveBeenCalledWith(
+        expect.stringContaining('platform-desktop.meeting-output-integration.v1'),
+      );
+    });
+    const integrationPackage = JSON.parse(
+      String(vi.mocked(adapter.copyText).mock.calls.at(-1)?.[0]),
+    ) as {
+      privacy: Record<string, unknown>;
+      route: Record<string, unknown>;
+      decisions: Array<Record<string, unknown>>;
+      action_items: Array<Record<string, unknown>>;
+    };
+
+    expect(integrationPackage.privacy).toMatchObject({
+      raw_audio_included: false,
+      raw_transcript_included: false,
+      classification: 'confidential_meeting_intelligence',
+    });
+    expect(integrationPackage.route).toMatchObject({
+      target: 'Generic ERP/CRM meeting workspace',
+      expected_authority: 'backend-gateway / meeting-service integration adapter',
+      desktop_direct_backend_mutation: false,
+    });
+    expect(integrationPackage.decisions[0]).toMatchObject({
+      owner: 'Halil',
+      status: 'revised',
+      status_label: 'Revize',
+    });
+    expect(integrationPackage.action_items[0]).toMatchObject({
+      assignee: 'Zeynep Akkılıç',
+      status: 'blocked',
+      status_label: 'Blokeli',
+    });
+    expect(screen.getByText('Entegrasyon paketi panoya kopyalandı.')).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Entegrasyon JSON' }));
+    expect(adapter.downloadText).toHaveBeenCalledWith(
+      expect.stringMatching(/^meeting-output-integration-22222222-2222-4222-8222-222222222222-/),
+      expect.stringContaining('"import_targets": ['),
+      'application/json',
+    );
+  });
+
   it('shares reviewed meeting output through clipboard email and Teams drafts', async () => {
     const openExternal = vi.fn();
     const adapter: ExportAdapter = {

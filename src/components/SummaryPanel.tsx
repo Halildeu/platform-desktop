@@ -331,7 +331,9 @@ export function SummaryPanel({
     setShareRecipients('');
   }, [resultKey, result?.summaryMarkdown]);
 
-  const runExport = async (kind: 'copy' | 'markdown' | 'csv' | 'print'): Promise<void> => {
+  const runExport = async (
+    kind: 'copy' | 'markdown' | 'csv' | 'print' | 'integration-copy' | 'integration-json',
+  ): Promise<void> => {
     setMessage(null);
     try {
       const bundle = buildIntelligenceExport(exportIntelligence);
@@ -344,6 +346,16 @@ export function SummaryPanel({
       } else if (kind === 'csv') {
         exportAdapter.downloadText(bundle.csvFileName, bundle.csv, 'text/csv');
         setMessage('CSV indirildi.');
+      } else if (kind === 'integration-copy') {
+        await exportAdapter.copyText(bundle.integrationJson);
+        setMessage('Entegrasyon paketi panoya kopyalandı.');
+      } else if (kind === 'integration-json') {
+        exportAdapter.downloadText(
+          bundle.integrationJsonFileName,
+          bundle.integrationJson,
+          'application/json',
+        );
+        setMessage('Entegrasyon JSON indirildi.');
       } else {
         exportAdapter.print();
         setMessage('PDF için yazdırma penceresi açıldı.');
@@ -628,6 +640,20 @@ export function SummaryPanel({
               onClick={() => void runExport('csv')}
             >
               CSV
+            </button>
+            <button
+              className="secondary-action"
+              type="button"
+              onClick={() => void runExport('integration-copy')}
+            >
+              Entegrasyon kopyala
+            </button>
+            <button
+              className="secondary-action"
+              type="button"
+              onClick={() => void runExport('integration-json')}
+            >
+              Entegrasyon JSON
             </button>
             <button
               className="secondary-action"

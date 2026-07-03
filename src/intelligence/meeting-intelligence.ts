@@ -48,8 +48,10 @@ export interface MeetingIntelligenceState {
 export interface ExportBundle {
   markdown: string;
   csv: string;
+  integrationJson: string;
   markdownFileName: string;
   csvFileName: string;
+  integrationJsonFileName: string;
 }
 
 const STATUS_LABELS: Record<IntelligenceStatus, string> = {
@@ -197,8 +199,10 @@ export function buildIntelligenceExport(
   return {
     markdown: buildMarkdown(state),
     csv: buildCsv(state.result),
+    integrationJson: buildIntegrationJson(state, nowMs),
     markdownFileName: `meeting-intelligence-${safeMeetingId}-${stamp}.md`,
     csvFileName: `meeting-intelligence-actions-${safeMeetingId}-${stamp}.csv`,
+    integrationJsonFileName: `meeting-output-integration-${safeMeetingId}-${stamp}.json`,
   };
 }
 
@@ -275,6 +279,75 @@ function buildCsv(result: MeetingIntelligenceResult): string {
     ]),
   ];
   return `${rows.map((row) => row.map(csvCell).join(',')).join('\n')}\n`;
+}
+
+function buildIntegrationJson(state: MeetingIntelligenceState, nowMs: number): string {
+  const result = state.result;
+  if (!result) {
+    throw new Error('Meeting intelligence output is not ready');
+  }
+
+  return `${JSON.stringify(
+    {
+      schema_version: 'platform-desktop.meeting-output-integration.v1',
+      package_type: 'reviewed_meeting_intelligence',
+      route: {
+        target: 'Generic ERP/CRM meeting workspace',
+        expected_authority: 'backend-gateway / meeting-service integration adapter',
+        desktop_direct_backend_mutation: false,
+      },
+      privacy: {
+        classification: 'confidential_meeting_intelligence',
+        raw_audio_included: false,
+        raw_transcript_included: false,
+        contains_ai_summary: true,
+        contains_reviewed_actions: true,
+        contains_reviewed_decisions: true,
+      },
+      meeting_id: state.meetingId,
+      session_id: state.sessionId,
+      exported_at: new Date(nowMs).toISOString(),
+      generated_at: new Date(result.generatedAtMs).toISOString(),
+      provider: result.providerLabel ?? null,
+      citation_coverage: result.citationCoverage,
+      import_targets: ['meeting.summary', 'meeting.decisions', 'meeting.actions'],
+      summary_markdown: result.summaryMarkdown.trim(),
+      decisions: result.decisions.map((decision) => ({
+        id: decision.id,
+        title: decision.title,
+        owner: decision.owner ?? null,
+        status: decision.status,
+        status_label: decisionStatusLabel(decision.status),
+        citations: decision.citations.map(integrationCitation),
+      })),
+      action_items: result.actionItems.map((item) => ({
+        id: item.id,
+        title: item.title,
+        assignee: item.assignee ?? null,
+        due_date: item.dueDate ?? null,
+        status: item.status,
+        status_label: actionStatusLabel(item.status),
+        priority: item.priority ?? null,
+        citations: item.citations.map(integrationCitation),
+      })),
+    },
+    null,
+    2,
+  )}\n`;
+}
+
+function integrationCitation(citation: IntelligenceCitation): {
+  segment_id: string;
+  started_at_ms: number;
+  ended_at_ms: number | null;
+  label: string;
+} {
+  return {
+    segment_id: citation.segmentId,
+    started_at_ms: citation.startedAtMs,
+    ended_at_ms: citation.endedAtMs ?? null,
+    label: formatCitationTime(citation),
+  };
 }
 
 function citationSuffix(citations: IntelligenceCitation[]): string {

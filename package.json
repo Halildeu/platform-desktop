@@ -2,7 +2,7 @@
   "name": "platform-desktop",
   "version": "0.1.0",
   "description": "Meeting Intelligence Desktop Client — Electron + React + TypeScript",
-  "author": "Workcube Platform Team",
+  "author": "Platform Team",
   "main": "dist-electron/main.js",
   "private": true,
   "type": "module",
@@ -66,8 +66,8 @@
     "vitest": "^4.1.9"
   },
   "build": {
-    "appId": "com.workcube.meeting-intelligence",
-    "productName": "Workcube Meeting",
+    "appId": "com.acik.platform.meeting-intelligence",
+    "productName": "Platform Meeting Intelligence",
     "directories": {
       "output": "release"
     },
