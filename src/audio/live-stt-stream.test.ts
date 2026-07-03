@@ -938,7 +938,7 @@ describe('connectLiveSttStream', () => {
     stream.close();
   });
 
-  it('replaces the draft when a shorter final is an unrelated correction fragment', () => {
+  it('replaces a medium draft when a shorter final is a related correction fragment', () => {
     vi.useFakeTimers();
     vi.stubGlobal('WebSocket', FakeWebSocket);
     const events: LiveSttTranscriptEvent[] = [];
@@ -972,6 +972,45 @@ describe('connectLiveSttStream', () => {
       id: 'stream:0',
       status: 'final',
       text: 'Kısmın yarısının neden yok?',
+    });
+
+    stream.close();
+  });
+
+  it('keeps a longer stable draft when a short final has little speech overlap', () => {
+    vi.useFakeTimers();
+    vi.stubGlobal('WebSocket', FakeWebSocket);
+    const events: LiveSttTranscriptEvent[] = [];
+
+    const stream = connectLiveSttStream('ws://127.0.0.1:18220/ws/stream', {
+      onTranscriptEvent: (event) => events.push(event),
+    });
+    const ws = FakeWebSocket.instances[0];
+
+    ws?.open();
+    ws?.message({ type: 'ready' });
+    ws?.message({
+      type: 'partial',
+      seq: 0,
+      confirmed: '',
+      tentative: 'Konuşulanların çok büyük kısmı yazılmıyor üstüne yazıyor gibi sürekli',
+      elapsed_ms: 180,
+      rms: 0.04,
+      source: 'medium',
+    });
+    vi.advanceTimersByTime(700);
+    ws?.message({
+      type: 'final',
+      seq: 0,
+      text: 'Görüşmek üzere.',
+      elapsed_ms: 760,
+      rms: 0.04,
+    });
+
+    expect(events.at(-1)).toMatchObject({
+      id: 'stream:0',
+      status: 'final',
+      text: 'Konuşulanların çok büyük kısmı yazılmıyor üstüne yazıyor gibi sürekli',
     });
 
     stream.close();
@@ -1134,7 +1173,7 @@ describe('connectLiveSttStream', () => {
     stream.close();
   });
 
-  it('drops Turkish inflected carry-over text from consecutive final segments', () => {
+  it('keeps short Turkish inflected repeats when dropping them would remove the subject', () => {
     vi.stubGlobal('WebSocket', FakeWebSocket);
     const events: LiveSttTranscriptEvent[] = [];
 
@@ -1163,7 +1202,7 @@ describe('connectLiveSttStream', () => {
     expect(events.at(-1)).toMatchObject({
       id: 'stream:1',
       status: 'final',
-      text: 'neden yok?',
+      text: 'Söylediklerimin yarısını neden yok?',
     });
 
     stream.close();
@@ -1402,7 +1441,11 @@ describe('connectLiveSttStream', () => {
     stream.send(new Float32Array([0.002, 0.002]));
     expect(first?.sent).toHaveLength(1);
 
-    vi.advanceTimersByTime(45_000);
+    vi.advanceTimersByTime(11_999);
+    stream.send(new Float32Array([0.002, 0.002]));
+    expect(first?.readyState).toBe(FakeWebSocket.OPEN);
+
+    vi.advanceTimersByTime(1);
     stream.send(new Float32Array([0.002, 0.002]));
 
     expect(first?.readyState).toBe(FakeWebSocket.CLOSED);

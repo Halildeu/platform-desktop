@@ -79,11 +79,15 @@ const MAX_RECONNECT_ATTEMPTS = 60;
 const RECONNECT_BASE_DELAY_MS = 250;
 const RECONNECT_MAX_DELAY_MS = 2_000;
 const ACTIVE_AUDIO_RMS = 0.0008;
-const ACTIVE_AUDIO_TRANSCRIPT_STALL_MS = 45_000;
+const ACTIVE_AUDIO_TRANSCRIPT_STALL_MS = 12_000;
 const MIN_FALLBACK_DRAFT_WORDS = 2;
 const MAX_RECENT_FINAL_WORDS = 24;
 const ROLLING_CONTINUATION_MIN_PREVIOUS_WORDS = 4;
 const ROLLING_CONTINUATION_MIN_NEXT_WORDS = 1;
+const CARRY_OVER_DROP_MIN_NEW_WORDS = 3;
+const SHORT_FINAL_PRESERVE_MIN_PREVIOUS_WORDS = 8;
+const SHORT_FINAL_PRESERVE_MAX_RATIO = 0.55;
+const SHORT_FINAL_PRESERVE_MAX_SHARED_RATIO = 0.35;
 const OVERLAP_SUFFIXES = [
   'lerinizden',
   'larınızdan',
@@ -571,11 +575,36 @@ function mergeFinalTranscript(previousText: string, finalText: string): string {
     return [...previousRawWords, ...finalRawWords.slice(overlap)].join(' ');
   }
 
+  if (shouldPreserveStableDraftForShortFinal(previousRawWords, finalRawWords)) {
+    return previous;
+  }
+
   if (finalWords.length <= previousWords.length + 1 && finalWords.length <= 3) {
     return previous;
   }
 
   return final;
+}
+
+function shouldPreserveStableDraftForShortFinal(
+  previousRawWords: string[],
+  finalRawWords: string[],
+): boolean {
+  if (previousRawWords.length < SHORT_FINAL_PRESERVE_MIN_PREVIOUS_WORDS) {
+    return false;
+  }
+  if (finalRawWords.length === 0) {
+    return true;
+  }
+  if (finalRawWords.length / previousRawWords.length > SHORT_FINAL_PRESERVE_MAX_RATIO) {
+    return false;
+  }
+
+  const sharedFamilyRatio = sharedTokenRatio(
+    normalizedFamilies(previousRawWords),
+    normalizedFamilies(finalRawWords),
+  );
+  return sharedFamilyRatio <= SHORT_FINAL_PRESERVE_MAX_SHARED_RATIO;
 }
 
 function dropLeadingTailOverlap(
@@ -601,6 +630,9 @@ function dropLeadingTailOverlap(
     return next;
   }
   if (overlap >= nextRawWords.length) {
+    return next;
+  }
+  if (overlap > 1 && nextRawWords.length - overlap < CARRY_OVER_DROP_MIN_NEW_WORDS) {
     return next;
   }
   return nextRawWords.slice(overlap).join(' ');
