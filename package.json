@@ -94,7 +94,11 @@
       "hardenedRuntime": true,
       "gatekeeperAssess": false,
       "entitlements": "build/entitlements.mac.plist",
-      "entitlementsInherit": "build/entitlements.mac.plist"
+      "entitlementsInherit": "build/entitlements.mac.plist",
+      "extendInfo": {
+        "NSMicrophoneUsageDescription": "Workcube Meeting needs microphone access to record meeting audio for live transcription.",
+        "NSScreenCaptureUsageDescription": "Workcube Meeting needs screen recording permission to capture system audio for meeting transcription."
+      }
     },
     "win": {
       "target": [
