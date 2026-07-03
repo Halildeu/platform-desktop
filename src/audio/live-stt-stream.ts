@@ -78,6 +78,7 @@ const MAX_PROGRESSIVE_PARTIAL_STEPS = 12;
 const MAX_RECONNECT_ATTEMPTS = 8;
 const RECONNECT_BASE_DELAY_MS = 250;
 const RECONNECT_MAX_DELAY_MS = 2_000;
+const MIN_FALLBACK_DRAFT_WORDS = 4;
 
 function parseEvent(data: unknown): LiveSttServerEvent | null {
   if (typeof data !== 'string') {
@@ -184,6 +185,10 @@ function repeatedFamilyCount(families: string[]): number {
   return counts.size === 0 ? 0 : Math.max(...counts.values());
 }
 
+function dominantFamilyCountByFragment(fragments: string[][], dominantFamily: string): number {
+  return fragments.filter((fragment) => fragment.includes(dominantFamily)).length;
+}
+
 function sentenceFragments(text: string): string[][] {
   return text
     .split(/[.!?…]+|\b(?:ya|yani)\b/giu)
@@ -268,12 +273,13 @@ function isRepeatedDecodeChain(text: string): boolean {
 
 function isRepeatedAlternativeChain(text: string): boolean {
   const families = normalizedFamilies(splitWords(text));
-  if (families.length < 8 || repeatedFamilyCount(families) < 4) {
+  const topFamilyCount = repeatedFamilyCount(families);
+  if (families.length < 8 || topFamilyCount < 3) {
     return false;
   }
 
   const fragments = sentenceFragments(text);
-  if (fragments.length < 3) {
+  if (fragments.length < 2) {
     return false;
   }
 
@@ -286,13 +292,23 @@ function isRepeatedAlternativeChain(text: string): boolean {
       if (shared >= 0.6) {
         similarPairs += 1;
       }
-      if (similarPairs >= 2) {
+      if (similarPairs >= (fragments.length >= 3 ? 2 : 1)) {
         return true;
       }
     }
   }
 
-  return false;
+  const counts = new Map<string, number>();
+  for (const family of families) {
+    counts.set(family, (counts.get(family) ?? 0) + 1);
+  }
+  const dominant = [...counts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0];
+  return Boolean(
+    dominant &&
+      topFamilyCount >= 4 &&
+      dominantFamilyCountByFragment(fragments, dominant) >= 2 &&
+      fragments.some((fragment) => fragment.length <= 4),
+  );
 }
 
 function isUnstableFinalText(text: string): boolean {
@@ -581,7 +597,11 @@ export function connectLiveSttStream(
           segmentKnownText.get(event.seq) ?? segmentDraftText.get(event.seq) ?? '';
         let finalText = event.text;
         if (isUnstableFinalText(event.text)) {
-          if (!previousText || isUnstableFinalText(previousText)) {
+          if (
+            !previousText ||
+            splitWords(previousText).length < MIN_FALLBACK_DRAFT_WORDS ||
+            isUnstableFinalText(previousText)
+          ) {
             return;
           }
           finalText = previousText;

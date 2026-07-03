@@ -364,6 +364,30 @@ describe('connectLiveSttStream', () => {
     stream.close();
   });
 
+  it('drops live final alternative chains observed from rolling Turkish word-flow smoke', () => {
+    vi.stubGlobal('WebSocket', FakeWebSocket);
+    const events: LiveSttTranscriptEvent[] = [];
+
+    const stream = connectLiveSttStream('ws://127.0.0.1:18220/ws/stream', {
+      onTranscriptEvent: (event) => events.push(event),
+    });
+    const ws = FakeWebSocket.instances[0];
+
+    ws?.open();
+    ws?.message({ type: 'ready' });
+    ws?.message({
+      type: 'final',
+      seq: 0,
+      text: 'Akşama aktif diyorsun Akşam aktif diyorsun ya Akşama aktif diyorsun yani Akışa aktif diyorsun yani. bakışı aktif diyorsun yani.',
+      elapsed_ms: 760,
+      rms: 0.04,
+    });
+
+    expect(events).toEqual([]);
+
+    stream.close();
+  });
+
   it('drops inflected near-duplicate final alternatives when no stable draft exists', () => {
     vi.stubGlobal('WebSocket', FakeWebSocket);
     const events: LiveSttTranscriptEvent[] = [];
@@ -428,7 +452,7 @@ describe('connectLiveSttStream', () => {
       type: 'partial',
       seq: 0,
       confirmed: '',
-      tentative: 'Kelime akışı aktif',
+      tentative: 'Kelime akışı aktif görünüyor',
       elapsed_ms: 180,
       rms: 0.04,
       source: 'medium',
@@ -445,7 +469,7 @@ describe('connectLiveSttStream', () => {
     expect(events.at(-1)).toMatchObject({
       id: 'stream:0',
       status: 'final',
-      text: 'Kelime akışı aktif',
+      text: 'Kelime akışı aktif görünüyor',
     });
 
     stream.close();
@@ -495,7 +519,7 @@ describe('connectLiveSttStream', () => {
       type: 'partial',
       seq: 0,
       confirmed: '',
-      tentative: 'Kelime akışı aktif',
+      tentative: 'Kelime akışı aktif görünüyor',
       elapsed_ms: 180,
       rms: 0.04,
       source: 'medium',
@@ -512,8 +536,49 @@ describe('connectLiveSttStream', () => {
     expect(events.at(-1)).toMatchObject({
       id: 'stream:0',
       status: 'final',
-      text: 'Kelime akışı aktif',
+      text: 'Kelime akışı aktif görünüyor',
     });
+
+    stream.close();
+  });
+
+  it('does not finalize a short draft when the final payload is a repetitive decode loop', () => {
+    vi.useFakeTimers();
+    vi.stubGlobal('WebSocket', FakeWebSocket);
+    const events: LiveSttTranscriptEvent[] = [];
+
+    const stream = connectLiveSttStream('ws://127.0.0.1:18220/ws/stream', {
+      onTranscriptEvent: (event) => events.push(event),
+    });
+    const ws = FakeWebSocket.instances[0];
+
+    ws?.open();
+    ws?.message({ type: 'ready' });
+    ws?.message({
+      type: 'partial',
+      seq: 0,
+      confirmed: '',
+      tentative: 'Böyle...',
+      elapsed_ms: 180,
+      rms: 0.04,
+      source: 'medium',
+    });
+    vi.advanceTimersByTime(140);
+    ws?.message({
+      type: 'final',
+      seq: 0,
+      text: 'Akşama aktif diyorsun Akşam aktif diyorsun ya Akşama aktif diyorsun yani Akışa aktif diyorsun yani.',
+      elapsed_ms: 760,
+      rms: 0.04,
+    });
+
+    expect(events).toEqual([
+      expect.objectContaining({
+        id: 'stream:0',
+        status: 'draft',
+        text: 'Böyle...',
+      }),
+    ]);
 
     stream.close();
   });
