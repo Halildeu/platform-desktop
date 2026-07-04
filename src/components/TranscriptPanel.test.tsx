@@ -246,7 +246,7 @@ describe('TranscriptPanel', () => {
       speakerLabel: 'Konuşmacı 1',
       startedAtMs: 1781820003000,
       status: 'final',
-      text: 'İlk konuşma geldi',
+      text: 'İlk konuşma geldi ve müşteri aksiyonları net şekilde kaydedildi',
       source: 'direct-stream',
       receivedAtMs: 1781820030123,
     });
@@ -255,7 +255,7 @@ describe('TranscriptPanel', () => {
       speakerLabel: 'Konuşmacı 2',
       startedAtMs: 1781820060000,
       status: 'final',
-      text: 'İkinci konuşma geldi',
+      text: 'İkinci konuşma geldi kararlar ve sahipler doğrulandı',
       source: 'gateway-events',
       receivedAtMs: 1781820061123,
     });
@@ -278,7 +278,8 @@ describe('TranscriptPanel', () => {
     const flowHealth = screen.getByLabelText('Transkript akış kalitesi');
     expect(within(flowHealth).getByText('Akış takipte')).toBeInTheDocument();
     expect(within(flowHealth).getByText('1.9 satır/dk')).toBeInTheDocument();
-    expect(within(flowHealth).getByText('6')).toBeInTheDocument();
+    expect(within(flowHealth).getByText('16')).toBeInTheDocument();
+    expect(within(flowHealth).getByText('15 kelime/dk')).toBeInTheDocument();
     expect(within(flowHealth).getByText('Direct 1 / Gateway 1')).toBeInTheDocument();
     expect(
       within(flowHealth).getByText('Ses ve transcript zamanı birlikte ilerliyor.'),
@@ -617,6 +618,7 @@ describe('TranscriptPanel', () => {
     expect(snapshot).toContain('audioRms=0.026');
     expect(snapshot).toContain('flow.health=Akış takipte');
     expect(snapshot).toContain('flow.segmentDensityPerMinute=-');
+    expect(snapshot).toContain('flow.wordsPerMinute=-');
     expect(snapshot).toContain('segments.total=1');
     expect(snapshot).toContain('segments.draft=1');
     expect(snapshot).toContain('segments.direct=1');
@@ -741,6 +743,59 @@ describe('TranscriptPanel', () => {
     expect(
       within(flowHealth).getByText(
         'Ses zamanı metinden önde; stream backlog, ağ veya model kuyruğu kontrol edilmeli.',
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it('flags low word coverage when audio is active but transcript text is sparse', () => {
+    const recording = startTranscriptSession(initialTranscriptSession(), {
+      sessionId: 'SES-1',
+      meetingId: '22222222-2222-4222-8222-222222222222',
+      deviceId: 'desktop-1',
+      hasLoopback: false,
+      startedAtMs: 1781820000000,
+    });
+    const withFirstSparseSegment = upsertTranscriptSegment(recording, {
+      id: 'seg-1',
+      speakerLabel: 'Konuşmacı',
+      startedAtMs: 1781820010000,
+      status: 'draft',
+      text: 'Merhaba',
+      source: 'direct-stream',
+      receivedAtMs: 1781820010200,
+    });
+    const withSparseTranscript = upsertTranscriptSegment(withFirstSparseSegment, {
+      id: 'seg-2',
+      speakerLabel: 'Konuşmacı',
+      startedAtMs: 1781820058000,
+      status: 'draft',
+      text: 'Tamam',
+      source: 'direct-stream',
+      receivedAtMs: 1781820059200,
+    });
+
+    render(
+      <TranscriptPanel
+        session={withSparseTranscript}
+        stream={{
+          directConfigured: true,
+          directReady: true,
+          directActive: true,
+          audioRms: 0.032,
+          audioActive: true,
+          lastAudioAtMs: 1781820060000,
+          disabledReason: null,
+        }}
+      />,
+    );
+
+    const flowHealth = screen.getByLabelText('Transkript akış kalitesi');
+    expect(within(flowHealth).getByText('Metin kapsamı düşük')).toBeInTheDocument();
+    expect(within(flowHealth).getByText('2')).toBeInTheDocument();
+    expect(within(flowHealth).getByText('2.0 kelime/dk')).toBeInTheDocument();
+    expect(
+      within(flowHealth).getByText(
+        'Ses var ama kelime üretim hızı düşük; konuşmanın önemli kısmı transcript akışına düşmüyor olabilir.',
       ),
     ).toBeInTheDocument();
   });

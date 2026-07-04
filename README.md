@@ -169,8 +169,8 @@ The recorder now exposes two user-facing workspaces:
 
 - **Canlı Transkript**: recorder session metadata, lifecycle state, transcript timeline states
   (`draft`, `stabilizing`, `final`, `revised`), live stream/audio diagnostics, review filters,
-  flow-health coverage signals, stable-row review actions, and an honest empty state while no
-  transcript stream is connected.
+  flow-health coverage signals, word-rate coverage warnings, stable-row review actions, and an
+  honest empty state while no transcript stream is connected.
 - **Toplantı Çıktısı**: typed meeting-intelligence result surface for summary, decisions,
   action items, citation timestamps, source readiness, Meeting AI source-package export,
   Markdown/TXT/CSV/JSON export, share drafts, native print/PDF flow, generic ERP/CRM

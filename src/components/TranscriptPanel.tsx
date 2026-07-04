@@ -14,6 +14,8 @@ const TRANSCRIPT_LAG_WARN_MS = 5_000;
 const TRANSCRIPT_DENSITY_READY_MIN_MS = 10_000;
 const TRANSCRIPT_LOW_DENSITY_WARN_MS = 15_000;
 const TRANSCRIPT_LOW_DENSITY_SEGMENTS_PER_MINUTE = 1;
+const TRANSCRIPT_LOW_WORD_RATE_WARN_MS = 20_000;
+const TRANSCRIPT_LOW_WORDS_PER_MINUTE = 8;
 const SPEAKER_COLORS = ['#0f766e', '#2563eb', '#b45309', '#7c3aed', '#be123c', '#0f766e'];
 
 type TranscriptFilter =
@@ -387,6 +389,7 @@ interface TranscriptFlowHealth {
   words: number;
   spanMs: number | null;
   segmentsPerMinute: number | null;
+  wordsPerMinute: number | null;
   directCount: number;
   gatewayCount: number;
 }
@@ -618,6 +621,13 @@ function transcriptSegmentsPerMinute(segmentCount: number, spanMs: number | null
   return segmentCount / (spanMs / 60_000);
 }
 
+function transcriptWordsPerMinute(words: number, spanMs: number | null): number | null {
+  if (spanMs === null || spanMs < TRANSCRIPT_DENSITY_READY_MIN_MS) {
+    return null;
+  }
+  return words / (spanMs / 60_000);
+}
+
 function formatTranscriptDensity(value: number | null): string {
   if (value === null) {
     return 'Ölçüm başlıyor';
@@ -626,6 +636,16 @@ function formatTranscriptDensity(value: number | null): string {
     return `${Math.round(value)} satır/dk`;
   }
   return `${value.toFixed(1)} satır/dk`;
+}
+
+function formatTranscriptWordRate(value: number | null): string {
+  if (value === null) {
+    return 'Ölçüm başlıyor';
+  }
+  if (value >= 10) {
+    return `${Math.round(value)} kelime/dk`;
+  }
+  return `${value.toFixed(1)} kelime/dk`;
 }
 
 function transcriptFlowHealth(
@@ -638,6 +658,7 @@ function transcriptFlowHealth(
   const words = transcriptWordTotal(session);
   const spanMs = transcriptObservationSpanMs(session, stream, lastTranscriptAtMs);
   const segmentsPerMinute = transcriptSegmentsPerMinute(session.segments.length, spanMs);
+  const wordsPerMinute = transcriptWordsPerMinute(words, spanMs);
   const lagMs = streamLagMs(stream, lastTranscriptAtMs, recordingActive);
 
   if (!recordingActive) {
@@ -651,6 +672,7 @@ function transcriptFlowHealth(
       words,
       spanMs,
       segmentsPerMinute,
+      wordsPerMinute,
       directCount: sourceCounts.direct,
       gatewayCount: sourceCounts.gateway,
     };
@@ -665,6 +687,7 @@ function transcriptFlowHealth(
       words,
       spanMs,
       segmentsPerMinute,
+      wordsPerMinute,
       directCount: sourceCounts.direct,
       gatewayCount: sourceCounts.gateway,
     };
@@ -678,6 +701,7 @@ function transcriptFlowHealth(
       words,
       spanMs,
       segmentsPerMinute,
+      wordsPerMinute,
       directCount: sourceCounts.direct,
       gatewayCount: sourceCounts.gateway,
     };
@@ -691,6 +715,28 @@ function transcriptFlowHealth(
       words,
       spanMs,
       segmentsPerMinute,
+      wordsPerMinute,
+      directCount: sourceCounts.direct,
+      gatewayCount: sourceCounts.gateway,
+    };
+  }
+
+  if (
+    stream?.audioActive &&
+    spanMs !== null &&
+    spanMs >= TRANSCRIPT_LOW_WORD_RATE_WARN_MS &&
+    wordsPerMinute !== null &&
+    wordsPerMinute < TRANSCRIPT_LOW_WORDS_PER_MINUTE
+  ) {
+    return {
+      label: 'Metin kapsamı düşük',
+      detail:
+        'Ses var ama kelime üretim hızı düşük; konuşmanın önemli kısmı transcript akışına düşmüyor olabilir.',
+      level: 'warn',
+      words,
+      spanMs,
+      segmentsPerMinute,
+      wordsPerMinute,
       directCount: sourceCounts.direct,
       gatewayCount: sourceCounts.gateway,
     };
@@ -711,6 +757,7 @@ function transcriptFlowHealth(
       words,
       spanMs,
       segmentsPerMinute,
+      wordsPerMinute,
       directCount: sourceCounts.direct,
       gatewayCount: sourceCounts.gateway,
     };
@@ -724,6 +771,7 @@ function transcriptFlowHealth(
       words,
       spanMs,
       segmentsPerMinute,
+      wordsPerMinute,
       directCount: sourceCounts.direct,
       gatewayCount: sourceCounts.gateway,
     };
@@ -739,6 +787,7 @@ function transcriptFlowHealth(
     words,
     spanMs,
     segmentsPerMinute,
+    wordsPerMinute,
     directCount: sourceCounts.direct,
     gatewayCount: sourceCounts.gateway,
   };
@@ -872,6 +921,7 @@ function buildTranscriptDiagnostics(
     `lagMs=${lagMs ?? '-'}`,
     `flow.health=${health.label}`,
     `flow.segmentDensityPerMinute=${formatDiagnosticNumber(health.segmentsPerMinute, 2)}`,
+    `flow.wordsPerMinute=${formatDiagnosticNumber(health.wordsPerMinute, 2)}`,
     `segments.total=${session.segments.length}`,
     `segments.draft=${statusCounts.draft}`,
     `segments.stabilizing=${statusCounts.stabilizing}`,
@@ -1087,6 +1137,10 @@ export function TranscriptPanel({
         <div>
           <span>Kelime</span>
           <strong>{flowHealth.words}</strong>
+        </div>
+        <div>
+          <span>Kelime/dk</span>
+          <strong>{formatTranscriptWordRate(flowHealth.wordsPerMinute)}</strong>
         </div>
         <div>
           <span>Kaynak</span>
