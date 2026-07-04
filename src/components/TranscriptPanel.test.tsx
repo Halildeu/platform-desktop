@@ -233,6 +233,115 @@ describe('TranscriptPanel', () => {
     expect(articles[1]).not.toHaveClass('segment-live');
   });
 
+  it('searches long transcript rows without changing newest-first order', async () => {
+    const recording = startTranscriptSession(initialTranscriptSession(), {
+      sessionId: 'SES-1',
+      meetingId: '22222222-2222-4222-8222-222222222222',
+      deviceId: 'desktop-1',
+      hasLoopback: false,
+      startedAtMs: 1781820000123,
+    });
+    const withFirst = upsertTranscriptSegment(recording, {
+      id: 'seg-1',
+      speakerLabel: 'Konuşmacı 1',
+      startedAtMs: 1781820030000,
+      status: 'final',
+      text: 'Bütçe onayı ve müşteri aksiyonu konuşuldu',
+      source: 'gateway-events',
+    });
+    const withSecond = upsertTranscriptSegment(withFirst, {
+      id: 'seg-2',
+      speakerLabel: 'Konuşmacı 2',
+      startedAtMs: 1781820040000,
+      status: 'final',
+      text: 'Risk listesi tekrar değerlendirildi',
+      source: 'direct-stream',
+    });
+    const withThird = upsertTranscriptSegment(withSecond, {
+      id: 'seg-3',
+      speakerLabel: 'Konuşmacı 3',
+      startedAtMs: 1781820050000,
+      status: 'revised',
+      text: 'Revize karar satırı kesinleşti',
+      source: 'direct-stream',
+    });
+
+    render(<TranscriptPanel session={withThird} />);
+
+    expect(
+      screen.getByText('Görünen 3/3 · Final 2 · Revize 1 · Taslak 0 · Direct 2 · Gateway 1'),
+    ).toBeInTheDocument();
+    expect(screen.getAllByRole('article')[0]).toHaveTextContent('Revize karar satırı');
+
+    await userEvent.type(screen.getByPlaceholderText('Transkriptte ara'), 'bütçe');
+
+    const searchedArticles = screen.getAllByRole('article');
+    expect(searchedArticles).toHaveLength(1);
+    expect(searchedArticles[0]).toHaveTextContent('Bütçe onayı');
+    expect(
+      screen.getByText('Görünen 1/3 · Final 2 · Revize 1 · Taslak 0 · Direct 2 · Gateway 1'),
+    ).toBeInTheDocument();
+
+    await userEvent.clear(screen.getByPlaceholderText('Transkriptte ara'));
+    await userEvent.type(screen.getByPlaceholderText('Transkriptte ara'), 'bulunmayan');
+
+    expect(screen.queryAllByRole('article')).toHaveLength(0);
+    expect(screen.getByText('Filtreyle eşleşen satır yok')).toBeInTheDocument();
+  });
+
+  it('filters transcript rows by review status and source', async () => {
+    const recording = startTranscriptSession(initialTranscriptSession(), {
+      sessionId: 'SES-1',
+      meetingId: '22222222-2222-4222-8222-222222222222',
+      deviceId: 'desktop-1',
+      hasLoopback: false,
+      startedAtMs: 1781820000123,
+    });
+    const withDraft = upsertTranscriptSegment(recording, {
+      id: 'seg-draft',
+      speakerLabel: 'Konuşmacı',
+      startedAtMs: 1781820030000,
+      status: 'draft',
+      text: 'Canlı direct draft satırı',
+      source: 'direct-stream',
+    });
+    const withFinal = upsertTranscriptSegment(withDraft, {
+      id: 'seg-final',
+      speakerLabel: 'Konuşmacı',
+      startedAtMs: 1781820040000,
+      status: 'final',
+      text: 'Gateway final toplantı satırı',
+      source: 'gateway-events',
+    });
+    const withRevised = upsertTranscriptSegment(withFinal, {
+      id: 'seg-revised',
+      speakerLabel: 'Konuşmacı',
+      startedAtMs: 1781820050000,
+      status: 'revised',
+      text: 'Direct revize toplantı satırı',
+      source: 'direct-stream',
+    });
+
+    render(<TranscriptPanel session={withRevised} />);
+
+    await userEvent.click(screen.getByRole('button', { name: 'Revizeler' }));
+
+    expect(screen.getAllByRole('article')).toHaveLength(1);
+    expect(screen.getByText('Direct revize toplantı satırı')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Revizeler' })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
+
+    await userEvent.click(screen.getByRole('button', { name: 'Direct kaynak' }));
+
+    const directArticles = screen.getAllByRole('article');
+    expect(directArticles).toHaveLength(2);
+    expect(directArticles[0]).toHaveTextContent('Direct revize toplantı satırı');
+    expect(directArticles[1]).toHaveTextContent('Canlı direct draft satırı');
+    expect(screen.queryByText('Gateway final toplantı satırı')).not.toBeInTheDocument();
+  });
+
   it('lets users review stable transcript text without editing the live direct draft', async () => {
     const onSegmentTextChange = vi.fn();
     const recording = startTranscriptSession(initialTranscriptSession(), {

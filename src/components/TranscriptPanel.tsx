@@ -13,6 +13,17 @@ import type { AudioCapturePreflightState } from '../audio/capture';
 const TRANSCRIPT_LAG_WARN_MS = 5_000;
 const SPEAKER_COLORS = ['#0f766e', '#2563eb', '#b45309', '#7c3aed', '#be123c', '#0f766e'];
 
+type TranscriptFilter = 'all' | 'draft' | 'final' | 'revised' | 'direct' | 'gateway';
+
+const TRANSCRIPT_FILTERS: Array<{ key: TranscriptFilter; label: string }> = [
+  { key: 'all', label: 'Tümü' },
+  { key: 'draft', label: 'Taslaklar' },
+  { key: 'final', label: 'Finaller' },
+  { key: 'revised', label: 'Revizeler' },
+  { key: 'direct', label: 'Direct kaynak' },
+  { key: 'gateway', label: 'Gateway kaynak' },
+];
+
 export interface TranscriptPanelProps {
   session: TranscriptSessionState;
   onSegmentTextChange?: (segmentId: string, text: string) => void;
@@ -542,6 +553,67 @@ function transcriptSourceCounts(session: TranscriptSessionState): {
   );
 }
 
+function normalizeTranscriptQuery(value: string): string {
+  return value.trim().toLocaleLowerCase('tr-TR');
+}
+
+function matchesTranscriptFilter(
+  segment: TranscriptSessionState['segments'][number],
+  filter: TranscriptFilter,
+): boolean {
+  if (filter === 'all') {
+    return true;
+  }
+  if (filter === 'draft') {
+    return segment.status === 'draft' || segment.status === 'stabilizing';
+  }
+  if (filter === 'final') {
+    return segment.status === 'final';
+  }
+  if (filter === 'revised') {
+    return segment.status === 'revised';
+  }
+  if (filter === 'direct') {
+    return segment.source === 'direct-stream';
+  }
+  return segment.source === 'gateway-events';
+}
+
+function matchesTranscriptQuery(
+  segment: TranscriptSessionState['segments'][number],
+  query: string,
+  speakerLabels: Record<string, string>,
+): boolean {
+  if (!query) {
+    return true;
+  }
+
+  const haystack = [
+    segment.text,
+    segment.speakerLabel,
+    speakerLabelFor(segment.speakerLabel, speakerLabels),
+    transcriptStatusLabel(segment.status),
+    segmentSourceLabel(segment.source),
+  ]
+    .join(' ')
+    .toLocaleLowerCase('tr-TR');
+
+  return haystack.includes(query);
+}
+
+function transcriptReviewSummary(session: TranscriptSessionState, visibleCount: number): string {
+  const statusCounts = transcriptStatusCounts(session);
+  const sourceCounts = transcriptSourceCounts(session);
+  return [
+    `Görünen ${visibleCount}/${session.segments.length}`,
+    `Final ${statusCounts.final}`,
+    `Revize ${statusCounts.revised}`,
+    `Taslak ${statusCounts.draft + statusCounts.stabilizing}`,
+    `Direct ${sourceCounts.direct}`,
+    `Gateway ${sourceCounts.gateway}`,
+  ].join(' · ');
+}
+
 function buildTranscriptDiagnostics(
   session: TranscriptSessionState,
   stream: TranscriptPanelProps['stream'],
@@ -595,7 +667,15 @@ export function TranscriptPanel({
   const [speakerLabels, setSpeakerLabels] = useState<Record<string, string>>({});
   const [editingSegmentId, setEditingSegmentId] = useState<string | null>(null);
   const [segmentTextDrafts, setSegmentTextDrafts] = useState<Record<string, string>>({});
+  const [transcriptQuery, setTranscriptQuery] = useState('');
+  const [transcriptFilter, setTranscriptFilter] = useState<TranscriptFilter>('all');
   const visibleSegments = [...session.segments].reverse();
+  const normalizedTranscriptQuery = normalizeTranscriptQuery(transcriptQuery);
+  const filteredSegments = visibleSegments.filter(
+    (segment) =>
+      matchesTranscriptFilter(segment, transcriptFilter) &&
+      matchesTranscriptQuery(segment, normalizedTranscriptQuery, speakerLabels),
+  );
   const speakerTimeline = buildSpeakerTimeline(session, speakerLabels);
   const speakerSummaries = buildSpeakerSummaries(speakerTimeline);
   const interruptionSignals = buildInterruptionSignals(speakerTimeline);
@@ -647,12 +727,14 @@ export function TranscriptPanel({
     if (listRef.current) {
       listRef.current.scrollTop = 0;
     }
-  }, [session.segments]);
+  }, [filteredSegments.length, session.segments, transcriptFilter, transcriptQuery]);
 
   useEffect(() => {
     setSpeakerLabels({});
     setEditingSegmentId(null);
     setSegmentTextDrafts({});
+    setTranscriptQuery('');
+    setTranscriptFilter('all');
   }, [session.meetingId, session.sessionId]);
 
   return (
@@ -847,9 +929,42 @@ export function TranscriptPanel({
         </section>
       ) : null}
 
+      {hasSegments ? (
+        <section className="transcript-review-toolbar" aria-label="Transkript inceleme araçları">
+          <div className="transcript-search-field">
+            <label htmlFor="transcript-search">Ara</label>
+            <input
+              id="transcript-search"
+              type="search"
+              placeholder="Transkriptte ara"
+              value={transcriptQuery}
+              onChange={(event) => setTranscriptQuery(event.target.value)}
+            />
+          </div>
+          <div className="transcript-filter-group" aria-label="Transkript filtreleri">
+            {TRANSCRIPT_FILTERS.map((filter) => (
+              <button
+                className={`transcript-filter-button${
+                  transcriptFilter === filter.key ? ' transcript-filter-button-active' : ''
+                }`}
+                type="button"
+                key={filter.key}
+                aria-pressed={transcriptFilter === filter.key}
+                onClick={() => setTranscriptFilter(filter.key)}
+              >
+                {filter.label}
+              </button>
+            ))}
+          </div>
+          <p className="transcript-review-stats">
+            {transcriptReviewSummary(session, filteredSegments.length)}
+          </p>
+        </section>
+      ) : null}
+
       <div className="transcript-list" aria-live="polite" ref={listRef}>
-        {hasSegments ? (
-          visibleSegments.map((segment) => {
+        {hasSegments && filteredSegments.length > 0 ? (
+          filteredSegments.map((segment) => {
             const metricLabel = segmentMetricLabel(segment);
             const liveDirectDraft = isLiveDirectDraft(segment);
             const editableSegment = Boolean(onSegmentTextChange) && !liveDirectDraft;
@@ -932,6 +1047,11 @@ export function TranscriptPanel({
               </article>
             );
           })
+        ) : hasSegments ? (
+          <div className="transcript-empty">
+            <strong>Filtreyle eşleşen satır yok</strong>
+            <span>Eşleşen kayıt bulunamadı.</span>
+          </div>
         ) : (
           <div className="transcript-empty">
             <strong>Transkript akışı bekleniyor</strong>
