@@ -942,6 +942,8 @@ describe('SummaryPanel', () => {
     expect(within(sourceSummary).getByText('1 final / 1 taslak')).toBeInTheDocument();
     expect(within(sourceSummary).getByText('Direct STT')).toBeInTheDocument();
     expect(within(sourceSummary).getByText('Kelime')).toBeInTheDocument();
+    expect(within(sourceSummary).getByText('Kelime/dk')).toBeInTheDocument();
+    expect(within(sourceSummary).getByText('72 kelime/dk')).toBeInTheDocument();
     expect(within(sourceSummary).getByText('Final oranı')).toBeInTheDocument();
     expect(within(sourceSummary).getByText('İnceleme')).toBeInTheDocument();
     expect(within(sourceSummary).getByText('0/2 · %0')).toBeInTheDocument();
@@ -990,6 +992,7 @@ describe('SummaryPanel', () => {
     expect(copiedPackage).toContain('"can_submit": false');
     expect(copiedPackage).toContain('"classification": "confidential_transcript"');
     expect(copiedPackage).toContain('"raw_audio_included": false');
+    expect(copiedPackage).toContain('"word_rate_per_minute": 72');
     expect(copiedPackage).toContain(`"text_hash": "${CONSENT_TEXT_HASH}"`);
     expect(copiedPackage).toContain('"meeting_id": "22222222-2222-4222-8222-222222222222"');
     expect(copiedPackage).toContain('"transcript":');
@@ -1039,6 +1042,7 @@ describe('SummaryPanel', () => {
     ).toBeInTheDocument();
     expect(within(sourceSummary).getByText('2 final / 0 taslak')).toBeInTheDocument();
     expect(within(sourceSummary).getByText('18 sn')).toBeInTheDocument();
+    expect(within(sourceSummary).getByText('87 kelime/dk')).toBeInTheDocument();
     expect(within(sourceSummary).getByText('%100')).toBeInTheDocument();
     expect(within(sourceSummary).getByText('İnceleme')).toBeInTheDocument();
     expect(within(sourceSummary).getByText('1/2 · %50')).toBeInTheDocument();

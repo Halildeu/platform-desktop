@@ -109,6 +109,7 @@ export interface MeetingAiSourcePackage {
     final_count: number;
     draft_count: number;
     final_ratio: number;
+    word_rate_per_minute: number | null;
     reviewed_count: number;
     reviewed_ratio: number;
     warnings: string[];
@@ -139,6 +140,7 @@ export interface TranscriptSourceReadiness {
   finalCount: number;
   draftCount: number;
   finalRatio: number;
+  wordRatePerMinute: number | null;
   reviewedCount: number;
   reviewedRatio: number;
   warnings: string[];
@@ -153,6 +155,8 @@ const STATUS_RANK: Record<TranscriptSegmentStatus, number> = {
 
 const REPORT_READY_MIN_WORDS = 20;
 const REPORT_READY_MIN_DURATION_MS = 15_000;
+const REPORT_WORD_RATE_WARN_MIN_DURATION_MS = 20_000;
+const REPORT_LOW_WORDS_PER_MINUTE = 8;
 
 function hasMinimumMeetingAiSource(readiness: TranscriptSourceReadiness): boolean {
   return (
@@ -172,6 +176,7 @@ function canSubmitReviewSource(
   return (
     readiness.level === 'review' &&
     readiness.finalCount === 0 &&
+    !isLowWordRate(readiness) &&
     hasMinimumMeetingAiSource(readiness) &&
     isSubmitLifecycle(state)
   );
@@ -552,6 +557,7 @@ export function buildMeetingAiSourcePackage(
       final_count: readiness.finalCount,
       draft_count: readiness.draftCount,
       final_ratio: readiness.finalRatio,
+      word_rate_per_minute: readiness.wordRatePerMinute,
       reviewed_count: readiness.reviewedCount,
       reviewed_ratio: readiness.reviewedRatio,
       warnings: readiness.warnings,
@@ -588,6 +594,7 @@ export function analyzeTranscriptSourceReadiness(
       finalCount: 0,
       draftCount: 0,
       finalRatio: 0,
+      wordRatePerMinute: null,
       reviewedCount: 0,
       reviewedRatio: 0,
       warnings: ['Transkript satırı yok.'],
@@ -602,10 +609,12 @@ export function analyzeTranscriptSourceReadiness(
     0,
     segments[segments.length - 1].startedAtMs - segments[0].startedAtMs,
   );
+  const wordRatePerMinute = calculateWordRatePerMinute(wordCount, durationMs);
   const finalRatio = finalCount / segments.length;
   const reviewedRatio = reviewedCount / segments.length;
   const hasMinimumSource =
     wordCount >= REPORT_READY_MIN_WORDS && durationMs >= REPORT_READY_MIN_DURATION_MS;
+  const lowWordRate = isLowWordRateValue(wordRatePerMinute, durationMs);
   const draftOnlyCanBeReviewed = finalCount === 0 && hasMinimumSource && isSubmitLifecycle(state);
   const warnings = [
     ...(finalCount === 0
@@ -620,6 +629,11 @@ export function analyzeTranscriptSourceReadiness(
       : []),
     ...(durationMs < REPORT_READY_MIN_DURATION_MS
       ? ['Toplantı penceresi rapor için kısa görünüyor.']
+      : []),
+    ...(lowWordRate
+      ? [
+          'Kelime üretim hızı düşük; konuşmanın önemli kısmı transcript kaynağına düşmemiş olabilir.',
+        ]
       : []),
     ...(state.lifecycle === 'recording' ? ['Kayıt sürüyor; çıktı henüz sabit değil.'] : []),
   ];
@@ -637,6 +651,7 @@ export function analyzeTranscriptSourceReadiness(
       finalCount,
       draftCount,
       finalRatio,
+      wordRatePerMinute,
       reviewedCount,
       reviewedRatio,
       warnings,
@@ -646,7 +661,8 @@ export function analyzeTranscriptSourceReadiness(
   if (
     finalCount > 0 &&
     wordCount >= REPORT_READY_MIN_WORDS &&
-    durationMs >= REPORT_READY_MIN_DURATION_MS
+    durationMs >= REPORT_READY_MIN_DURATION_MS &&
+    !lowWordRate
   ) {
     return {
       level: 'ready',
@@ -660,6 +676,7 @@ export function analyzeTranscriptSourceReadiness(
       finalCount,
       draftCount,
       finalRatio,
+      wordRatePerMinute,
       reviewedCount,
       reviewedRatio,
       warnings,
@@ -697,6 +714,7 @@ export function analyzeTranscriptSourceReadiness(
     finalCount,
     draftCount,
     finalRatio,
+    wordRatePerMinute,
     reviewedCount,
     reviewedRatio,
     warnings,
@@ -799,6 +817,26 @@ function countWords(text: string): number {
   return text.trim().split(/\s+/).filter(Boolean).length;
 }
 
+function calculateWordRatePerMinute(wordCount: number, durationMs: number): number | null {
+  if (!Number.isFinite(durationMs) || durationMs <= 0) {
+    return null;
+  }
+  return wordCount / (durationMs / 60_000);
+}
+
+function isLowWordRate(readiness: TranscriptSourceReadiness): boolean {
+  return isLowWordRateValue(readiness.wordRatePerMinute, readiness.durationMs);
+}
+
+function isLowWordRateValue(wordRatePerMinute: number | null, durationMs: number): boolean {
+  return (
+    typeof wordRatePerMinute === 'number' &&
+    Number.isFinite(wordRatePerMinute) &&
+    durationMs >= REPORT_WORD_RATE_WARN_MIN_DURATION_MS &&
+    wordRatePerMinute < REPORT_LOW_WORDS_PER_MINUTE
+  );
+}
+
 function buildTranscriptMarkdown(
   state: TranscriptSessionState,
   segments: TranscriptSegment[],
@@ -820,6 +858,7 @@ function buildTranscriptMarkdown(
     `- Detay: ${readiness.nextStepDetail}`,
     `- Satır: ${segments.length}`,
     `- Kelime: ${readiness.wordCount}`,
+    `- Kelime/dk: ${formatWordRate(readiness.wordRatePerMinute)}`,
     `- Süre: ${formatDuration(readiness.durationMs)}`,
     `- Final oranı: ${formatPercent(readiness.finalRatio)}`,
     `- İncelenen: ${readiness.reviewedCount}/${segments.length}`,
@@ -853,6 +892,7 @@ function buildTranscriptText(state: TranscriptSessionState, segments: Transcript
     `Detay: ${readiness.nextStepDetail}`,
     `Satır: ${segments.length}`,
     `Kelime: ${readiness.wordCount}`,
+    `Kelime/dk: ${formatWordRate(readiness.wordRatePerMinute)}`,
     `Süre: ${formatDuration(readiness.durationMs)}`,
     `Final oranı: ${formatPercent(readiness.finalRatio)}`,
     `İncelenen: ${readiness.reviewedCount}/${segments.length}`,
@@ -896,6 +936,16 @@ function formatPercent(value: number): string {
     return '-';
   }
   return `%${Math.round(value * 100)}`;
+}
+
+function formatWordRate(value: number | null): string {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return '-';
+  }
+  if (value >= 10) {
+    return `${Math.round(value)} kelime/dk`;
+  }
+  return `${value.toFixed(1)} kelime/dk`;
 }
 
 function toSeconds(valueMs: number): number {

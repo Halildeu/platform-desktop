@@ -173,8 +173,8 @@ The recorder now exposes two user-facing workspaces:
   honest empty state while no transcript stream is connected.
 - **Toplantı Çıktısı**: typed meeting-intelligence result surface for summary, decisions,
   action items, citation timestamps, source readiness, Meeting AI source-package export,
-  Markdown/TXT/CSV/JSON export, share drafts, native print/PDF flow, generic ERP/CRM
-  adapter handoff preview, and explicit package readiness state.
+  word-rate source-quality gating, Markdown/TXT/CSV/JSON export, share drafts, native print/PDF
+  flow, generic ERP/CRM adapter handoff preview, and explicit package readiness state.
 - **ERP/CRM handoff**: visible vendor-neutral adapter manifest and capability list,
   review-before-write readiness gate,
   source-evidence metadata, object-level dry-run plan (`meeting_note`, `decision_record`,

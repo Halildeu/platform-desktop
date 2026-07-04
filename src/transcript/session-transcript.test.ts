@@ -455,11 +455,13 @@ describe('session transcript state', () => {
       ],
     });
     expect(bundle.package.source_quality.final_count).toBe(2);
+    expect(bundle.package.source_quality.word_rate_per_minute).toBeGreaterThan(20);
     expect(bundle.package.source_quality.reviewed_count).toBe(1);
     expect(bundle.package.source_quality.reviewed_ratio).toBe(0.5);
     expect(bundle.package.source_quality.warnings).not.toContain('Transkript satırı yok.');
     expect(bundle.json).toContain('"client_direct_platform_ai": false');
     expect(bundle.json).toContain('"reviewed_count": 1');
+    expect(bundle.json).toContain('"word_rate_per_minute":');
     expect(bundle.json).not.toContain('summaryMarkdown');
     expect(bundle.json).not.toContain('actionItems');
   });
@@ -557,6 +559,57 @@ describe('session transcript state', () => {
     expect(bundle.json).toContain('"final_count": 0');
   });
 
+  it('keeps sparse transcript sources in review when word coverage is low', () => {
+    const recording = startTranscriptSession(initialTranscriptSession(), {
+      sessionId: 'SES-4',
+      meetingId: '55555555-5555-4555-8555-555555555555',
+      deviceId: 'desktop-1',
+      hasLoopback: false,
+      startedAtMs: 1781820000000,
+    });
+    const withFirstSparseSegment = upsertTranscriptSegment(recording, {
+      id: 'seg-1',
+      speakerLabel: 'Konuşmacı',
+      startedAtMs: 1781820000000,
+      status: 'final',
+      source: 'direct-stream',
+      text: 'Toplantı başladı müşteri ihtiyaçları ve entegrasyon riskleri kısa şekilde not edildi',
+    });
+    const finishedSparse = finishTranscriptSession(
+      upsertTranscriptSegment(withFirstSparseSegment, {
+        id: 'seg-2',
+        speakerLabel: 'Konuşmacı',
+        startedAtMs: 1781820240000,
+        status: 'final',
+        source: 'direct-stream',
+        text: 'Aksiyon sahipleri belirlendi ancak kayıt kapsamı beklenen konuşmayı taşımıyor',
+      }),
+      1781820245000,
+    );
+
+    const readiness = analyzeTranscriptSourceReadiness(finishedSparse);
+    const bundle = buildMeetingAiSourcePackage(finishedSparse, 1781820100000);
+
+    expect(readiness).toMatchObject({
+      level: 'review',
+      label: 'Gözden geçirilmeli',
+      wordCount: 20,
+      durationMs: 240_000,
+      wordRatePerMinute: 5,
+    });
+    expect(readiness.warnings).toContain(
+      'Kelime üretim hızı düşük; konuşmanın önemli kısmı transcript kaynağına düşmemiş olabilir.',
+    );
+    expect(bundle.package.gate).toMatchObject({
+      status: 'review',
+      can_submit: false,
+      label: 'Meeting AI kapısı bekliyor',
+      blocked_by: ['kaynak kalite kontrolü gerekiyor'],
+    });
+    expect(bundle.package.source_quality.word_rate_per_minute).toBe(5);
+    expect(bundle.json).toContain('"word_rate_per_minute": 5');
+  });
+
   it('rejects source export when no transcript segment exists', () => {
     expect(() => buildTranscriptSourceExport(initialTranscriptSession())).toThrow(
       'Transcript source is not ready',
@@ -572,6 +625,7 @@ describe('session transcript state', () => {
       label: 'Kaynak bekleniyor',
       nextStepLabel: 'Kayıt kaynağı',
       wordCount: 0,
+      wordRatePerMinute: null,
       finalCount: 0,
     });
 
@@ -623,6 +677,7 @@ describe('session transcript state', () => {
       finalCount: 2,
       draftCount: 0,
       finalRatio: 1,
+      wordRatePerMinute: expect.any(Number),
     });
   });
 });

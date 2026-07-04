@@ -471,6 +471,16 @@ function formatPercent(value: number): string {
   return `%${Math.round(value * 100)}`;
 }
 
+function formatWordRate(value: number | null): string {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return '-';
+  }
+  if (value >= 10) {
+    return `${Math.round(value)} kelime/dk`;
+  }
+  return `${value.toFixed(1)} kelime/dk`;
+}
+
 function applyActionReviewDrafts(
   actionItems: ActionItem[],
   drafts: Record<string, ActionReviewDraft>,
@@ -1630,6 +1640,10 @@ export function SummaryPanel({
                 <div>
                   <span>Kelime</span>
                   <strong>{transcriptReadiness.wordCount}</strong>
+                </div>
+                <div>
+                  <span>Kelime/dk</span>
+                  <strong>{formatWordRate(transcriptReadiness.wordRatePerMinute)}</strong>
                 </div>
                 <div>
                   <span>Süre</span>
