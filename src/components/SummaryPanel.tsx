@@ -23,6 +23,7 @@ import {
   type IntelligenceCitation,
   type MeetingIntelligenceResult,
   type MeetingIntelligenceState,
+  type MeetingOutputHandoffIssue,
   type MeetingOutputSourceEvidence,
   type MeetingOutputHandoffReadiness,
   setMeetingIntelligenceResult,
@@ -223,6 +224,10 @@ function handoffIssueLabel(readiness: MeetingOutputHandoffReadiness): string {
     return visibleIssues.join(' · ');
   }
   return `${visibleIssues.join(' · ')} · +${hiddenIssueCount} daha`;
+}
+
+function handoffIssueSeverityLabel(issue: MeetingOutputHandoffIssue): string {
+  return issue.severity === 'blocker' ? 'Blokaj' : 'Uyarı';
 }
 
 function normalizedCitationCoverage(value: number | null | undefined): number | null {
@@ -447,6 +452,9 @@ export function SummaryPanel({
   const handoffReadiness = displayResult
     ? analyzeMeetingOutputHandoffReadiness(displayResult)
     : null;
+  const handoffIssues = handoffReadiness
+    ? [...handoffReadiness.blockers, ...handoffReadiness.warnings]
+    : [];
   const exportIntelligence = displayResult
     ? setMeetingIntelligenceResult(visibleIntelligence, displayResult)
     : visibleIntelligence;
@@ -984,6 +992,19 @@ export function SummaryPanel({
                   <span>Kaynak kanıtı</span>
                   <strong>Review metrikli</strong>
                 </div>
+              ) : null}
+              {handoffIssues.length > 0 ? (
+                <ul className="handoff-issue-list" aria-label="Aktarım review detayları">
+                  {handoffIssues.map((issue) => (
+                    <li
+                      className={`handoff-issue handoff-issue-${issue.severity}`}
+                      key={issue.code}
+                    >
+                      <strong>{handoffIssueSeverityLabel(issue)}</strong>
+                      <span>{issue.label}</span>
+                    </li>
+                  ))}
+                </ul>
               ) : null}
               <p>{integrationSupportedObjectLabel()}</p>
             </div>

@@ -303,10 +303,14 @@ describe('SummaryPanel', () => {
 
     const readiness = screen.getByLabelText('ERP/CRM entegrasyon hazırlığı');
     expect(within(readiness).getByText('Review gerekli')).toBeInTheDocument();
-    expect(within(readiness).getByText(/1 açık aksiyonda sahip eksik/)).toBeInTheDocument();
-    expect(within(readiness).getByText(/1 kararda sahip eksik/)).toBeInTheDocument();
-    expect(within(readiness).getByText(/1 açık aksiyonda tarih eksik/)).toBeInTheDocument();
+    expect(within(readiness).getAllByText(/1 açık aksiyonda sahip eksik/)).toHaveLength(2);
+    expect(within(readiness).getAllByText(/1 kararda sahip eksik/)).toHaveLength(2);
+    expect(within(readiness).getAllByText(/1 açık aksiyonda tarih eksik/)).toHaveLength(2);
     expect(within(readiness).getByText(/\+1 daha/)).toBeInTheDocument();
+    const reviewDetails = within(readiness).getByLabelText('Aktarım review detayları');
+    expect(within(reviewDetails).getAllByText('Blokaj')).toHaveLength(2);
+    expect(within(reviewDetails).getAllByText('Uyarı')).toHaveLength(2);
+    expect(within(reviewDetails).getByText('Kaynak kapsamı %50 altında')).toBeInTheDocument();
   });
 
   it('uses export adapter for copy and file downloads', async () => {

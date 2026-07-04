@@ -754,6 +754,49 @@ button:disabled {
   overflow-wrap: anywhere;
 }
 
+.handoff-issue-list {
+  grid-column: 1 / -1;
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.handoff-issue {
+  display: grid;
+  grid-template-columns: 82px minmax(0, 1fr);
+  gap: 8px;
+  align-items: start;
+  padding: 8px 10px;
+  border: 1px solid #e2e8f0;
+  border-left-width: 4px;
+  border-radius: 6px;
+  background: #ffffff;
+}
+
+.handoff-issue-blocker {
+  border-left-color: #dc2626;
+}
+
+.handoff-issue-warning {
+  border-left-color: #d97706;
+}
+
+.handoff-issue strong {
+  color: #17202a;
+  font-size: 12px;
+}
+
+.handoff-issue span {
+  color: #475569;
+  font-size: 12px;
+  font-weight: 650;
+  line-height: 1.35;
+  text-transform: none;
+  overflow-wrap: anywhere;
+}
+
 .integration-readiness p {
   grid-column: 1 / -1;
   margin: 0;
