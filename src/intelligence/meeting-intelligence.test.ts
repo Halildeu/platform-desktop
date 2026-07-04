@@ -54,6 +54,12 @@ const CURRENT_SOURCE_EVIDENCE: MeetingOutputSourceEvidence = {
     final_ratio: 1,
     reviewed_count: 1,
     reviewed_ratio: 0.5,
+    quality_gate: {
+      status: 'ready',
+      risk: 'none',
+      label: 'Kalite kapısı açık',
+      action: 'Kaynak backend gateway üzerinden meeting-ai /analyze kontratına iletilebilir.',
+    },
     result_freshness: {
       status: 'current',
       label: 'Güncel',

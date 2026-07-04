@@ -61,7 +61,8 @@ export type MeetingOutputHandoffIssueCode =
   | 'unknown_citation_coverage'
   | 'low_citation_coverage'
   | 'unknown_source_freshness'
-  | 'stale_source_evidence';
+  | 'stale_source_evidence'
+  | 'weak_source_quality';
 
 export interface MeetingOutputHandoffIssue {
   code: MeetingOutputHandoffIssueCode;
@@ -114,6 +115,12 @@ export interface MeetingOutputSourceEvidence {
     final_ratio: number;
     reviewed_count: number;
     reviewed_ratio: number;
+    quality_gate: {
+      status: string;
+      risk: string;
+      label: string;
+      action: string;
+    };
     result_freshness: {
       status: string;
       label: string;
@@ -474,6 +481,22 @@ function sourceEvidenceReadinessIssue(
       code: 'missing_source_evidence',
       severity: 'warning',
       label: 'Transkript kaynak kanıtı yok',
+    };
+  }
+
+  const qualityGate = sourceEvidence.transcript.quality_gate;
+  if (qualityGate?.status === 'blocked') {
+    return {
+      code: 'weak_source_quality',
+      severity: 'blocker',
+      label: qualityGate.label,
+    };
+  }
+  if (qualityGate?.status === 'review') {
+    return {
+      code: 'weak_source_quality',
+      severity: 'warning',
+      label: qualityGate.label,
     };
   }
 

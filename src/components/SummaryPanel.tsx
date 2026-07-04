@@ -266,6 +266,12 @@ function buildOutputSourceEvidence(
       final_ratio: readiness.finalRatio,
       reviewed_count: readiness.reviewedCount,
       reviewed_ratio: readiness.reviewedRatio,
+      quality_gate: {
+        status: readiness.qualityGate.status,
+        risk: readiness.qualityGate.risk,
+        label: readiness.qualityGate.label,
+        action: readiness.qualityGate.action,
+      },
       result_freshness: freshness
         ? {
             status: freshness.status,
@@ -1554,6 +1560,14 @@ export function SummaryPanel({
                 <strong>{transcriptReadiness.nextStepLabel}</strong>
                 <small>{transcriptReadiness.nextStepDetail}</small>
               </div>
+              <div
+                className={`source-quality-gate source-quality-gate-${transcriptReadiness.qualityGate.status}`}
+                aria-label="Kaynak kalite kapısı"
+              >
+                <span>Kalite kapısı</span>
+                <strong>{transcriptReadiness.qualityGate.label}</strong>
+                <small>{transcriptReadiness.qualityGate.action}</small>
+              </div>
               <div className="source-ai-package" aria-label="Meeting AI kaynak paketi">
                 <span>Meeting AI kaynak paketi</span>
                 <strong>
@@ -1661,6 +1675,10 @@ export function SummaryPanel({
                       transcriptSourceSegments.length,
                     )}
                   </strong>
+                </div>
+                <div>
+                  <span>Kalite riski</span>
+                  <strong>{transcriptReadiness.qualityGate.risk}</strong>
                 </div>
               </div>
               {latestTranscriptSegment ? (

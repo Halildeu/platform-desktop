@@ -1197,6 +1197,51 @@ button:disabled {
   line-height: 1.45;
 }
 
+.source-quality-gate {
+  display: grid;
+  gap: 4px;
+  margin-bottom: 12px;
+  padding: 10px 12px;
+  border: 1px solid #e2e8f0;
+  border-left: 3px solid #64748b;
+  border-radius: 6px;
+  background: #ffffff;
+}
+
+.source-quality-gate-ready {
+  border-left-color: #10b981;
+}
+
+.source-quality-gate-collecting {
+  border-left-color: #0f766e;
+}
+
+.source-quality-gate-review {
+  border-left-color: #f59e0b;
+  background: #fffbeb;
+}
+
+.source-quality-gate-blocked {
+  border-left-color: #ef4444;
+  background: #fef2f2;
+}
+
+.source-quality-gate span {
+  color: #475569;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.source-quality-gate strong {
+  color: #17202a;
+  font-size: 14px;
+}
+
+.source-quality-gate small {
+  color: #64748b;
+  line-height: 1.45;
+}
+
 .source-ai-package {
   display: grid;
   gap: 4px;

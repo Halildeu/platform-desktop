@@ -458,10 +458,17 @@ describe('session transcript state', () => {
     expect(bundle.package.source_quality.word_rate_per_minute).toBeGreaterThan(20);
     expect(bundle.package.source_quality.reviewed_count).toBe(1);
     expect(bundle.package.source_quality.reviewed_ratio).toBe(0.5);
+    expect(bundle.package.source_quality.quality_gate).toEqual({
+      status: 'review',
+      risk: 'low_word_count',
+      label: 'Kelime eşiği eksik',
+      action: 'En az 20 kelimelik transcript kaynağı beklenir.',
+    });
     expect(bundle.package.source_quality.warnings).not.toContain('Transkript satırı yok.');
     expect(bundle.json).toContain('"client_direct_platform_ai": false');
     expect(bundle.json).toContain('"reviewed_count": 1');
     expect(bundle.json).toContain('"word_rate_per_minute":');
+    expect(bundle.json).toContain('"quality_gate":');
     expect(bundle.json).not.toContain('summaryMarkdown');
     expect(bundle.json).not.toContain('actionItems');
   });
@@ -503,6 +510,11 @@ describe('session transcript state', () => {
       blocked_by: [],
     });
     expect(bundle.package.gate.next_action).toContain('backend gateway');
+    expect(bundle.package.source_quality.quality_gate).toMatchObject({
+      status: 'ready',
+      risk: 'none',
+      label: 'Kalite kapısı açık',
+    });
     expect(bundle.json).toContain('"can_submit": true');
   });
 
@@ -543,6 +555,13 @@ describe('session transcript state', () => {
       nextStepLabel: 'Meeting AI taslak gönderimi',
       finalCount: 0,
       draftCount: 2,
+      qualityGate: {
+        status: 'ready',
+        risk: 'draft_only',
+        label: 'Taslak kaliteyle açık',
+        action:
+          'Backend gateway üzerinden taslak kalite etiketiyle gönderilebilir; final kanıt gibi değerlendirilmez.',
+      },
     });
     expect(readiness.warnings).toContain(
       'Final satır yok; Meeting AI sonucu taslak kaliteyle değerlendirilir.',
@@ -555,6 +574,7 @@ describe('session transcript state', () => {
     });
     expect(bundle.package.gate.next_action).toContain('taslak kalite');
     expect(bundle.package.source_quality.level).toBe('review');
+    expect(bundle.package.source_quality.quality_gate.risk).toBe('draft_only');
     expect(bundle.json).toContain('"can_submit": true');
     expect(bundle.json).toContain('"final_count": 0');
   });
@@ -596,6 +616,13 @@ describe('session transcript state', () => {
       wordCount: 20,
       durationMs: 240_000,
       wordRatePerMinute: 5,
+      qualityGate: {
+        status: 'review',
+        risk: 'low_word_coverage',
+        label: 'Kapsam riski',
+        action:
+          'Mikrofon/direct STT zinciri doğrulanmadan Meeting AI veya ERP/CRM aktarımı yapılmaz.',
+      },
     });
     expect(readiness.warnings).toContain(
       'Kelime üretim hızı düşük; konuşmanın önemli kısmı transcript kaynağına düşmemiş olabilir.',
@@ -607,7 +634,9 @@ describe('session transcript state', () => {
       blocked_by: ['kaynak kalite kontrolü gerekiyor'],
     });
     expect(bundle.package.source_quality.word_rate_per_minute).toBe(5);
+    expect(bundle.package.source_quality.quality_gate.risk).toBe('low_word_coverage');
     expect(bundle.json).toContain('"word_rate_per_minute": 5');
+    expect(bundle.json).toContain('"risk": "low_word_coverage"');
   });
 
   it('rejects source export when no transcript segment exists', () => {
@@ -627,6 +656,11 @@ describe('session transcript state', () => {
       wordCount: 0,
       wordRatePerMinute: null,
       finalCount: 0,
+      qualityGate: {
+        status: 'blocked',
+        risk: 'empty_source',
+        label: 'Kaynak kapısı kapalı',
+      },
     });
 
     const recording = startTranscriptSession(initialTranscriptSession(), {
@@ -650,6 +684,11 @@ describe('session transcript state', () => {
       nextStepLabel: 'Kayıt bitişi',
       finalCount: 0,
       draftCount: 1,
+      qualityGate: {
+        status: 'collecting',
+        risk: 'recording_active',
+        label: 'Kaynak toplanıyor',
+      },
     });
 
     const finalOnly = finishTranscriptSession(
@@ -678,6 +717,11 @@ describe('session transcript state', () => {
       draftCount: 0,
       finalRatio: 1,
       wordRatePerMinute: expect.any(Number),
+      qualityGate: {
+        status: 'ready',
+        risk: 'none',
+        label: 'Kalite kapısı açık',
+      },
     });
   });
 });

@@ -92,6 +92,24 @@ export interface MeetingAiSourcePrivacy {
   };
 }
 
+export type TranscriptQualityGateStatus = 'blocked' | 'collecting' | 'review' | 'ready';
+
+export type TranscriptQualityGateRisk =
+  | 'none'
+  | 'empty_source'
+  | 'recording_active'
+  | 'low_word_coverage'
+  | 'low_word_count'
+  | 'short_duration'
+  | 'draft_only';
+
+export interface TranscriptQualityGate {
+  status: TranscriptQualityGateStatus;
+  risk: TranscriptQualityGateRisk;
+  label: string;
+  action: string;
+}
+
 export interface MeetingAiSourcePackage {
   schema_version: 'platform-desktop.meeting-ai-source.v1';
   generated_at: string;
@@ -112,6 +130,7 @@ export interface MeetingAiSourcePackage {
     word_rate_per_minute: number | null;
     reviewed_count: number;
     reviewed_ratio: number;
+    quality_gate: TranscriptQualityGate;
     warnings: string[];
   };
   meeting_id: string | null;
@@ -143,6 +162,7 @@ export interface TranscriptSourceReadiness {
   wordRatePerMinute: number | null;
   reviewedCount: number;
   reviewedRatio: number;
+  qualityGate: TranscriptQualityGate;
   warnings: string[];
 }
 
@@ -180,6 +200,89 @@ function canSubmitReviewSource(
     hasMinimumMeetingAiSource(readiness) &&
     isSubmitLifecycle(state)
   );
+}
+
+function buildTranscriptQualityGate(args: {
+  state: TranscriptSessionState;
+  segmentCount: number;
+  finalCount: number;
+  wordCount: number;
+  durationMs: number;
+  wordRatePerMinute: number | null;
+  draftOnlyCanBeReviewed: boolean;
+}): TranscriptQualityGate {
+  if (args.segmentCount === 0) {
+    return {
+      status: 'blocked',
+      risk: 'empty_source',
+      label: 'Kaynak kapısı kapalı',
+      action:
+        'Kayıt başlayınca transkript satırları oluşmadan Meeting AI veya ERP/CRM aktarımı açılmaz.',
+    };
+  }
+
+  if (args.state.lifecycle === 'recording') {
+    return {
+      status: 'collecting',
+      risk: 'recording_active',
+      label: 'Kaynak toplanıyor',
+      action: 'Kayıt bitince kaynak kapsamı ve final oranı yeniden ölçülür.',
+    };
+  }
+
+  if (isLowWordRateValue(args.wordRatePerMinute, args.durationMs)) {
+    return {
+      status: 'review',
+      risk: 'low_word_coverage',
+      label: 'Kapsam riski',
+      action:
+        'Mikrofon/direct STT zinciri doğrulanmadan Meeting AI veya ERP/CRM aktarımı yapılmaz.',
+    };
+  }
+
+  if (args.wordCount < REPORT_READY_MIN_WORDS) {
+    return {
+      status: 'review',
+      risk: 'low_word_count',
+      label: 'Kelime eşiği eksik',
+      action: `En az ${REPORT_READY_MIN_WORDS} kelimelik transcript kaynağı beklenir.`,
+    };
+  }
+
+  if (args.durationMs < REPORT_READY_MIN_DURATION_MS) {
+    return {
+      status: 'review',
+      risk: 'short_duration',
+      label: 'Süre eşiği eksik',
+      action: 'Toplantı penceresi yeterli olmadan çıktı paketi review seviyesinde kalır.',
+    };
+  }
+
+  if (args.finalCount === 0) {
+    if (args.draftOnlyCanBeReviewed) {
+      return {
+        status: 'ready',
+        risk: 'draft_only',
+        label: 'Taslak kaliteyle açık',
+        action:
+          'Backend gateway üzerinden taslak kalite etiketiyle gönderilebilir; final kanıt gibi değerlendirilmez.',
+      };
+    }
+
+    return {
+      status: 'review',
+      risk: 'draft_only',
+      label: 'Final satır bekleniyor',
+      action: 'Taslak satırlar final veya revize satıra dönmeden standart çıktı kapısı açılmaz.',
+    };
+  }
+
+  return {
+    status: 'ready',
+    risk: 'none',
+    label: 'Kalite kapısı açık',
+    action: 'Kaynak backend gateway üzerinden meeting-ai /analyze kontratına iletilebilir.',
+  };
 }
 
 export function initialTranscriptSession(): TranscriptSessionState {
@@ -560,6 +663,7 @@ export function buildMeetingAiSourcePackage(
       word_rate_per_minute: readiness.wordRatePerMinute,
       reviewed_count: readiness.reviewedCount,
       reviewed_ratio: readiness.reviewedRatio,
+      quality_gate: readiness.qualityGate,
       warnings: readiness.warnings,
     },
     meeting_id: state.meetingId,
@@ -583,6 +687,15 @@ export function analyzeTranscriptSourceReadiness(
 ): TranscriptSourceReadiness {
   const segments = sourceSegments(state);
   if (segments.length === 0) {
+    const qualityGate = buildTranscriptQualityGate({
+      state,
+      segmentCount: 0,
+      finalCount: 0,
+      wordCount: 0,
+      durationMs: 0,
+      wordRatePerMinute: null,
+      draftOnlyCanBeReviewed: false,
+    });
     return {
       level: 'empty',
       label: 'Kaynak bekleniyor',
@@ -597,6 +710,7 @@ export function analyzeTranscriptSourceReadiness(
       wordRatePerMinute: null,
       reviewedCount: 0,
       reviewedRatio: 0,
+      qualityGate,
       warnings: ['Transkript satırı yok.'],
     };
   }
@@ -616,6 +730,15 @@ export function analyzeTranscriptSourceReadiness(
     wordCount >= REPORT_READY_MIN_WORDS && durationMs >= REPORT_READY_MIN_DURATION_MS;
   const lowWordRate = isLowWordRateValue(wordRatePerMinute, durationMs);
   const draftOnlyCanBeReviewed = finalCount === 0 && hasMinimumSource && isSubmitLifecycle(state);
+  const qualityGate = buildTranscriptQualityGate({
+    state,
+    segmentCount: segments.length,
+    finalCount,
+    wordCount,
+    durationMs,
+    wordRatePerMinute,
+    draftOnlyCanBeReviewed,
+  });
   const warnings = [
     ...(finalCount === 0
       ? [
@@ -654,6 +777,7 @@ export function analyzeTranscriptSourceReadiness(
       wordRatePerMinute,
       reviewedCount,
       reviewedRatio,
+      qualityGate,
       warnings,
     };
   }
@@ -679,6 +803,7 @@ export function analyzeTranscriptSourceReadiness(
       wordRatePerMinute,
       reviewedCount,
       reviewedRatio,
+      qualityGate,
       warnings,
     };
   }
@@ -717,6 +842,7 @@ export function analyzeTranscriptSourceReadiness(
     wordRatePerMinute,
     reviewedCount,
     reviewedRatio,
+    qualityGate,
     warnings,
   };
 }
@@ -856,6 +982,9 @@ function buildTranscriptMarkdown(
     `- Durum: ${readiness.label}`,
     `- Sonraki kapı: ${readiness.nextStepLabel}`,
     `- Detay: ${readiness.nextStepDetail}`,
+    `- Kalite kapısı: ${readiness.qualityGate.label}`,
+    `- Kalite riski: ${readiness.qualityGate.risk}`,
+    `- Kalite aksiyonu: ${readiness.qualityGate.action}`,
     `- Satır: ${segments.length}`,
     `- Kelime: ${readiness.wordCount}`,
     `- Kelime/dk: ${formatWordRate(readiness.wordRatePerMinute)}`,
@@ -890,6 +1019,9 @@ function buildTranscriptText(state: TranscriptSessionState, segments: Transcript
     `Durum: ${readiness.label}`,
     `Sonraki kapı: ${readiness.nextStepLabel}`,
     `Detay: ${readiness.nextStepDetail}`,
+    `Kalite kapısı: ${readiness.qualityGate.label}`,
+    `Kalite riski: ${readiness.qualityGate.risk}`,
+    `Kalite aksiyonu: ${readiness.qualityGate.action}`,
     `Satır: ${segments.length}`,
     `Kelime: ${readiness.wordCount}`,
     `Kelime/dk: ${formatWordRate(readiness.wordRatePerMinute)}`,

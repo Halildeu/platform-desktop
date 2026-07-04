@@ -195,6 +195,37 @@ function draftSubmitTranscriptState(): TranscriptSessionState {
   );
 }
 
+function sparseTranscriptState(): TranscriptSessionState {
+  const recording = startTranscriptSession(initialTranscriptSession(), {
+    sessionId: 'SES-4',
+    meetingId: '55555555-5555-4555-8555-555555555555',
+    deviceId: 'desktop-1',
+    hasLoopback: false,
+    startedAtMs: 1781820000000,
+  });
+
+  const withFirstSegment = upsertTranscriptSegment(recording, {
+    id: 'seg-1',
+    speakerLabel: 'Konuşmacı',
+    startedAtMs: 1781820000000,
+    status: 'final',
+    source: 'direct-stream',
+    text: 'Toplantı başladı müşteri ihtiyaçları ve entegrasyon riskleri kısa şekilde not edildi',
+  });
+
+  return finishTranscriptSession(
+    upsertTranscriptSegment(withFirstSegment, {
+      id: 'seg-2',
+      speakerLabel: 'Konuşmacı',
+      startedAtMs: 1781820240000,
+      status: 'final',
+      source: 'direct-stream',
+      text: 'Aksiyon sahipleri belirlendi ancak kayıt kapsamı beklenen konuşmayı taşımıyor',
+    }),
+    1781820245000,
+  );
+}
+
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
@@ -755,6 +786,12 @@ describe('SummaryPanel', () => {
       draft_count: 0,
       reviewed_count: 1,
       reviewed_ratio: 0.5,
+      quality_gate: {
+        status: 'ready',
+        risk: 'none',
+        label: 'Kalite kapısı açık',
+        action: 'Kaynak backend gateway üzerinden meeting-ai /analyze kontratına iletilebilir.',
+      },
       result_freshness: {
         status: 'current',
         label: 'Güncel',
@@ -936,6 +973,11 @@ describe('SummaryPanel', () => {
         'Toplantı çıktısı için kayıt bitişi ve final transkript satırları bekleniyor.',
       ),
     ).toBeInTheDocument();
+    const qualityGate = screen.getByLabelText('Kaynak kalite kapısı');
+    expect(within(qualityGate).getByText('Kaynak toplanıyor')).toBeInTheDocument();
+    expect(
+      within(qualityGate).getByText('Kayıt bitince kaynak kapsamı ve final oranı yeniden ölçülür.'),
+    ).toBeInTheDocument();
     const sourceSummary = screen.getByLabelText('Kaynak transkript özeti');
     expect(within(sourceSummary).getByText('Satır')).toBeInTheDocument();
     expect(within(sourceSummary).getByText('2')).toBeInTheDocument();
@@ -947,6 +989,8 @@ describe('SummaryPanel', () => {
     expect(within(sourceSummary).getByText('Final oranı')).toBeInTheDocument();
     expect(within(sourceSummary).getByText('İnceleme')).toBeInTheDocument();
     expect(within(sourceSummary).getByText('0/2 · %0')).toBeInTheDocument();
+    expect(within(sourceSummary).getByText('Kalite riski')).toBeInTheDocument();
+    expect(within(sourceSummary).getByText('recording_active')).toBeInTheDocument();
     expect(screen.getByText('Son satır · Taslak · Direct STT')).toBeInTheDocument();
     expect(screen.getByText('"Toplantı notu kaynak transcript olarak hazır."')).toBeInTheDocument();
     const aiPackage = screen.getByLabelText('Meeting AI kaynak paketi');
@@ -993,6 +1037,8 @@ describe('SummaryPanel', () => {
     expect(copiedPackage).toContain('"classification": "confidential_transcript"');
     expect(copiedPackage).toContain('"raw_audio_included": false');
     expect(copiedPackage).toContain('"word_rate_per_minute": 72');
+    expect(copiedPackage).toContain('"quality_gate":');
+    expect(copiedPackage).toContain('"risk": "recording_active"');
     expect(copiedPackage).toContain(`"text_hash": "${CONSENT_TEXT_HASH}"`);
     expect(copiedPackage).toContain('"meeting_id": "22222222-2222-4222-8222-222222222222"');
     expect(copiedPackage).toContain('"transcript":');
@@ -1028,6 +1074,13 @@ describe('SummaryPanel', () => {
         'Kaynak hazır; özet, karar ve aksiyon üretimi için meeting-ai sonucu bekleniyor.',
       ),
     ).toBeInTheDocument();
+    const qualityGate = screen.getByLabelText('Kaynak kalite kapısı');
+    expect(within(qualityGate).getByText('Kalite kapısı açık')).toBeInTheDocument();
+    expect(
+      within(qualityGate).getByText(
+        'Kaynak backend gateway üzerinden meeting-ai /analyze kontratına iletilebilir.',
+      ),
+    ).toBeInTheDocument();
 
     const sourceSummary = screen.getByLabelText('Kaynak transkript özeti');
     const aiPackage = screen.getByLabelText('Meeting AI kaynak paketi');
@@ -1046,6 +1099,38 @@ describe('SummaryPanel', () => {
     expect(within(sourceSummary).getByText('%100')).toBeInTheDocument();
     expect(within(sourceSummary).getByText('İnceleme')).toBeInTheDocument();
     expect(within(sourceSummary).getByText('1/2 · %50')).toBeInTheDocument();
+    expect(within(sourceSummary).getByText('none')).toBeInTheDocument();
+  });
+
+  it('keeps low-coverage transcript sources behind the source quality gate', () => {
+    render(
+      <SummaryPanel
+        intelligence={{ ...initialMeetingIntelligence(), status: 'waiting' }}
+        transcript={sparseTranscriptState()}
+      />,
+    );
+
+    const readiness = screen.getByLabelText('Kaynak hazırlık durumu');
+    expect(within(readiness).getByText('Gözden geçirilmeli')).toBeInTheDocument();
+    expect(
+      within(readiness).getByText(
+        'Kelime üretim hızı düşük; konuşmanın önemli kısmı transcript kaynağına düşmemiş olabilir.',
+      ),
+    ).toBeInTheDocument();
+    const qualityGate = screen.getByLabelText('Kaynak kalite kapısı');
+    expect(within(qualityGate).getByText('Kapsam riski')).toBeInTheDocument();
+    expect(
+      within(qualityGate).getByText(
+        'Mikrofon/direct STT zinciri doğrulanmadan Meeting AI veya ERP/CRM aktarımı yapılmaz.',
+      ),
+    ).toBeInTheDocument();
+    const sourceSummary = screen.getByLabelText('Kaynak transkript özeti');
+    expect(within(sourceSummary).getByText('5.0 kelime/dk')).toBeInTheDocument();
+    expect(within(sourceSummary).getByText('low_word_coverage')).toBeInTheDocument();
+    const aiGate = screen.getByLabelText('Meeting AI kapı kontrolü');
+    expect(within(aiGate).getByText('Meeting AI kapısı bekliyor')).toBeInTheDocument();
+    expect(within(aiGate).getByText('kaynak kalite kontrolü gerekiyor')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Meeting AI gönder' })).toBeDisabled();
   });
 
   it('allows finished draft-only transcript submission while labeling the source as draft quality', async () => {
@@ -1079,6 +1164,13 @@ describe('SummaryPanel', () => {
     expect(
       within(readiness).getByText(
         'Yeterli taslak satır var; çıktı taslak kalite etiketiyle üretilebilir.',
+      ),
+    ).toBeInTheDocument();
+    const qualityGate = screen.getByLabelText('Kaynak kalite kapısı');
+    expect(within(qualityGate).getByText('Taslak kaliteyle açık')).toBeInTheDocument();
+    expect(
+      within(qualityGate).getByText(
+        'Backend gateway üzerinden taslak kalite etiketiyle gönderilebilir; final kanıt gibi değerlendirilmez.',
       ),
     ).toBeInTheDocument();
     const aiPackage = screen.getByLabelText('Meeting AI kaynak paketi');
