@@ -311,6 +311,11 @@ describe('SummaryPanel', () => {
     expect(within(reviewDetails).getAllByText('Blokaj')).toHaveLength(2);
     expect(within(reviewDetails).getAllByText('Uyarı')).toHaveLength(2);
     expect(within(reviewDetails).getByText('Kaynak kapsamı %50 altında')).toBeInTheDocument();
+    const objectPreview = within(readiness).getByLabelText('ERP/CRM nesne önizlemesi');
+    expect(within(objectPreview).getByText('Toplantı notu')).toBeInTheDocument();
+    expect(within(objectPreview).getByText('Karar kayıtları')).toBeInTheDocument();
+    expect(within(objectPreview).getByText('Aksiyon görevleri')).toBeInTheDocument();
+    expect(within(objectPreview).getAllByText('Kontrol gerekli')).toHaveLength(3);
   });
 
   it('uses export adapter for copy and file downloads', async () => {
@@ -488,6 +493,7 @@ describe('SummaryPanel', () => {
       privacy: Record<string, unknown>;
       route: Record<string, unknown>;
       adapter_manifest: Record<string, unknown>;
+      object_plan: Array<Record<string, unknown>>;
       source_evidence: {
         transcript: Record<string, unknown> | null;
       } | null;
@@ -512,6 +518,29 @@ describe('SummaryPanel', () => {
       required_capabilities: MEETING_OUTPUT_ADAPTER_CAPABILITIES,
       object_contracts: MEETING_OUTPUT_ADAPTER_OBJECT_CONTRACTS,
     });
+    expect(integrationPackage.object_plan).toEqual([
+      expect.objectContaining({
+        object: 'meeting_note',
+        label: 'Toplantı notu',
+        records: 1,
+        external_key: 'meeting_id',
+        status: 'ready',
+      }),
+      expect.objectContaining({
+        object: 'decision_record',
+        label: 'Karar kayıtları',
+        records: 1,
+        external_key: 'decision.id',
+        status: 'ready',
+      }),
+      expect.objectContaining({
+        object: 'action_task',
+        label: 'Aksiyon görevleri',
+        records: 1,
+        external_key: 'action.id',
+        status: 'ready',
+      }),
+    ]);
     expect(integrationPackage.source_evidence?.transcript).toMatchObject({
       source_level: 'ready',
       source_label: 'Çıktıya uygun',
@@ -561,6 +590,15 @@ describe('SummaryPanel', () => {
     expect(
       within(readiness).getByText('meeting_note, decision_record, action_task'),
     ).toBeInTheDocument();
+    const objectPreview = within(readiness).getByLabelText('ERP/CRM nesne önizlemesi');
+    expect(within(objectPreview).getByText('Toplantı notu')).toBeInTheDocument();
+    expect(within(objectPreview).getByText('Karar kayıtları')).toBeInTheDocument();
+    expect(within(objectPreview).getByText('Aksiyon görevleri')).toBeInTheDocument();
+    expect(within(objectPreview).getAllByText('1 kayıt')).toHaveLength(3);
+    expect(within(objectPreview).getByText('meeting_id')).toBeInTheDocument();
+    expect(within(objectPreview).getByText('decision.id')).toBeInTheDocument();
+    expect(within(objectPreview).getByText('action.id')).toBeInTheDocument();
+    expect(within(objectPreview).getAllByText('Hazır')).toHaveLength(3);
     expect(screen.getByText('Entegrasyon paketi panoya kopyalandı.')).toBeInTheDocument();
 
     await userEvent.click(screen.getByRole('button', { name: 'Entegrasyon JSON' }));

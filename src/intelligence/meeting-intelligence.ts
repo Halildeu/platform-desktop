@@ -74,6 +74,22 @@ export interface MeetingOutputHandoffReadiness {
   warnings: MeetingOutputHandoffIssue[];
 }
 
+export type MeetingOutputHandoffObjectStatus = 'ready' | 'needs_review';
+
+export type MeetingOutputHandoffObject = (typeof MEETING_OUTPUT_SUPPORTED_OBJECTS)[number];
+
+export interface MeetingOutputHandoffObjectPlan {
+  object: MeetingOutputHandoffObject;
+  label: string;
+  operation: 'upsert';
+  records: number;
+  externalKey: string;
+  requiredFields: readonly string[];
+  optionalFields: readonly string[];
+  status: MeetingOutputHandoffObjectStatus;
+  issues: MeetingOutputHandoffIssue[];
+}
+
 export interface MeetingIntelligenceState {
   status: IntelligenceStatus;
   meetingId: string | null;
@@ -131,6 +147,12 @@ const DECISION_LABELS: Record<DecisionStatus, string> = {
 };
 
 const MISSING_MEETING_ID_ERROR = 'Meeting intelligence için canonical meetingId yok.';
+
+const HANDOFF_OBJECT_LABELS: Record<MeetingOutputHandoffObject, string> = {
+  meeting_note: 'Toplantı notu',
+  decision_record: 'Karar kayıtları',
+  action_task: 'Aksiyon görevleri',
+};
 
 export function initialMeetingIntelligence(): MeetingIntelligenceState {
   return {
@@ -371,6 +393,27 @@ export function analyzeMeetingOutputHandoffReadiness(
   };
 }
 
+export function buildMeetingOutputHandoffObjectPlan(
+  result: MeetingIntelligenceResult,
+): MeetingOutputHandoffObjectPlan[] {
+  const citationCoverage = normalizedHandoffCitationCoverage(result.citationCoverage);
+  return MEETING_OUTPUT_ADAPTER_OBJECT_CONTRACTS.map((contract) => {
+    const object = contract.object;
+    const issues = handoffObjectIssues(result, object, citationCoverage);
+    return {
+      object,
+      label: HANDOFF_OBJECT_LABELS[object],
+      operation: contract.operation,
+      records: handoffObjectRecordCount(result, object),
+      externalKey: contract.external_key,
+      requiredFields: contract.required_fields,
+      optionalFields: contract.optional_fields,
+      status: issues.length === 0 ? 'ready' : 'needs_review',
+      issues,
+    };
+  });
+}
+
 function buildMarkdown(state: MeetingIntelligenceState): string {
   const result = state.result;
   if (!result) {
@@ -457,6 +500,7 @@ function buildIntegrationJson(
   }
   const contentFingerprint = intelligenceContentFingerprint(result);
   const handoffReadiness = analyzeMeetingOutputHandoffReadiness(result);
+  const objectPlan = buildMeetingOutputHandoffObjectPlan(result);
   const idempotencyKey = [
     'meeting-output',
     state.meetingId ?? 'meeting',
@@ -521,6 +565,17 @@ function buildIntegrationJson(
         blockers: handoffReadiness.blockers,
         warnings: handoffReadiness.warnings,
       },
+      object_plan: objectPlan.map((entry) => ({
+        object: entry.object,
+        label: entry.label,
+        operation: entry.operation,
+        records: entry.records,
+        external_key: entry.externalKey,
+        required_fields: entry.requiredFields,
+        optional_fields: entry.optionalFields,
+        status: entry.status,
+        issues: entry.issues,
+      })),
       field_mappings: {
         mapping_type: 'field_pointer',
         meeting_note: {
@@ -605,6 +660,135 @@ function normalizedHandoffCitationCoverage(value: number): number | null {
     return null;
   }
   return Math.min(1, Math.max(0, value));
+}
+
+function handoffObjectRecordCount(
+  result: MeetingIntelligenceResult,
+  object: MeetingOutputHandoffObject,
+): number {
+  if (object === 'meeting_note') {
+    return 1;
+  }
+  if (object === 'decision_record') {
+    return result.decisions.length;
+  }
+  return result.actionItems.length;
+}
+
+function handoffObjectIssues(
+  result: MeetingIntelligenceResult,
+  object: MeetingOutputHandoffObject,
+  citationCoverage: number | null,
+): MeetingOutputHandoffIssue[] {
+  if (object === 'meeting_note') {
+    return meetingNoteHandoffIssues(result, citationCoverage);
+  }
+  if (object === 'decision_record') {
+    return decisionHandoffIssues(result);
+  }
+  return actionHandoffIssues(result);
+}
+
+function meetingNoteHandoffIssues(
+  result: MeetingIntelligenceResult,
+  citationCoverage: number | null,
+): MeetingOutputHandoffIssue[] {
+  const issues: MeetingOutputHandoffIssue[] = [];
+  if (!hasMeaningfulText(result.summaryMarkdown)) {
+    issues.push({
+      code: 'missing_summary',
+      severity: 'blocker',
+      label: 'Toplantı özeti boş',
+    });
+  }
+  if (citationCoverage === null) {
+    issues.push({
+      code: 'unknown_citation_coverage',
+      severity: 'warning',
+      label: 'Kaynak kapsamı bilinmiyor',
+    });
+  } else if (citationCoverage < 0.5) {
+    issues.push({
+      code: 'low_citation_coverage',
+      severity: 'warning',
+      label: 'Kaynak kapsamı %50 altında',
+    });
+  }
+  return issues;
+}
+
+function decisionHandoffIssues(result: MeetingIntelligenceResult): MeetingOutputHandoffIssue[] {
+  const missingOwnerCount = result.decisions.filter(
+    (decision) => !hasMeaningfulText(decision.owner),
+  ).length;
+  const missingCitationCount = result.decisions.filter(
+    (decision) => decision.citations.length === 0,
+  ).length;
+  return [
+    ...(missingOwnerCount > 0
+      ? [
+          {
+            code: 'missing_decision_owner' as const,
+            severity: 'blocker' as const,
+            label: `${missingOwnerCount} kararda sahip eksik`,
+            count: missingOwnerCount,
+          },
+        ]
+      : []),
+    ...(missingCitationCount > 0
+      ? [
+          {
+            code: 'missing_source_reference' as const,
+            severity: 'warning' as const,
+            label: `${missingCitationCount} kararda kaynak referansı eksik`,
+            count: missingCitationCount,
+          },
+        ]
+      : []),
+  ];
+}
+
+function actionHandoffIssues(result: MeetingIntelligenceResult): MeetingOutputHandoffIssue[] {
+  const openActions = result.actionItems.filter((item) => item.status !== 'done');
+  const missingAssigneeCount = openActions.filter(
+    (item) => !hasMeaningfulText(item.assignee),
+  ).length;
+  const missingDueDateCount = openActions.filter((item) => !hasMeaningfulText(item.dueDate)).length;
+  const missingCitationCount = result.actionItems.filter(
+    (item) => item.citations.length === 0,
+  ).length;
+  return [
+    ...(missingAssigneeCount > 0
+      ? [
+          {
+            code: 'missing_action_assignee' as const,
+            severity: 'blocker' as const,
+            label: `${missingAssigneeCount} açık aksiyonda sahip eksik`,
+            count: missingAssigneeCount,
+          },
+        ]
+      : []),
+    ...(missingDueDateCount > 0
+      ? [
+          {
+            code: 'missing_action_due_date' as const,
+            severity: 'warning' as const,
+            label: `${missingDueDateCount} açık aksiyonda tarih eksik`,
+            count: missingDueDateCount,
+          },
+        ]
+      : []),
+    ...(missingCitationCount > 0
+      ? [
+          {
+            code: 'missing_source_reference' as const,
+            severity: 'warning' as const,
+            label: `${missingCitationCount} aksiyonda kaynak referansı eksik`,
+            count: missingCitationCount,
+          },
+        ]
+      : []),
+  ];
 }
 
 function fnv1a64(value: string): string {

@@ -188,6 +188,41 @@ describe('meeting intelligence state and exports', () => {
         blockers: [],
         warnings: [],
       },
+      object_plan: [
+        {
+          object: 'meeting_note',
+          label: 'Toplantı notu',
+          operation: 'upsert',
+          records: 1,
+          external_key: 'meeting_id',
+          required_fields: ['display_title', 'summary_markdown'],
+          optional_fields: ['citations', 'source_evidence'],
+          status: 'ready',
+          issues: [],
+        },
+        {
+          object: 'decision_record',
+          label: 'Karar kayıtları',
+          operation: 'upsert',
+          records: 1,
+          external_key: 'decision.id',
+          required_fields: ['decision.title', 'decision.owner', 'decision.status'],
+          optional_fields: ['decision.citations'],
+          status: 'ready',
+          issues: [],
+        },
+        {
+          object: 'action_task',
+          label: 'Aksiyon görevleri',
+          operation: 'upsert',
+          records: 1,
+          external_key: 'action.id',
+          required_fields: ['action.title', 'action.assignee', 'action.status'],
+          optional_fields: ['action.due_date', 'action.priority', 'action.citations'],
+          status: 'ready',
+          issues: [],
+        },
+      ],
     });
     const adapterContract = integrationPackage.adapter_contract as Record<string, string>;
     expect(adapterContract.idempotency_key).toContain(adapterContract.content_fingerprint);
@@ -343,6 +378,11 @@ describe('meeting intelligence state and exports', () => {
         blockers: Array<{ code: string; severity: string; label: string; count?: number }>;
         warnings: Array<{ code: string; severity: string; label: string; count?: number }>;
       };
+      object_plan: Array<{
+        object: string;
+        status: string;
+        issues: Array<{ code: string; severity: string; label: string; count?: number }>;
+      }>;
     };
 
     expect(integrationPackage.handoff_readiness).toMatchObject({
@@ -386,6 +426,61 @@ describe('meeting intelligence state and exports', () => {
         },
       ]),
     );
+    expect(integrationPackage.object_plan).toEqual([
+      expect.objectContaining({
+        object: 'meeting_note',
+        status: 'needs_review',
+        issues: [
+          {
+            code: 'low_citation_coverage',
+            severity: 'warning',
+            label: 'Kaynak kapsamı %50 altında',
+          },
+        ],
+      }),
+      expect.objectContaining({
+        object: 'decision_record',
+        status: 'needs_review',
+        issues: expect.arrayContaining([
+          {
+            code: 'missing_decision_owner',
+            severity: 'blocker',
+            label: '1 kararda sahip eksik',
+            count: 1,
+          },
+          {
+            code: 'missing_source_reference',
+            severity: 'warning',
+            label: '1 kararda kaynak referansı eksik',
+            count: 1,
+          },
+        ]),
+      }),
+      expect.objectContaining({
+        object: 'action_task',
+        status: 'needs_review',
+        issues: expect.arrayContaining([
+          {
+            code: 'missing_action_assignee',
+            severity: 'blocker',
+            label: '1 açık aksiyonda sahip eksik',
+            count: 1,
+          },
+          {
+            code: 'missing_action_due_date',
+            severity: 'warning',
+            label: '1 açık aksiyonda tarih eksik',
+            count: 1,
+          },
+          {
+            code: 'missing_source_reference',
+            severity: 'warning',
+            label: '1 aksiyonda kaynak referansı eksik',
+            count: 1,
+          },
+        ]),
+      }),
+    ]);
   });
 
   it('normalizes citation coverage bounds for ERP CRM handoff readiness', () => {

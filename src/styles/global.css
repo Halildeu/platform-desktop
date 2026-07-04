@@ -797,6 +797,58 @@ button:disabled {
   overflow-wrap: anywhere;
 }
 
+.handoff-object-plan {
+  grid-column: 1 / -1;
+  display: grid;
+  gap: 0;
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid #99f6e4;
+  border-radius: 6px;
+  background: #ffffff;
+}
+
+.handoff-object-row {
+  display: grid;
+  grid-template-columns: minmax(120px, 1.2fr) minmax(76px, 0.6fr) minmax(120px, 1fr) minmax(
+      108px,
+      0.8fr
+    );
+  gap: 8px;
+  align-items: center;
+  padding: 8px 10px;
+  border-top: 1px solid #ccfbf1;
+}
+
+.handoff-object-row:first-child {
+  border-top: 0;
+}
+
+.handoff-object-row-head {
+  background: #f0fdfa;
+}
+
+.handoff-object-row span,
+.handoff-object-row strong {
+  min-width: 0;
+  color: #17202a;
+  font-size: 12px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+  text-transform: none;
+}
+
+.handoff-object-row-head span {
+  color: #0f766e;
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.handoff-object-row strong {
+  font-weight: 800;
+}
+
 .integration-readiness p {
   grid-column: 1 / -1;
   margin: 0;

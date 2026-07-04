@@ -12,6 +12,7 @@ import {
   analyzeMeetingOutputHandoffReadiness,
   actionStatusLabel,
   buildIntelligenceExport,
+  buildMeetingOutputHandoffObjectPlan,
   buildMeetingOutputAdapterManifestJson,
   decisionStatusLabel,
   formatCitationTime,
@@ -24,6 +25,7 @@ import {
   type MeetingIntelligenceResult,
   type MeetingIntelligenceState,
   type MeetingOutputHandoffIssue,
+  type MeetingOutputHandoffObjectPlan,
   type MeetingOutputSourceEvidence,
   type MeetingOutputHandoffReadiness,
   setMeetingIntelligenceResult,
@@ -228,6 +230,21 @@ function handoffIssueLabel(readiness: MeetingOutputHandoffReadiness): string {
 
 function handoffIssueSeverityLabel(issue: MeetingOutputHandoffIssue): string {
   return issue.severity === 'blocker' ? 'Blokaj' : 'Uyarı';
+}
+
+function handoffObjectStatusLabel(entry: MeetingOutputHandoffObjectPlan): string {
+  return entry.status === 'ready' ? 'Hazır' : 'Kontrol gerekli';
+}
+
+function handoffObjectRecordLabel(entry: MeetingOutputHandoffObjectPlan): string {
+  return `${entry.records} kayıt`;
+}
+
+function handoffObjectIssueLabel(entry: MeetingOutputHandoffObjectPlan): string {
+  if (entry.issues.length === 0) {
+    return 'Eksik yok';
+  }
+  return entry.issues.map((issue) => issue.label).join(' · ');
 }
 
 function normalizedCitationCoverage(value: number | null | undefined): number | null {
@@ -455,6 +472,7 @@ export function SummaryPanel({
   const handoffIssues = handoffReadiness
     ? [...handoffReadiness.blockers, ...handoffReadiness.warnings]
     : [];
+  const handoffObjectPlan = displayResult ? buildMeetingOutputHandoffObjectPlan(displayResult) : [];
   const exportIntelligence = displayResult
     ? setMeetingIntelligenceResult(visibleIntelligence, displayResult)
     : visibleIntelligence;
@@ -1005,6 +1023,26 @@ export function SummaryPanel({
                     </li>
                   ))}
                 </ul>
+              ) : null}
+              {handoffObjectPlan.length > 0 ? (
+                <div className="handoff-object-plan" aria-label="ERP/CRM nesne önizlemesi">
+                  <div className="handoff-object-row handoff-object-row-head">
+                    <span>Nesne</span>
+                    <span>Kayıt</span>
+                    <span>Anahtar</span>
+                    <span>Durum</span>
+                  </div>
+                  {handoffObjectPlan.map((entry) => (
+                    <div className="handoff-object-row" key={entry.object}>
+                      <strong>{entry.label}</strong>
+                      <span>{handoffObjectRecordLabel(entry)}</span>
+                      <span>{entry.externalKey}</span>
+                      <span title={handoffObjectIssueLabel(entry)}>
+                        {handoffObjectStatusLabel(entry)}
+                      </span>
+                    </div>
+                  ))}
+                </div>
               ) : null}
               <p>{integrationSupportedObjectLabel()}</p>
             </div>
