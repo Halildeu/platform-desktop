@@ -233,6 +233,58 @@ describe('TranscriptPanel', () => {
     expect(articles[1]).not.toHaveClass('segment-live');
   });
 
+  it('renders transcript flow health metrics for live coverage triage', () => {
+    const recording = startTranscriptSession(initialTranscriptSession(), {
+      sessionId: 'SES-1',
+      meetingId: '22222222-2222-4222-8222-222222222222',
+      deviceId: 'desktop-1',
+      hasLoopback: false,
+      startedAtMs: 1781820000123,
+    });
+    const withDirectSegment = upsertTranscriptSegment(recording, {
+      id: 'seg-1',
+      speakerLabel: 'Konuşmacı 1',
+      startedAtMs: 1781820003000,
+      status: 'final',
+      text: 'İlk konuşma geldi',
+      source: 'direct-stream',
+      receivedAtMs: 1781820030123,
+    });
+    const withGatewaySegment = upsertTranscriptSegment(withDirectSegment, {
+      id: 'seg-2',
+      speakerLabel: 'Konuşmacı 2',
+      startedAtMs: 1781820060000,
+      status: 'final',
+      text: 'İkinci konuşma geldi',
+      source: 'gateway-events',
+      receivedAtMs: 1781820061123,
+    });
+
+    render(
+      <TranscriptPanel
+        session={withGatewaySegment}
+        stream={{
+          directConfigured: true,
+          directReady: true,
+          directActive: true,
+          audioRms: 0.026,
+          audioActive: true,
+          lastAudioAtMs: 1781820062123,
+          disabledReason: null,
+        }}
+      />,
+    );
+
+    const flowHealth = screen.getByLabelText('Transkript akış kalitesi');
+    expect(within(flowHealth).getByText('Akış takipte')).toBeInTheDocument();
+    expect(within(flowHealth).getByText('1.9 satır/dk')).toBeInTheDocument();
+    expect(within(flowHealth).getByText('6')).toBeInTheDocument();
+    expect(within(flowHealth).getByText('Direct 1 / Gateway 1')).toBeInTheDocument();
+    expect(
+      within(flowHealth).getByText('Ses ve transcript zamanı birlikte ilerliyor.'),
+    ).toBeInTheDocument();
+  });
+
   it('searches long transcript rows without changing newest-first order', async () => {
     const recording = startTranscriptSession(initialTranscriptSession(), {
       sessionId: 'SES-1',
@@ -563,9 +615,12 @@ describe('TranscriptPanel', () => {
     expect(snapshot).toContain('audioCapturePreflight=ready');
     expect(snapshot).toContain('audioCaptureWorklet=file:///app/dist/pcm-worklet.js');
     expect(snapshot).toContain('audioRms=0.026');
+    expect(snapshot).toContain('flow.health=Akış takipte');
+    expect(snapshot).toContain('flow.segmentDensityPerMinute=-');
     expect(snapshot).toContain('segments.total=1');
     expect(snapshot).toContain('segments.draft=1');
     expect(snapshot).toContain('segments.direct=1');
+    expect(snapshot).toContain('words.total=7');
     expect(snapshot).not.toContain('Bu hassas transcript metni');
     expect(await screen.findByText('Tanı panoya kopyalandı.')).toBeInTheDocument();
   });
@@ -599,6 +654,15 @@ describe('TranscriptPanel', () => {
     expect(screen.getByText('Alınıyor · RMS 0.021')).toBeInTheDocument();
     expect(screen.getByText(clock(1781820004123))).toBeInTheDocument();
     expect(screen.getByText('İlk metin bekleniyor')).toBeInTheDocument();
+    const flowHealth = screen.getByLabelText('Transkript akış kalitesi');
+    expect(within(flowHealth).getByText('Ses var, metin yok')).toBeInTheDocument();
+    expect(within(flowHealth).getByText('0')).toBeInTheDocument();
+    expect(within(flowHealth).getByText('Direct 0 / Gateway 0')).toBeInTheDocument();
+    expect(
+      within(flowHealth).getByText(
+        'Mikrofon sesi görülüyor ancak henüz transcript satırı alınmadı.',
+      ),
+    ).toBeInTheDocument();
   });
 
   it('surfaces direct stream reconnect state for operator triage', () => {
@@ -672,6 +736,13 @@ describe('TranscriptPanel', () => {
 
     expect(screen.getByText('Metin gecikiyor (7 sn)')).toBeInTheDocument();
     expect(screen.getByText('Gecikiyor · 7 sn')).toHaveClass('stream-lag-warning');
+    const flowHealth = screen.getByLabelText('Transkript akış kalitesi');
+    expect(within(flowHealth).getByText('Metin gecikiyor')).toBeInTheDocument();
+    expect(
+      within(flowHealth).getByText(
+        'Ses zamanı metinden önde; stream backlog, ağ veya model kuyruğu kontrol edilmeli.',
+      ),
+    ).toBeInTheDocument();
   });
 
   it('does not show transcript lag while capture is silent', () => {

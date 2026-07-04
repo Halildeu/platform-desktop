@@ -11,6 +11,9 @@ import type { LiveSttStreamStatusEvent } from '../audio/live-stt-stream';
 import type { AudioCapturePreflightState } from '../audio/capture';
 
 const TRANSCRIPT_LAG_WARN_MS = 5_000;
+const TRANSCRIPT_DENSITY_READY_MIN_MS = 10_000;
+const TRANSCRIPT_LOW_DENSITY_WARN_MS = 15_000;
+const TRANSCRIPT_LOW_DENSITY_SEGMENTS_PER_MINUTE = 1;
 const SPEAKER_COLORS = ['#0f766e', '#2563eb', '#b45309', '#7c3aed', '#be123c', '#0f766e'];
 
 type TranscriptFilter =
@@ -375,6 +378,19 @@ interface InterruptionSignal {
   overlapMs: number;
 }
 
+type TranscriptFlowHealthLevel = 'idle' | 'ok' | 'watch' | 'warn';
+
+interface TranscriptFlowHealth {
+  label: string;
+  detail: string;
+  level: TranscriptFlowHealthLevel;
+  words: number;
+  spanMs: number | null;
+  segmentsPerMinute: number | null;
+  directCount: number;
+  gatewayCount: number;
+}
+
 function explicitSegmentEnd(segment: TranscriptSessionState['segments'][number]): number | null {
   if (
     typeof segment.endedAtMs === 'number' &&
@@ -559,6 +575,175 @@ function transcriptStatusCounts(
   );
 }
 
+function transcriptWordTotal(session: TranscriptSessionState): number {
+  return session.segments.reduce((total, segment) => total + wordCount(segment.text), 0);
+}
+
+function transcriptObservationEndMs(
+  session: TranscriptSessionState,
+  stream: TranscriptPanelProps['stream'],
+  lastTranscriptAtMs: number | null,
+): number | null {
+  const candidates = [
+    session.finishedAtMs,
+    stream?.lastAudioAtMs,
+    lastTranscriptAtMs,
+    ...session.segments.map((segment) => segment.startedAtMs),
+  ].filter((value): value is number => typeof value === 'number' && Number.isFinite(value));
+  if (candidates.length === 0) {
+    return null;
+  }
+  return Math.max(...candidates);
+}
+
+function transcriptObservationSpanMs(
+  session: TranscriptSessionState,
+  stream: TranscriptPanelProps['stream'],
+  lastTranscriptAtMs: number | null,
+): number | null {
+  if (typeof session.startedAtMs !== 'number' || !Number.isFinite(session.startedAtMs)) {
+    return null;
+  }
+  const endMs = transcriptObservationEndMs(session, stream, lastTranscriptAtMs);
+  if (endMs === null || endMs <= session.startedAtMs) {
+    return null;
+  }
+  return endMs - session.startedAtMs;
+}
+
+function transcriptSegmentsPerMinute(segmentCount: number, spanMs: number | null): number | null {
+  if (spanMs === null || spanMs < TRANSCRIPT_DENSITY_READY_MIN_MS) {
+    return null;
+  }
+  return segmentCount / (spanMs / 60_000);
+}
+
+function formatTranscriptDensity(value: number | null): string {
+  if (value === null) {
+    return 'Ölçüm başlıyor';
+  }
+  if (value >= 10) {
+    return `${Math.round(value)} satır/dk`;
+  }
+  return `${value.toFixed(1)} satır/dk`;
+}
+
+function transcriptFlowHealth(
+  session: TranscriptSessionState,
+  stream: TranscriptPanelProps['stream'],
+  lastTranscriptAtMs: number | null,
+  recordingActive: boolean,
+): TranscriptFlowHealth {
+  const sourceCounts = transcriptSourceCounts(session);
+  const words = transcriptWordTotal(session);
+  const spanMs = transcriptObservationSpanMs(session, stream, lastTranscriptAtMs);
+  const segmentsPerMinute = transcriptSegmentsPerMinute(session.segments.length, spanMs);
+  const lagMs = streamLagMs(stream, lastTranscriptAtMs, recordingActive);
+
+  if (!recordingActive) {
+    return {
+      label: session.segments.length > 0 ? 'Kayıt dışı' : 'Akış bekleniyor',
+      detail:
+        session.segments.length > 0
+          ? 'Kayıt aktif değil; mevcut satırlar incelenebilir.'
+          : 'Kayıt başlayınca ses ve metin akışı izlenir.',
+      level: 'idle',
+      words,
+      spanMs,
+      segmentsPerMinute,
+      directCount: sourceCounts.direct,
+      gatewayCount: sourceCounts.gateway,
+    };
+  }
+
+  if (stream?.directStatus?.status === 'error' || stream?.directStatus?.status === 'closed') {
+    return {
+      label: 'Bağlantı hatası',
+      detail:
+        'Direct stream kapalı veya hata verdi; gateway fallback ve tanı snapshotı kontrol edilmeli.',
+      level: 'warn',
+      words,
+      spanMs,
+      segmentsPerMinute,
+      directCount: sourceCounts.direct,
+      gatewayCount: sourceCounts.gateway,
+    };
+  }
+
+  if (stream?.audioActive && session.segments.length === 0) {
+    return {
+      label: 'Ses var, metin yok',
+      detail: 'Mikrofon sesi görülüyor ancak henüz transcript satırı alınmadı.',
+      level: 'warn',
+      words,
+      spanMs,
+      segmentsPerMinute,
+      directCount: sourceCounts.direct,
+      gatewayCount: sourceCounts.gateway,
+    };
+  }
+
+  if (lagMs !== null && lagMs >= TRANSCRIPT_LAG_WARN_MS) {
+    return {
+      label: 'Metin gecikiyor',
+      detail: 'Ses zamanı metinden önde; stream backlog, ağ veya model kuyruğu kontrol edilmeli.',
+      level: 'warn',
+      words,
+      spanMs,
+      segmentsPerMinute,
+      directCount: sourceCounts.direct,
+      gatewayCount: sourceCounts.gateway,
+    };
+  }
+
+  if (
+    stream?.audioActive &&
+    spanMs !== null &&
+    spanMs >= TRANSCRIPT_LOW_DENSITY_WARN_MS &&
+    segmentsPerMinute !== null &&
+    segmentsPerMinute < TRANSCRIPT_LOW_DENSITY_SEGMENTS_PER_MINUTE
+  ) {
+    return {
+      label: 'Metin seyrek',
+      detail:
+        'Ses var ama satır yoğunluğu düşük; mikrofon seçimi ve direct stream teslimi kontrol edilmeli.',
+      level: 'watch',
+      words,
+      spanMs,
+      segmentsPerMinute,
+      directCount: sourceCounts.direct,
+      gatewayCount: sourceCounts.gateway,
+    };
+  }
+
+  if ((stream?.audioActive || stream?.directActive) && session.segments.length > 0) {
+    return {
+      label: 'Akış takipte',
+      detail: 'Ses ve transcript zamanı birlikte ilerliyor.',
+      level: 'ok',
+      words,
+      spanMs,
+      segmentsPerMinute,
+      directCount: sourceCounts.direct,
+      gatewayCount: sourceCounts.gateway,
+    };
+  }
+
+  return {
+    label: 'Ses bekleniyor',
+    detail:
+      session.segments.length > 0
+        ? 'Transcript var; yeni ses sinyali bekleniyor.'
+        : 'Mikrofon sinyali bekleniyor.',
+    level: 'watch',
+    words,
+    spanMs,
+    segmentsPerMinute,
+    directCount: sourceCounts.direct,
+    gatewayCount: sourceCounts.gateway,
+  };
+}
+
 function transcriptSourceCounts(session: TranscriptSessionState): {
   direct: number;
   gateway: number;
@@ -663,6 +848,7 @@ function buildTranscriptDiagnostics(
   const statusCounts = transcriptStatusCounts(session);
   const sourceCounts = transcriptSourceCounts(session);
   const lagMs = streamLagMs(stream, lastTranscriptAtMs, recordingActive);
+  const health = transcriptFlowHealth(session, stream, lastTranscriptAtMs, recordingActive);
 
   return [
     'meeting-intelligence.transcript.diagnostics.v1',
@@ -684,6 +870,8 @@ function buildTranscriptDiagnostics(
     `lastAudioAt=${formatDiagnosticTimestamp(stream?.lastAudioAtMs)}`,
     `lastTranscriptAt=${formatDiagnosticTimestamp(lastTranscriptAtMs)}`,
     `lagMs=${lagMs ?? '-'}`,
+    `flow.health=${health.label}`,
+    `flow.segmentDensityPerMinute=${formatDiagnosticNumber(health.segmentsPerMinute, 2)}`,
     `segments.total=${session.segments.length}`,
     `segments.draft=${statusCounts.draft}`,
     `segments.stabilizing=${statusCounts.stabilizing}`,
@@ -696,6 +884,7 @@ function buildTranscriptDiagnostics(
     `segments.direct=${sourceCounts.direct}`,
     `segments.gateway=${sourceCounts.gateway}`,
     `segments.unknown=${sourceCounts.unknown}`,
+    `words.total=${health.words}`,
     `errorPresent=${Boolean(session.error)}`,
   ].join('\n');
 }
@@ -730,6 +919,7 @@ export function TranscriptPanel({
   const lastTranscriptAtMs = latestTranscriptReceivedAtMs(session);
   const recordingActive = session.lifecycle === 'recording';
   const lagClass = transcriptLagClass(stream, lastTranscriptAtMs, recordingActive);
+  const flowHealth = transcriptFlowHealth(session, stream, lastTranscriptAtMs, recordingActive);
   const canRunPreflight = Boolean(
     stream?.directConfigured && stream.onPreflight && !recordingActive,
   );
@@ -881,6 +1071,31 @@ export function TranscriptPanel({
       ) : null}
       {diagnosticMessage ? <p className="export-message">{diagnosticMessage}</p> : null}
       {session.error ? <p className="inline-error">{session.error}</p> : null}
+
+      <div
+        className={`transcript-flow-health transcript-flow-${flowHealth.level}`}
+        aria-label="Transkript akış kalitesi"
+      >
+        <div>
+          <span>Sinyal</span>
+          <strong>{flowHealth.label}</strong>
+        </div>
+        <div>
+          <span>Yoğunluk</span>
+          <strong>{formatTranscriptDensity(flowHealth.segmentsPerMinute)}</strong>
+        </div>
+        <div>
+          <span>Kelime</span>
+          <strong>{flowHealth.words}</strong>
+        </div>
+        <div>
+          <span>Kaynak</span>
+          <strong>
+            Direct {flowHealth.directCount} / Gateway {flowHealth.gatewayCount}
+          </strong>
+        </div>
+        <p>{flowHealth.detail}</p>
+      </div>
 
       {hasSegments ? (
         <section className="speaker-panel" aria-labelledby="speaker-panel-title">
