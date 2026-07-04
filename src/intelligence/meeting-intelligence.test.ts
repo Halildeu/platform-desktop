@@ -183,6 +183,33 @@ describe('meeting intelligence state and exports', () => {
     expect(bundle.integrationJson).not.toContain('"raw_audio":');
   });
 
+  it('keeps the ERP CRM handoff contract vendor neutral', () => {
+    const ready = setMeetingIntelligenceResult(
+      {
+        ...initialMeetingIntelligence(),
+        meetingId: '22222222-2222-4222-8222-222222222222',
+        sessionId: 'SES-1',
+      },
+      RESULT,
+    );
+
+    const bundle = buildIntelligenceExport(ready, 1782741700000);
+    const integrationPackage = JSON.parse(bundle.integrationJson) as {
+      route: { target: string };
+      adapter_contract: {
+        vendor_specific: boolean;
+        source_system: string;
+      };
+    };
+
+    expect(integrationPackage.route.target).toBe('Generic ERP/CRM meeting workspace');
+    expect(integrationPackage.adapter_contract).toMatchObject({
+      vendor_specific: false,
+      source_system: 'platform-meeting-intelligence',
+    });
+    expect(bundle.integrationJson.toLowerCase()).not.toContain('workcube');
+  });
+
   it('marks ERP CRM handoff as review required when open action ownership is incomplete', () => {
     const ready = setMeetingIntelligenceResult(
       {
