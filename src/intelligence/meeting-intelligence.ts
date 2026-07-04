@@ -58,7 +58,8 @@ export type MeetingOutputHandoffIssueCode =
   | 'missing_decision_owner'
   | 'missing_source_reference'
   | 'unknown_citation_coverage'
-  | 'low_citation_coverage';
+  | 'low_citation_coverage'
+  | 'stale_source_evidence';
 
 export interface MeetingOutputHandoffIssue {
   code: MeetingOutputHandoffIssueCode;
@@ -422,6 +423,57 @@ export function buildMeetingOutputHandoffObjectPlan(
   });
 }
 
+export function applyMeetingOutputSourceEvidenceReadiness(
+  readiness: MeetingOutputHandoffReadiness,
+  sourceEvidence: MeetingOutputSourceEvidence | null,
+): MeetingOutputHandoffReadiness {
+  const sourceIssue = staleSourceEvidenceIssue(sourceEvidence);
+  if (!sourceIssue) {
+    return readiness;
+  }
+
+  const blockers = [
+    ...readiness.blockers.filter((issue) => issue.code !== sourceIssue.code),
+    sourceIssue,
+  ];
+  return {
+    status: 'needs_review',
+    canHandoff: false,
+    blockers,
+    warnings: readiness.warnings,
+  };
+}
+
+export function applyMeetingOutputSourceEvidenceObjectPlan(
+  objectPlan: MeetingOutputHandoffObjectPlan[],
+  sourceEvidence: MeetingOutputSourceEvidence | null,
+): MeetingOutputHandoffObjectPlan[] {
+  const sourceIssue = staleSourceEvidenceIssue(sourceEvidence);
+  if (!sourceIssue) {
+    return objectPlan;
+  }
+
+  return objectPlan.map((entry) => ({
+    ...entry,
+    status: 'needs_review',
+    issues: [...entry.issues.filter((issue) => issue.code !== sourceIssue.code), sourceIssue],
+  }));
+}
+
+function staleSourceEvidenceIssue(
+  sourceEvidence: MeetingOutputSourceEvidence | null,
+): MeetingOutputHandoffIssue | null {
+  if (sourceEvidence?.transcript?.result_freshness?.status !== 'source_changed') {
+    return null;
+  }
+
+  return {
+    code: 'stale_source_evidence',
+    severity: 'blocker',
+    label: 'Transkript AI çıktısından sonra değişti',
+  };
+}
+
 function buildMarkdown(state: MeetingIntelligenceState): string {
   const result = state.result;
   if (!result) {
@@ -507,8 +559,14 @@ function buildIntegrationJson(
     throw new Error('Meeting intelligence output is not ready');
   }
   const contentFingerprint = intelligenceContentFingerprint(result);
-  const handoffReadiness = analyzeMeetingOutputHandoffReadiness(result);
-  const objectPlan = buildMeetingOutputHandoffObjectPlan(result);
+  const handoffReadiness = applyMeetingOutputSourceEvidenceReadiness(
+    analyzeMeetingOutputHandoffReadiness(result),
+    sourceEvidence,
+  );
+  const objectPlan = applyMeetingOutputSourceEvidenceObjectPlan(
+    buildMeetingOutputHandoffObjectPlan(result),
+    sourceEvidence,
+  );
   const idempotencyKey = [
     'meeting-output',
     state.meetingId ?? 'meeting',

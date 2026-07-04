@@ -177,14 +177,16 @@ The recorder now exposes two user-facing workspaces:
   adapter handoff preview, and explicit package readiness state.
 - **ERP/CRM handoff**: vendor-neutral adapter manifest, review-before-write readiness gate,
   source-evidence metadata, object-level dry-run plan (`meeting_note`, `decision_record`,
-  `action_task`), review-vs-transfer package labels, and idempotent integration JSON for
-  backend-owned adapters.
+  `action_task`), stale-source fail-closed gating, review-vs-transfer package labels, and
+  idempotent integration JSON for backend-owned adapters.
 
 Boundaries:
 
 - No fake AI summary is rendered.
 - No raw audio or transcript is persisted to local disk by default.
 - Raw audio and raw transcript are excluded from ERP/CRM handoff packages by default.
+- If the transcript source changes after Meeting AI output generation, the ERP/CRM package is
+  downgraded to a review package until Meeting AI is regenerated against the latest source.
 - Meeting-intelligence content is shown only when an approved result is supplied to the renderer
   state model or generated through the backend gateway adapter. Real provider/runtime acceptance
   remains tracked by the Faz 24 GitOps/runtime issues.

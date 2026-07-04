@@ -11,6 +11,8 @@ import {
 import {
   analyzeMeetingOutputHandoffReadiness,
   actionStatusLabel,
+  applyMeetingOutputSourceEvidenceObjectPlan,
+  applyMeetingOutputSourceEvidenceReadiness,
   buildIntelligenceExport,
   buildMeetingOutputHandoffObjectPlan,
   buildMeetingOutputAdapterManifestJson,
@@ -589,13 +591,22 @@ export function SummaryPanel({
     transcriptSourceSegments.length,
     outputFreshness,
   );
-  const handoffReadiness = displayResult
+  const baseHandoffReadiness = displayResult
     ? analyzeMeetingOutputHandoffReadiness(displayResult)
+    : null;
+  const handoffReadiness = baseHandoffReadiness
+    ? applyMeetingOutputSourceEvidenceReadiness(baseHandoffReadiness, outputSourceEvidence)
     : null;
   const handoffIssues = handoffReadiness
     ? [...handoffReadiness.blockers, ...handoffReadiness.warnings]
     : [];
-  const handoffObjectPlan = displayResult ? buildMeetingOutputHandoffObjectPlan(displayResult) : [];
+  const baseHandoffObjectPlan = displayResult
+    ? buildMeetingOutputHandoffObjectPlan(displayResult)
+    : [];
+  const handoffObjectPlan = applyMeetingOutputSourceEvidenceObjectPlan(
+    baseHandoffObjectPlan,
+    outputSourceEvidence,
+  );
   const exportIntelligence = displayResult
     ? setMeetingIntelligenceResult(visibleIntelligence, displayResult)
     : visibleIntelligence;

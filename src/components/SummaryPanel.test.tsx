@@ -278,7 +278,12 @@ describe('SummaryPanel', () => {
     expect(within(outputQuality).getAllByText('-')).toHaveLength(2);
   });
 
-  it('marks meeting output stale when transcript source changes after generation', () => {
+  it('marks stale meeting output as review-only before ERP CRM handoff', async () => {
+    const adapter: ExportAdapter = {
+      copyText: vi.fn().mockResolvedValue(undefined),
+      downloadText: vi.fn(),
+      print: vi.fn(),
+    };
     const transcript = reportReadyTranscriptState();
     const base = readyState();
     if (!base.result) {
@@ -299,6 +304,7 @@ describe('SummaryPanel', () => {
           },
         )}
         transcript={transcript}
+        exportAdapter={adapter}
       />,
     );
 
@@ -309,6 +315,69 @@ describe('SummaryPanel', () => {
         'Transkript AI çıktısından sonra değişti; Meeting AI yeniden gönderilmeli.',
       ),
     ).toBeInTheDocument();
+    const readiness = screen.getByLabelText('ERP/CRM entegrasyon hazırlığı');
+    expect(within(readiness).getByText('Review gerekli')).toBeInTheDocument();
+    expect(within(readiness).getByText('Review paketi')).toBeInTheDocument();
+    expect(
+      within(readiness).getAllByText('Transkript AI çıktısından sonra değişti').length,
+    ).toBeGreaterThanOrEqual(1);
+    expect(screen.getByRole('button', { name: 'Review paketi kopyala' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Review JSON' })).toBeInTheDocument();
+    const objectPreview = within(readiness).getByLabelText('ERP/CRM nesne önizlemesi');
+    expect(within(objectPreview).getAllByText('Kontrol gerekli')).toHaveLength(3);
+
+    await userEvent.click(screen.getByRole('button', { name: 'Review paketi kopyala' }));
+
+    await waitFor(() => {
+      expect(adapter.copyText).toHaveBeenCalledWith(
+        expect.stringContaining('platform-desktop.meeting-output-integration.v1'),
+      );
+    });
+    const integrationPackage = JSON.parse(
+      String(vi.mocked(adapter.copyText).mock.calls.at(-1)?.[0]),
+    ) as {
+      handoff_readiness: {
+        status: string;
+        can_handoff: boolean;
+        blockers: Array<Record<string, unknown>>;
+      };
+      object_plan: Array<{ status: string; issues: Array<Record<string, unknown>> }>;
+      source_evidence: {
+        transcript: {
+          result_freshness: {
+            status: string;
+            raw_transcript_included: boolean;
+          };
+        };
+      };
+    };
+
+    expect(integrationPackage.handoff_readiness).toMatchObject({
+      status: 'needs_review',
+      can_handoff: false,
+      blockers: [
+        expect.objectContaining({
+          code: 'stale_source_evidence',
+          severity: 'blocker',
+          label: 'Transkript AI çıktısından sonra değişti',
+        }),
+      ],
+    });
+    expect(integrationPackage.object_plan).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          status: 'needs_review',
+          issues: expect.arrayContaining([
+            expect.objectContaining({ code: 'stale_source_evidence' }),
+          ]),
+        }),
+      ]),
+    );
+    expect(integrationPackage.source_evidence.transcript.result_freshness).toMatchObject({
+      status: 'source_changed',
+      raw_transcript_included: false,
+    });
+    expect(screen.getByText('Review paketi panoya kopyalandı.')).toBeInTheDocument();
   });
 
   it('surfaces ERP CRM handoff review blockers before adapter export', async () => {
