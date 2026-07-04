@@ -619,6 +619,8 @@ export function SummaryPanel({
     decisionDrafts,
     actionDrafts,
   );
+  const canRefreshStaleOutput =
+    outputFreshness?.status === 'source_changed' && meetingAiGate.can_submit;
   const autoSubmitKey =
     transcript && meetingAiGate.can_submit
       ? [
@@ -942,6 +944,16 @@ export function SummaryPanel({
       {result ? (
         <>
           <div className="summary-toolbar" aria-label="Çıktı araçları">
+            {canRefreshStaleOutput ? (
+              <button
+                className="primary-action"
+                type="button"
+                disabled={isSubmittingMeetingAi}
+                onClick={() => void runMeetingAiSubmit()}
+              >
+                {isSubmittingMeetingAi ? 'Yenileniyor...' : 'Meeting AI yenile'}
+              </button>
+            ) : null}
             <button
               className="secondary-action"
               type="button"

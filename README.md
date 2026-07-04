@@ -186,7 +186,8 @@ Boundaries:
 - No raw audio or transcript is persisted to local disk by default.
 - Raw audio and raw transcript are excluded from ERP/CRM handoff packages by default.
 - If the transcript source changes after Meeting AI output generation, the ERP/CRM package is
-  downgraded to a review package until Meeting AI is regenerated against the latest source.
+  downgraded to a review package and the product surface offers a Meeting AI refresh action when
+  the latest source is eligible for backend-gateway submission.
 - Meeting-intelligence content is shown only when an approved result is supplied to the renderer
   state model or generated through the backend gateway adapter. Real provider/runtime acceptance
   remains tracked by the Faz 24 GitOps/runtime issues.

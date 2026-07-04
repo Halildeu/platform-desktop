@@ -284,6 +284,30 @@ describe('SummaryPanel', () => {
       downloadText: vi.fn(),
       print: vi.fn(),
     };
+    const submitAdapter: MeetingAiSubmitAdapter = {
+      analyze: vi.fn().mockResolvedValue({
+        schema_version: '5-adr0043',
+        summary: 'Yenilenmiş çıktı son transkript kaynağına göre üretildi.',
+        decisions: ['Stale paket Meeting AI yenilemesi sonrası review edilecek'],
+        action_items: [
+          {
+            text: 'ERP CRM handoff paketi güncel kaynakla tekrar kontrol edilecek',
+            owner: 'Zeynep',
+            due_date: '2026-07-04',
+          },
+        ],
+        citations: [
+          {
+            claim: 'Stale paket Meeting AI yenilemesi sonrası review edilecek',
+            source_index: 0,
+            start_sec: 3,
+            grounded: true,
+          },
+        ],
+        backend: 'mock-meeting-ai',
+        model: 'unit-test',
+      }),
+    };
     const transcript = reportReadyTranscriptState();
     const base = readyState();
     if (!base.result) {
@@ -305,6 +329,7 @@ describe('SummaryPanel', () => {
         )}
         transcript={transcript}
         exportAdapter={adapter}
+        meetingAiSubmitAdapter={submitAdapter}
       />,
     );
 
@@ -378,6 +403,23 @@ describe('SummaryPanel', () => {
       raw_transcript_included: false,
     });
     expect(screen.getByText('Review paketi panoya kopyalandı.')).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Meeting AI yenile' }));
+
+    await waitFor(() => {
+      expect(submitAdapter.analyze).toHaveBeenCalledWith({
+        meetingId: '33333333-3333-4333-8333-333333333333',
+        request: expect.objectContaining({
+          meeting_id: '33333333-3333-4333-8333-333333333333',
+          session_id: 'SES-2',
+          transcript: expect.stringContaining('Canlı toplantı kaydı sırasında transkript'),
+        }),
+      });
+    });
+    expect(
+      await screen.findByText('Yenilenmiş çıktı son transkript kaynağına göre üretildi.'),
+    ).toBeInTheDocument();
+    expect(screen.getByText('Meeting AI sonucu alındı.')).toBeInTheDocument();
   });
 
   it('surfaces ERP CRM handoff review blockers before adapter export', async () => {
