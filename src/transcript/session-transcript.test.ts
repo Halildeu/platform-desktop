@@ -9,6 +9,7 @@ import {
   initialTranscriptSession,
   markTranscriptBlocked,
   markTranscriptReady,
+  markTranscriptSegmentReviewed,
   markTranscriptWaitingForContract,
   reviewTranscriptSegmentText,
   startTranscriptSession,
@@ -217,6 +218,7 @@ describe('session transcript state', () => {
       text: 'Doğru toplantı metni',
       revisedFromId: 'seg-1',
       receivedAtMs: 4000,
+      reviewedAtMs: 4000,
     });
     expect(reviewed.segments[1]).toMatchObject({
       id: 'seg-2',
@@ -246,6 +248,46 @@ describe('session transcript state', () => {
     );
     expect(reviewTranscriptSegmentText(withSegment, { id: 'missing', text: 'Yeni metin' })).toBe(
       withSegment,
+    );
+  });
+
+  it('marks stable transcript text as reviewed without changing STT output', () => {
+    const recording = startTranscriptSession(initialTranscriptSession(), {
+      sessionId: 'SES-1',
+      meetingId: '22222222-2222-4222-8222-222222222222',
+      deviceId: 'desktop-1',
+      hasLoopback: false,
+      startedAtMs: 1000,
+    });
+    const withLiveDraft = upsertTranscriptSegment(recording, {
+      id: 'seg-live',
+      speakerLabel: 'Konuşmacı',
+      startedAtMs: 2000,
+      status: 'draft',
+      source: 'direct-stream',
+      text: 'Canlı kelime akışı sürüyor',
+    });
+    const withStable = upsertTranscriptSegment(withLiveDraft, {
+      id: 'seg-final',
+      speakerLabel: 'Konuşmacı',
+      startedAtMs: 3000,
+      status: 'final',
+      source: 'gateway-events',
+      text: 'Doğru toplantı satırı',
+    });
+
+    const reviewed = markTranscriptSegmentReviewed(withStable, {
+      id: 'seg-final',
+      reviewedAtMs: 5000,
+    });
+
+    expect(reviewed.segments.find((segment) => segment.id === 'seg-final')).toMatchObject({
+      status: 'final',
+      text: 'Doğru toplantı satırı',
+      reviewedAtMs: 5000,
+    });
+    expect(markTranscriptSegmentReviewed(reviewed, { id: 'seg-live', reviewedAtMs: 6000 })).toBe(
+      reviewed,
     );
   });
 
@@ -366,7 +408,11 @@ describe('session transcript state', () => {
       1781820020000,
     );
 
-    const bundle = buildMeetingAiSourcePackage(withSecond, 1781820100000);
+    const reviewed = markTranscriptSegmentReviewed(withSecond, {
+      id: 'seg-1',
+      reviewedAtMs: 1781820090000,
+    });
+    const bundle = buildMeetingAiSourcePackage(reviewed, 1781820100000);
 
     expect(bundle.jsonFileName).toMatch(/^meeting-ai-source-22222222-2222-4222-8222-222222222222-/);
     expect(bundle.package.schema_version).toBe('platform-desktop.meeting-ai-source.v1');
@@ -409,8 +455,11 @@ describe('session transcript state', () => {
       ],
     });
     expect(bundle.package.source_quality.final_count).toBe(2);
+    expect(bundle.package.source_quality.reviewed_count).toBe(1);
+    expect(bundle.package.source_quality.reviewed_ratio).toBe(0.5);
     expect(bundle.package.source_quality.warnings).not.toContain('Transkript satırı yok.');
     expect(bundle.json).toContain('"client_direct_platform_ai": false');
+    expect(bundle.json).toContain('"reviewed_count": 1');
     expect(bundle.json).not.toContain('summaryMarkdown');
     expect(bundle.json).not.toContain('actionItems');
   });

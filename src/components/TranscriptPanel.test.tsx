@@ -269,7 +269,9 @@ describe('TranscriptPanel', () => {
     render(<TranscriptPanel session={withThird} />);
 
     expect(
-      screen.getByText('Görünen 3/3 · Final 2 · Revize 1 · Taslak 0 · Direct 2 · Gateway 1'),
+      screen.getByText(
+        'Görünen 3/3 · Final 2 · Revize 1 · İncelenen 1 · Taslak 0 · Direct 2 · Gateway 1',
+      ),
     ).toBeInTheDocument();
     expect(screen.getAllByRole('article')[0]).toHaveTextContent('Revize karar satırı');
 
@@ -279,7 +281,9 @@ describe('TranscriptPanel', () => {
     expect(searchedArticles).toHaveLength(1);
     expect(searchedArticles[0]).toHaveTextContent('Bütçe onayı');
     expect(
-      screen.getByText('Görünen 1/3 · Final 2 · Revize 1 · Taslak 0 · Direct 2 · Gateway 1'),
+      screen.getByText(
+        'Görünen 1/3 · Final 2 · Revize 1 · İncelenen 1 · Taslak 0 · Direct 2 · Gateway 1',
+      ),
     ).toBeInTheDocument();
 
     await userEvent.clear(screen.getByPlaceholderText('Transkriptte ara'));
@@ -344,6 +348,7 @@ describe('TranscriptPanel', () => {
 
   it('lets users review stable transcript text without editing the live direct draft', async () => {
     const onSegmentTextChange = vi.fn();
+    const onSegmentReviewed = vi.fn();
     const recording = startTranscriptSession(initialTranscriptSession(), {
       sessionId: 'SES-1',
       meetingId: '22222222-2222-4222-8222-222222222222',
@@ -374,11 +379,16 @@ describe('TranscriptPanel', () => {
         session={withStableSegment}
         stream={{ directConfigured: true, directActive: true, disabledReason: null }}
         onSegmentTextChange={onSegmentTextChange}
+        onSegmentReviewed={onSegmentReviewed}
       />,
     );
 
     const articles = screen.getAllByRole('article');
     expect(within(articles[0]).queryByRole('button', { name: 'Metni düzelt' })).toBeNull();
+    expect(within(articles[0]).queryByRole('button', { name: 'İncelendi' })).toBeNull();
+
+    await userEvent.click(within(articles[1]).getByRole('button', { name: 'İncelendi' }));
+    expect(onSegmentReviewed).toHaveBeenCalledWith('seg-final');
 
     await userEvent.click(within(articles[1]).getByRole('button', { name: 'Metni düzelt' }));
     const editor = within(articles[1]).getByLabelText('Transkript metni');

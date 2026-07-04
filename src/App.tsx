@@ -34,6 +34,7 @@ import {
   failTranscriptSession,
   finishTranscriptSession,
   initialTranscriptSession,
+  markTranscriptSegmentReviewed,
   markTranscriptBlocked,
   markTranscriptReady,
   markTranscriptWaitingForContract,
@@ -914,6 +915,15 @@ function App() {
     );
   };
 
+  const handleTranscriptSegmentReviewed = (segmentId: string): void => {
+    setTranscriptSession((current) =>
+      markTranscriptSegmentReviewed(current, {
+        id: segmentId,
+        reviewedAtMs: Date.now(),
+      }),
+    );
+  };
+
   return (
     <div className="app-root">
       <header className="app-header">
@@ -1019,6 +1029,7 @@ function App() {
                 onPreflight: recording ? undefined : () => void handleLiveStreamPreflight(),
               }}
               onSegmentTextChange={handleTranscriptSegmentTextChange}
+              onSegmentReviewed={handleTranscriptSegmentReviewed}
             />
             <SummaryPanel
               intelligence={meetingIntelligence}

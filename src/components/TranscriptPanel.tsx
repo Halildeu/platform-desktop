@@ -27,6 +27,7 @@ const TRANSCRIPT_FILTERS: Array<{ key: TranscriptFilter; label: string }> = [
 export interface TranscriptPanelProps {
   session: TranscriptSessionState;
   onSegmentTextChange?: (segmentId: string, text: string) => void;
+  onSegmentReviewed?: (segmentId: string) => void;
   stream?: {
     directConfigured: boolean;
     directReady?: boolean;
@@ -507,6 +508,10 @@ function isLiveDirectDraft(segment: TranscriptSessionState['segments'][number]):
   return segment.source === 'direct-stream' && segment.status === 'draft';
 }
 
+function isReviewedSegment(segment: TranscriptSessionState['segments'][number]): boolean {
+  return segment.status === 'revised' || typeof segment.reviewedAtMs === 'number';
+}
+
 function formatDiagnosticTimestamp(value: number | null | undefined): string {
   if (typeof value !== 'number' || !Number.isFinite(value)) {
     return '-';
@@ -604,10 +609,12 @@ function matchesTranscriptQuery(
 function transcriptReviewSummary(session: TranscriptSessionState, visibleCount: number): string {
   const statusCounts = transcriptStatusCounts(session);
   const sourceCounts = transcriptSourceCounts(session);
+  const reviewedCount = session.segments.filter(isReviewedSegment).length;
   return [
     `Görünen ${visibleCount}/${session.segments.length}`,
     `Final ${statusCounts.final}`,
     `Revize ${statusCounts.revised}`,
+    `İncelenen ${reviewedCount}`,
     `Taslak ${statusCounts.draft + statusCounts.stabilizing}`,
     `Direct ${sourceCounts.direct}`,
     `Gateway ${sourceCounts.gateway}`,
@@ -649,6 +656,7 @@ function buildTranscriptDiagnostics(
     `segments.stabilizing=${statusCounts.stabilizing}`,
     `segments.final=${statusCounts.final}`,
     `segments.revised=${statusCounts.revised}`,
+    `segments.reviewed=${session.segments.filter(isReviewedSegment).length}`,
     `segments.direct=${sourceCounts.direct}`,
     `segments.gateway=${sourceCounts.gateway}`,
     `segments.unknown=${sourceCounts.unknown}`,
@@ -660,6 +668,7 @@ export function TranscriptPanel({
   session,
   stream,
   onSegmentTextChange,
+  onSegmentReviewed,
 }: TranscriptPanelProps): ReactElement {
   const hasSegments = session.segments.length > 0;
   const listRef = useRef<HTMLDivElement | null>(null);
@@ -967,7 +976,10 @@ export function TranscriptPanel({
           filteredSegments.map((segment) => {
             const metricLabel = segmentMetricLabel(segment);
             const liveDirectDraft = isLiveDirectDraft(segment);
+            const reviewedSegment = isReviewedSegment(segment);
             const editableSegment = Boolean(onSegmentTextChange) && !liveDirectDraft;
+            const canMarkReviewed =
+              Boolean(onSegmentReviewed) && !liveDirectDraft && !reviewedSegment;
             const editingSegment = editingSegmentId === segment.id;
             const segmentDraftText = segmentTextDrafts[segment.id] ?? segment.text;
             const reviewedText = segmentDraftText.trim();
@@ -988,6 +1000,7 @@ export function TranscriptPanel({
                   <span>{transcriptStatusLabel(segment.status)}</span>
                   <span>{segmentSourceLabel(segment.source)}</span>
                   {metricLabel ? <span>{metricLabel}</span> : null}
+                  {reviewedSegment ? <span>İncelendi</span> : null}
                   {liveDirectDraft ? <span>Canlı</span> : null}
                 </div>
                 {editingSegment ? (
@@ -1031,15 +1044,26 @@ export function TranscriptPanel({
                         </span>
                       ) : null}
                     </p>
-                    {editableSegment ? (
+                    {editableSegment || canMarkReviewed ? (
                       <div className="segment-actions">
-                        <button
-                          className="secondary-action compact-action segment-review-action"
-                          type="button"
-                          onClick={() => beginSegmentReview(segment.id, segment.text)}
-                        >
-                          Metni düzelt
-                        </button>
+                        {canMarkReviewed ? (
+                          <button
+                            className="secondary-action compact-action segment-review-action"
+                            type="button"
+                            onClick={() => onSegmentReviewed?.(segment.id)}
+                          >
+                            İncelendi
+                          </button>
+                        ) : null}
+                        {editableSegment ? (
+                          <button
+                            className="secondary-action compact-action segment-review-action"
+                            type="button"
+                            onClick={() => beginSegmentReview(segment.id, segment.text)}
+                          >
+                            Metni düzelt
+                          </button>
+                        ) : null}
                       </div>
                     ) : null}
                   </>

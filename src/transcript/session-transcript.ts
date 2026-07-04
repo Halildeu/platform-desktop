@@ -21,6 +21,7 @@ export interface TranscriptSegment {
   elapsedMs?: number | null;
   rms?: number | null;
   receivedAtMs?: number | null;
+  reviewedAtMs?: number | null;
 }
 
 export interface TranscriptSessionState {
@@ -108,6 +109,8 @@ export interface MeetingAiSourcePackage {
     final_count: number;
     draft_count: number;
     final_ratio: number;
+    reviewed_count: number;
+    reviewed_ratio: number;
     warnings: string[];
   };
   meeting_id: string | null;
@@ -136,6 +139,8 @@ export interface TranscriptSourceReadiness {
   finalCount: number;
   draftCount: number;
   finalRatio: number;
+  reviewedCount: number;
+  reviewedRatio: number;
   warnings: string[];
 }
 
@@ -295,6 +300,32 @@ export function upsertTranscriptSegment(
   };
 }
 
+export function markTranscriptSegmentReviewed(
+  state: TranscriptSessionState,
+  args: { id: string; reviewedAtMs?: number },
+): TranscriptSessionState {
+  let changed = false;
+  const segments = state.segments.map((segment) => {
+    if (segment.id !== args.id || !isReviewableTranscriptSegment(state, segment)) {
+      return segment;
+    }
+
+    const reviewedAtMs =
+      args.reviewedAtMs ?? segment.reviewedAtMs ?? segment.receivedAtMs ?? segment.startedAtMs;
+    if (segment.reviewedAtMs === reviewedAtMs) {
+      return segment;
+    }
+
+    changed = true;
+    return {
+      ...segment,
+      reviewedAtMs,
+    };
+  });
+
+  return changed ? { ...state, segments } : state;
+}
+
 export function reviewTranscriptSegmentText(
   state: TranscriptSessionState,
   args: { id: string; text: string; reviewedAtMs?: number },
@@ -309,7 +340,13 @@ export function reviewTranscriptSegmentText(
     if (segment.id !== args.id) {
       return segment;
     }
-    if (segment.text.trim() === reviewedText && segment.status === 'revised') {
+    const reviewedAtMs =
+      args.reviewedAtMs ?? segment.reviewedAtMs ?? segment.receivedAtMs ?? segment.startedAtMs;
+    if (
+      segment.text.trim() === reviewedText &&
+      segment.status === 'revised' &&
+      segment.reviewedAtMs === reviewedAtMs
+    ) {
       return segment;
     }
 
@@ -319,7 +356,8 @@ export function reviewTranscriptSegmentText(
       status: 'revised' as const,
       text: reviewedText,
       revisedFromId: segment.revisedFromId ?? segment.id,
-      receivedAtMs: args.reviewedAtMs ?? segment.receivedAtMs ?? segment.startedAtMs,
+      receivedAtMs: reviewedAtMs,
+      reviewedAtMs,
     };
   });
 
@@ -413,6 +451,21 @@ function sharedWordRatio(left: string[], right: string[]): number {
   return shared / denominator;
 }
 
+function isReviewableTranscriptSegment(
+  state: TranscriptSessionState,
+  segment: TranscriptSegment,
+): boolean {
+  if (!segment.text.trim()) {
+    return false;
+  }
+
+  return !(
+    state.lifecycle === 'recording' &&
+    segment.source === 'direct-stream' &&
+    segment.status === 'draft'
+  );
+}
+
 export function transcriptStatusLabel(status: TranscriptSegmentStatus): string {
   switch (status) {
     case 'draft':
@@ -499,6 +552,8 @@ export function buildMeetingAiSourcePackage(
       final_count: readiness.finalCount,
       draft_count: readiness.draftCount,
       final_ratio: readiness.finalRatio,
+      reviewed_count: readiness.reviewedCount,
+      reviewed_ratio: readiness.reviewedRatio,
       warnings: readiness.warnings,
     },
     meeting_id: state.meetingId,
@@ -533,18 +588,22 @@ export function analyzeTranscriptSourceReadiness(
       finalCount: 0,
       draftCount: 0,
       finalRatio: 0,
+      reviewedCount: 0,
+      reviewedRatio: 0,
       warnings: ['Transkript satırı yok.'],
     };
   }
 
   const finalCount = segments.filter(isFinalSegment).length;
   const draftCount = segments.length - finalCount;
+  const reviewedCount = segments.filter(isReviewedSegment).length;
   const wordCount = segments.reduce((total, segment) => total + countWords(segment.text), 0);
   const durationMs = Math.max(
     0,
     segments[segments.length - 1].startedAtMs - segments[0].startedAtMs,
   );
   const finalRatio = finalCount / segments.length;
+  const reviewedRatio = reviewedCount / segments.length;
   const hasMinimumSource =
     wordCount >= REPORT_READY_MIN_WORDS && durationMs >= REPORT_READY_MIN_DURATION_MS;
   const draftOnlyCanBeReviewed = finalCount === 0 && hasMinimumSource && isSubmitLifecycle(state);
@@ -578,6 +637,8 @@ export function analyzeTranscriptSourceReadiness(
       finalCount,
       draftCount,
       finalRatio,
+      reviewedCount,
+      reviewedRatio,
       warnings,
     };
   }
@@ -599,6 +660,8 @@ export function analyzeTranscriptSourceReadiness(
       finalCount,
       draftCount,
       finalRatio,
+      reviewedCount,
+      reviewedRatio,
       warnings,
     };
   }
@@ -634,6 +697,8 @@ export function analyzeTranscriptSourceReadiness(
     finalCount,
     draftCount,
     finalRatio,
+    reviewedCount,
+    reviewedRatio,
     warnings,
   };
 }
@@ -712,6 +777,10 @@ function isFinalSegment(segment: TranscriptSegment): boolean {
   return segment.status === 'final' || segment.status === 'revised';
 }
 
+function isReviewedSegment(segment: TranscriptSegment): boolean {
+  return segment.status === 'revised' || typeof segment.reviewedAtMs === 'number';
+}
+
 function buildAnalyzeSegments(segments: TranscriptSegment[]): MeetingAiAnalyzeSegment[] {
   const firstStartedAtMs = segments[0]?.startedAtMs ?? 0;
   return segments.map((segment, index) => {
@@ -753,6 +822,7 @@ function buildTranscriptMarkdown(
     `- Kelime: ${readiness.wordCount}`,
     `- Süre: ${formatDuration(readiness.durationMs)}`,
     `- Final oranı: ${formatPercent(readiness.finalRatio)}`,
+    `- İncelenen: ${readiness.reviewedCount}/${segments.length}`,
     `- Uyarı: ${readiness.warnings.length > 0 ? readiness.warnings.join(' ') : '-'}`,
     '',
     '## Transkript',
@@ -785,6 +855,7 @@ function buildTranscriptText(state: TranscriptSessionState, segments: Transcript
     `Kelime: ${readiness.wordCount}`,
     `Süre: ${formatDuration(readiness.durationMs)}`,
     `Final oranı: ${formatPercent(readiness.finalRatio)}`,
+    `İncelenen: ${readiness.reviewedCount}/${segments.length}`,
     `Uyarı: ${readiness.warnings.length > 0 ? readiness.warnings.join(' ') : '-'}`,
     '',
   ];
