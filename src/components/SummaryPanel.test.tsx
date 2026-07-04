@@ -517,6 +517,8 @@ describe('SummaryPanel', () => {
     });
     const outputQuality = screen.getByLabelText('Toplantı çıktısı kalite durumu');
     expect(within(outputQuality).getByText('Revizyonlu')).toBeInTheDocument();
+    expect(within(outputQuality).getByText('Transkript review')).toBeInTheDocument();
+    expect(within(outputQuality).getByText('1/2 · %50')).toBeInTheDocument();
     const readiness = screen.getByLabelText('ERP/CRM entegrasyon hazırlığı');
     expect(within(readiness).getByText('Hedef')).toBeInTheDocument();
     expect(within(readiness).getByText('ERP/CRM adaptör hedefi')).toBeInTheDocument();
@@ -524,6 +526,8 @@ describe('SummaryPanel', () => {
       within(readiness).getByText(MEETING_OUTPUT_ADAPTER_CONTRACT_VERSION),
     ).toBeInTheDocument();
     expect(within(readiness).getByText('Adapter seçilecek')).toBeInTheDocument();
+    expect(within(readiness).getByText('Kaynak kanıtı')).toBeInTheDocument();
+    expect(within(readiness).getByText('Review metrikli')).toBeInTheDocument();
     expect(within(readiness).getByText('Toplantı notu / 1 karar / 1 aksiyon')).toBeInTheDocument();
     expect(within(readiness).getByText('Onaydan sonra')).toBeInTheDocument();
     expect(within(readiness).getByText('Ham ses/transkript yok')).toBeInTheDocument();

@@ -897,6 +897,17 @@ export function SummaryPanel({
                 <span>İnsan kontrolü</span>
                 <strong>{hasUserReviewChanges ? 'Revizyonlu' : 'Kontrol bekliyor'}</strong>
               </div>
+              {outputSourceEvidence?.transcript ? (
+                <div>
+                  <span>Transkript review</span>
+                  <strong>
+                    {transcriptReviewCoverageLabel(
+                      transcriptReadiness,
+                      transcriptSourceSegments.length,
+                    )}
+                  </strong>
+                </div>
+              ) : null}
             </div>
           ) : null}
           {displayResult ? (
@@ -933,6 +944,12 @@ export function SummaryPanel({
                 <span>Gizlilik</span>
                 <strong>Ham ses/transkript yok</strong>
               </div>
+              {outputSourceEvidence?.transcript ? (
+                <div>
+                  <span>Kaynak kanıtı</span>
+                  <strong>Review metrikli</strong>
+                </div>
+              ) : null}
               <p>{integrationSupportedObjectLabel()}</p>
             </div>
           ) : null}
