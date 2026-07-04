@@ -7,7 +7,12 @@ import '@testing-library/jest-dom/vitest';
 
 import { CONSENT_TEXT_HASH, CONSENT_VERSION } from './ConsentDialog';
 import { SummaryPanel, type ExportAdapter, type MeetingAiSubmitAdapter } from './SummaryPanel';
-import { MEETING_OUTPUT_ADAPTER_CONTRACT_VERSION } from '../intelligence/meeting-output-contract';
+import {
+  MEETING_OUTPUT_ADAPTER_CAPABILITIES,
+  MEETING_OUTPUT_ADAPTER_CONTRACT_VERSION,
+  MEETING_OUTPUT_ADAPTER_OBJECT_CONTRACTS,
+  MEETING_OUTPUT_ADAPTER_PROFILE_ID,
+} from '../intelligence/meeting-output-contract';
 import {
   initialMeetingIntelligence,
   setMeetingIntelligenceResult,
@@ -476,6 +481,7 @@ describe('SummaryPanel', () => {
     ) as {
       privacy: Record<string, unknown>;
       route: Record<string, unknown>;
+      adapter_manifest: Record<string, unknown>;
       source_evidence: {
         transcript: Record<string, unknown> | null;
       } | null;
@@ -492,6 +498,13 @@ describe('SummaryPanel', () => {
       target: 'Generic ERP/CRM meeting workspace',
       expected_authority: 'backend-gateway / meeting-service integration adapter',
       desktop_direct_backend_mutation: false,
+    });
+    expect(integrationPackage.adapter_manifest).toMatchObject({
+      profile_id: MEETING_OUTPUT_ADAPTER_PROFILE_ID,
+      target_family: 'erp_crm',
+      vendor_specific: false,
+      required_capabilities: MEETING_OUTPUT_ADAPTER_CAPABILITIES,
+      object_contracts: MEETING_OUTPUT_ADAPTER_OBJECT_CONTRACTS,
     });
     expect(integrationPackage.source_evidence?.transcript).toMatchObject({
       source_level: 'ready',
@@ -526,6 +539,14 @@ describe('SummaryPanel', () => {
       within(readiness).getByText(MEETING_OUTPUT_ADAPTER_CONTRACT_VERSION),
     ).toBeInTheDocument();
     expect(within(readiness).getByText('Adapter seçilecek')).toBeInTheDocument();
+    expect(within(readiness).getByText('Adapter profili')).toBeInTheDocument();
+    expect(within(readiness).getByText(MEETING_OUTPUT_ADAPTER_PROFILE_ID)).toBeInTheDocument();
+    expect(within(readiness).getByText('Manifest')).toBeInTheDocument();
+    expect(
+      within(readiness).getByText(
+        `${MEETING_OUTPUT_ADAPTER_OBJECT_CONTRACTS.length} nesne / ${MEETING_OUTPUT_ADAPTER_CAPABILITIES.length} kabiliyet`,
+      ),
+    ).toBeInTheDocument();
     expect(within(readiness).getByText('Kaynak kanıtı')).toBeInTheDocument();
     expect(within(readiness).getByText('Review metrikli')).toBeInTheDocument();
     expect(within(readiness).getByText('Toplantı notu / 1 karar / 1 aksiyon')).toBeInTheDocument();

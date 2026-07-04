@@ -136,6 +136,43 @@ describe('meeting intelligence state and exports', () => {
         source_system: 'platform-meeting-intelligence',
         supported_objects: ['meeting_note', 'decision_record', 'action_task'],
       },
+      adapter_manifest: {
+        profile_id: 'generic-erp-crm-meeting-output',
+        adapter_kind: 'vendor-neutral-meeting-output-adapter',
+        target_family: 'erp_crm',
+        vendor_specific: false,
+        required_capabilities: [
+          'upsert_meeting_note',
+          'upsert_decision_record',
+          'upsert_action_task',
+          'source_reference_mapping',
+          'idempotent_write',
+          'human_review_gate',
+        ],
+        object_contracts: [
+          {
+            object: 'meeting_note',
+            operation: 'upsert',
+            external_key: 'meeting_id',
+            required_fields: ['display_title', 'summary_markdown'],
+            optional_fields: ['citations', 'source_evidence'],
+          },
+          {
+            object: 'decision_record',
+            operation: 'upsert',
+            external_key: 'decision.id',
+            required_fields: ['decision.title', 'decision.owner', 'decision.status'],
+            optional_fields: ['decision.citations'],
+          },
+          {
+            object: 'action_task',
+            operation: 'upsert',
+            external_key: 'action.id',
+            required_fields: ['action.title', 'action.assignee', 'action.status'],
+            optional_fields: ['action.due_date', 'action.priority', 'action.citations'],
+          },
+        ],
+      },
       sync_policy: {
         mode: 'upsert_by_idempotency_key',
         requires_human_review: true,
@@ -201,12 +238,22 @@ describe('meeting intelligence state and exports', () => {
         vendor_specific: boolean;
         source_system: string;
       };
+      adapter_manifest: {
+        profile_id: string;
+        target_family: string;
+        vendor_specific: boolean;
+      };
     };
 
     expect(integrationPackage.route.target).toBe('Generic ERP/CRM meeting workspace');
     expect(integrationPackage.adapter_contract).toMatchObject({
       vendor_specific: false,
       source_system: 'platform-meeting-intelligence',
+    });
+    expect(integrationPackage.adapter_manifest).toMatchObject({
+      profile_id: 'generic-erp-crm-meeting-output',
+      target_family: 'erp_crm',
+      vendor_specific: false,
     });
     expect(bundle.integrationJson.toLowerCase()).not.toContain('workcube');
   });

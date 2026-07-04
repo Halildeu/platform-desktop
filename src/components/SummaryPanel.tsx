@@ -2,7 +2,10 @@ import { useCallback, useEffect, useRef, useState, type ReactElement } from 'rea
 
 import { CONSENT_LOCALE, CONSENT_TEXT_HASH, CONSENT_VERSION } from './ConsentDialog';
 import {
+  MEETING_OUTPUT_ADAPTER_CAPABILITIES,
   MEETING_OUTPUT_ADAPTER_CONTRACT_VERSION,
+  MEETING_OUTPUT_ADAPTER_OBJECT_CONTRACTS,
+  MEETING_OUTPUT_ADAPTER_PROFILE_ID,
   MEETING_OUTPUT_SUPPORTED_OBJECTS,
 } from '../intelligence/meeting-output-contract';
 import {
@@ -198,6 +201,10 @@ function integrationObjectCountLabel(result: MeetingIntelligenceResult): string 
 
 function integrationSupportedObjectLabel(): string {
   return MEETING_OUTPUT_SUPPORTED_OBJECTS.join(', ');
+}
+
+function adapterManifestSummaryLabel(): string {
+  return `${MEETING_OUTPUT_ADAPTER_OBJECT_CONTRACTS.length} nesne / ${MEETING_OUTPUT_ADAPTER_CAPABILITIES.length} kabiliyet`;
 }
 
 function handoffStatusLabel(readiness: MeetingOutputHandoffReadiness): string {
@@ -923,6 +930,14 @@ export function SummaryPanel({
               <div>
                 <span>Vendor</span>
                 <strong>Adapter seçilecek</strong>
+              </div>
+              <div>
+                <span>Adapter profili</span>
+                <strong>{MEETING_OUTPUT_ADAPTER_PROFILE_ID}</strong>
+              </div>
+              <div>
+                <span>Manifest</span>
+                <strong>{adapterManifestSummaryLabel()}</strong>
               </div>
               <div>
                 <span>Aktarım kapısı</span>

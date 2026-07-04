@@ -1,5 +1,9 @@
 import {
+  MEETING_OUTPUT_ADAPTER_CAPABILITIES,
   MEETING_OUTPUT_ADAPTER_CONTRACT_VERSION,
+  MEETING_OUTPUT_ADAPTER_KIND,
+  MEETING_OUTPUT_ADAPTER_OBJECT_CONTRACTS,
+  MEETING_OUTPUT_ADAPTER_PROFILE_ID,
   MEETING_OUTPUT_ADAPTER_TARGET,
   MEETING_OUTPUT_SUPPORTED_OBJECTS,
 } from './meeting-output-contract';
@@ -447,6 +451,14 @@ function buildIntegrationJson(
         write_policy: 'review_before_write',
         source_system: 'platform-meeting-intelligence',
         supported_objects: MEETING_OUTPUT_SUPPORTED_OBJECTS,
+      },
+      adapter_manifest: {
+        profile_id: MEETING_OUTPUT_ADAPTER_PROFILE_ID,
+        adapter_kind: MEETING_OUTPUT_ADAPTER_KIND,
+        target_family: 'erp_crm',
+        vendor_specific: false,
+        required_capabilities: MEETING_OUTPUT_ADAPTER_CAPABILITIES,
+        object_contracts: MEETING_OUTPUT_ADAPTER_OBJECT_CONTRACTS,
       },
       route: {
         target: MEETING_OUTPUT_ADAPTER_TARGET,
