@@ -295,6 +295,37 @@ export function upsertTranscriptSegment(
   };
 }
 
+export function reviewTranscriptSegmentText(
+  state: TranscriptSessionState,
+  args: { id: string; text: string; reviewedAtMs?: number },
+): TranscriptSessionState {
+  const reviewedText = args.text.trim();
+  if (!reviewedText) {
+    return state;
+  }
+
+  let changed = false;
+  const segments = state.segments.map((segment) => {
+    if (segment.id !== args.id) {
+      return segment;
+    }
+    if (segment.text.trim() === reviewedText && segment.status === 'revised') {
+      return segment;
+    }
+
+    changed = true;
+    return {
+      ...segment,
+      status: 'revised' as const,
+      text: reviewedText,
+      revisedFromId: segment.revisedFromId ?? segment.id,
+      receivedAtMs: args.reviewedAtMs ?? segment.receivedAtMs ?? segment.startedAtMs,
+    };
+  });
+
+  return changed ? { ...state, segments } : state;
+}
+
 function mergeTranscriptSegment(
   existing: TranscriptSegment,
   incoming: TranscriptSegment,

@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import '@testing-library/jest-dom/vitest';
 
@@ -231,6 +231,56 @@ describe('TranscriptPanel', () => {
     expect(articles[1]).toHaveTextContent('Final');
     expect(articles[1]).toHaveTextContent('Gateway');
     expect(articles[1]).not.toHaveClass('segment-live');
+  });
+
+  it('lets users review stable transcript text without editing the live direct draft', async () => {
+    const onSegmentTextChange = vi.fn();
+    const recording = startTranscriptSession(initialTranscriptSession(), {
+      sessionId: 'SES-1',
+      meetingId: '22222222-2222-4222-8222-222222222222',
+      deviceId: 'desktop-1',
+      hasLoopback: false,
+      startedAtMs: 1781820000123,
+    });
+    const withLiveDraft = upsertTranscriptSegment(recording, {
+      id: 'seg-live',
+      speakerLabel: 'Konuşmacı',
+      startedAtMs: 1781820060000,
+      status: 'draft',
+      text: 'Canlı akış sürüyor',
+      source: 'direct-stream',
+      receivedAtMs: 1781820065123,
+    });
+    const withStableSegment = upsertTranscriptSegment(withLiveDraft, {
+      id: 'seg-final',
+      speakerLabel: 'Konuşmacı',
+      startedAtMs: 1781820030000,
+      status: 'final',
+      text: 'Yanlış yazılan toplantı satırı',
+      source: 'gateway-events',
+    });
+
+    render(
+      <TranscriptPanel
+        session={withStableSegment}
+        stream={{ directConfigured: true, directActive: true, disabledReason: null }}
+        onSegmentTextChange={onSegmentTextChange}
+      />,
+    );
+
+    const articles = screen.getAllByRole('article');
+    expect(within(articles[0]).queryByRole('button', { name: 'Metni düzelt' })).toBeNull();
+
+    await userEvent.click(within(articles[1]).getByRole('button', { name: 'Metni düzelt' }));
+    const editor = within(articles[1]).getByLabelText('Transkript metni');
+    await userEvent.clear(editor);
+    await userEvent.type(editor, 'Düzeltilmiş toplantı satırı');
+    await userEvent.click(within(articles[1]).getByRole('button', { name: 'Kaydet' }));
+
+    expect(onSegmentTextChange).toHaveBeenCalledWith(
+      'seg-final',
+      'Düzeltilmiş toplantı satırı',
+    );
   });
 
   it('renders speaker timeline distribution and lets reviewed labels drive the transcript view', async () => {

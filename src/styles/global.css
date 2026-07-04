@@ -539,6 +539,55 @@ button:disabled {
   line-height: 1.55;
 }
 
+.segment-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 10px;
+}
+
+.segment-review-action {
+  color: #0f766e;
+  border-color: #99f6e4;
+}
+
+.segment-editor {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.segment-editor label {
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.segment-editor textarea {
+  width: 100%;
+  min-height: 88px;
+  resize: vertical;
+  padding: 10px 12px;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  color: #17202a;
+  font: inherit;
+  line-height: 1.55;
+  background: #ffffff;
+}
+
+.segment-editor textarea:focus {
+  outline: 2px solid #99f6e4;
+  outline-offset: 2px;
+  border-color: #14b8a6;
+}
+
+.segment-editor-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
 .live-caret {
   display: inline-block;
   margin-left: 2px;

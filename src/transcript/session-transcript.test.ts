@@ -10,6 +10,7 @@ import {
   markTranscriptBlocked,
   markTranscriptReady,
   markTranscriptWaitingForContract,
+  reviewTranscriptSegmentText,
   startTranscriptSession,
   transcriptStatusLabel,
   upsertTranscriptSegment,
@@ -174,6 +175,78 @@ describe('session transcript state', () => {
       status: 'final',
       text: 'Merhaba sesim geliyor mu beni duyuyor musun',
     });
+  });
+
+  it('lets reviewed transcript text replace STT output without changing segment ordering', () => {
+    const recording = startTranscriptSession(initialTranscriptSession(), {
+      sessionId: 'SES-1',
+      meetingId: '22222222-2222-4222-8222-222222222222',
+      deviceId: 'desktop-1',
+      hasLoopback: false,
+      startedAtMs: 1000,
+    });
+    const withFirst = upsertTranscriptSegment(recording, {
+      id: 'seg-1',
+      speakerLabel: 'Konuşmacı',
+      startedAtMs: 2000,
+      status: 'final',
+      source: 'direct-stream',
+      text: 'Yanlış çevrilmiş metin',
+      receivedAtMs: 2500,
+    });
+    const withSecond = upsertTranscriptSegment(withFirst, {
+      id: 'seg-2',
+      speakerLabel: 'Konuşmacı',
+      startedAtMs: 3000,
+      status: 'final',
+      source: 'gateway-events',
+      text: 'İkinci satır',
+    });
+
+    const reviewed = reviewTranscriptSegmentText(withSecond, {
+      id: 'seg-1',
+      text: '  Doğru toplantı metni  ',
+      reviewedAtMs: 4000,
+    });
+
+    expect(reviewed.segments.map((segment) => segment.id)).toEqual(['seg-1', 'seg-2']);
+    expect(reviewed.segments[0]).toMatchObject({
+      id: 'seg-1',
+      status: 'revised',
+      source: 'direct-stream',
+      text: 'Doğru toplantı metni',
+      revisedFromId: 'seg-1',
+      receivedAtMs: 4000,
+    });
+    expect(reviewed.segments[1]).toMatchObject({
+      id: 'seg-2',
+      status: 'final',
+      text: 'İkinci satır',
+    });
+  });
+
+  it('ignores empty or unknown transcript review updates', () => {
+    const recording = startTranscriptSession(initialTranscriptSession(), {
+      sessionId: 'SES-1',
+      meetingId: '22222222-2222-4222-8222-222222222222',
+      deviceId: 'desktop-1',
+      hasLoopback: false,
+      startedAtMs: 1000,
+    });
+    const withSegment = upsertTranscriptSegment(recording, {
+      id: 'seg-1',
+      speakerLabel: 'Konuşmacı',
+      startedAtMs: 2000,
+      status: 'final',
+      text: 'Kaynak metin',
+    });
+
+    expect(reviewTranscriptSegmentText(withSegment, { id: 'seg-1', text: '   ' })).toBe(
+      withSegment,
+    );
+    expect(reviewTranscriptSegmentText(withSegment, { id: 'missing', text: 'Yeni metin' })).toBe(
+      withSegment,
+    );
   });
 
   it('keeps terminal and error states explicit', () => {

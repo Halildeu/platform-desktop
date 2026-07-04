@@ -15,6 +15,7 @@ const SPEAKER_COLORS = ['#0f766e', '#2563eb', '#b45309', '#7c3aed', '#be123c', '
 
 export interface TranscriptPanelProps {
   session: TranscriptSessionState;
+  onSegmentTextChange?: (segmentId: string, text: string) => void;
   stream?: {
     directConfigured: boolean;
     directReady?: boolean;
@@ -583,11 +584,17 @@ function buildTranscriptDiagnostics(
   ].join('\n');
 }
 
-export function TranscriptPanel({ session, stream }: TranscriptPanelProps): ReactElement {
+export function TranscriptPanel({
+  session,
+  stream,
+  onSegmentTextChange,
+}: TranscriptPanelProps): ReactElement {
   const hasSegments = session.segments.length > 0;
   const listRef = useRef<HTMLDivElement | null>(null);
   const [diagnosticMessage, setDiagnosticMessage] = useState('');
   const [speakerLabels, setSpeakerLabels] = useState<Record<string, string>>({});
+  const [editingSegmentId, setEditingSegmentId] = useState<string | null>(null);
+  const [segmentTextDrafts, setSegmentTextDrafts] = useState<Record<string, string>>({});
   const visibleSegments = [...session.segments].reverse();
   const speakerTimeline = buildSpeakerTimeline(session, speakerLabels);
   const speakerSummaries = buildSpeakerSummaries(speakerTimeline);
@@ -615,6 +622,27 @@ export function TranscriptPanel({ session, stream }: TranscriptPanelProps): Reac
     }
   };
 
+  const beginSegmentReview = (segmentId: string, text: string): void => {
+    setEditingSegmentId(segmentId);
+    setSegmentTextDrafts((current) => ({
+      ...current,
+      [segmentId]: text,
+    }));
+  };
+
+  const cancelSegmentReview = (): void => {
+    setEditingSegmentId(null);
+  };
+
+  const saveSegmentReview = (segmentId: string): void => {
+    const reviewedText = (segmentTextDrafts[segmentId] ?? '').trim();
+    if (!reviewedText) {
+      return;
+    }
+    onSegmentTextChange?.(segmentId, reviewedText);
+    setEditingSegmentId(null);
+  };
+
   useEffect(() => {
     if (listRef.current) {
       listRef.current.scrollTop = 0;
@@ -623,6 +651,8 @@ export function TranscriptPanel({ session, stream }: TranscriptPanelProps): Reac
 
   useEffect(() => {
     setSpeakerLabels({});
+    setEditingSegmentId(null);
+    setSegmentTextDrafts({});
   }, [session.meetingId, session.sessionId]);
 
   return (
@@ -822,6 +852,11 @@ export function TranscriptPanel({ session, stream }: TranscriptPanelProps): Reac
           visibleSegments.map((segment) => {
             const metricLabel = segmentMetricLabel(segment);
             const liveDirectDraft = isLiveDirectDraft(segment);
+            const editableSegment = Boolean(onSegmentTextChange) && !liveDirectDraft;
+            const editingSegment = editingSegmentId === segment.id;
+            const segmentDraftText = segmentTextDrafts[segment.id] ?? segment.text;
+            const reviewedText = segmentDraftText.trim();
+            const reviewChanged = reviewedText !== segment.text.trim();
 
             return (
               <article
@@ -840,14 +875,60 @@ export function TranscriptPanel({ session, stream }: TranscriptPanelProps): Reac
                   {metricLabel ? <span>{metricLabel}</span> : null}
                   {liveDirectDraft ? <span>Canlı</span> : null}
                 </div>
-                <p>
-                  {segment.text}
-                  {liveDirectDraft ? (
-                    <span className="live-caret" aria-hidden="true">
-                      |
-                    </span>
-                  ) : null}
-                </p>
+                {editingSegment ? (
+                  <div className="segment-editor">
+                    <label htmlFor={`segment-editor-${segment.id}`}>Transkript metni</label>
+                    <textarea
+                      id={`segment-editor-${segment.id}`}
+                      value={segmentDraftText}
+                      onChange={(event) =>
+                        setSegmentTextDrafts((current) => ({
+                          ...current,
+                          [segment.id]: event.target.value,
+                        }))
+                      }
+                    />
+                    <div className="segment-editor-actions">
+                      <button
+                        className="primary-action compact-action"
+                        type="button"
+                        onClick={() => saveSegmentReview(segment.id)}
+                        disabled={!reviewedText || !reviewChanged}
+                      >
+                        Kaydet
+                      </button>
+                      <button
+                        className="secondary-action compact-action"
+                        type="button"
+                        onClick={cancelSegmentReview}
+                      >
+                        Vazgeç
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <>
+                    <p>
+                      {segment.text}
+                      {liveDirectDraft ? (
+                        <span className="live-caret" aria-hidden="true">
+                          |
+                        </span>
+                      ) : null}
+                    </p>
+                    {editableSegment ? (
+                      <div className="segment-actions">
+                        <button
+                          className="secondary-action compact-action segment-review-action"
+                          type="button"
+                          onClick={() => beginSegmentReview(segment.id, segment.text)}
+                        >
+                          Metni düzelt
+                        </button>
+                      </div>
+                    ) : null}
+                  </>
+                )}
               </article>
             );
           })
