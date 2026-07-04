@@ -261,6 +261,34 @@ export function buildIntelligenceExport(
   };
 }
 
+export function buildMeetingOutputAdapterManifestJson(nowMs: number = Date.now()): string {
+  return `${JSON.stringify(
+    {
+      schema_version: 'platform-desktop.meeting-output-adapter-manifest.v1',
+      profile_id: MEETING_OUTPUT_ADAPTER_PROFILE_ID,
+      adapter_kind: MEETING_OUTPUT_ADAPTER_KIND,
+      contract_version: MEETING_OUTPUT_ADAPTER_CONTRACT_VERSION,
+      target_family: 'erp_crm',
+      target: MEETING_OUTPUT_ADAPTER_TARGET,
+      vendor_specific: false,
+      source_system: 'platform-meeting-intelligence',
+      generated_at: new Date(nowMs).toISOString(),
+      write_policy: 'review_before_write',
+      desktop_direct_backend_mutation: false,
+      required_capabilities: MEETING_OUTPUT_ADAPTER_CAPABILITIES,
+      supported_objects: MEETING_OUTPUT_SUPPORTED_OBJECTS,
+      object_contracts: MEETING_OUTPUT_ADAPTER_OBJECT_CONTRACTS,
+      privacy_guards: {
+        raw_audio_included: false,
+        raw_transcript_included: false,
+        requires_human_review: true,
+      },
+    },
+    null,
+    2,
+  )}\n`;
+}
+
 export function analyzeMeetingOutputHandoffReadiness(
   result: MeetingIntelligenceResult,
 ): MeetingOutputHandoffReadiness {

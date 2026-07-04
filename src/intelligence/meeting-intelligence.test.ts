@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   bindMeetingIntelligenceTarget,
   buildIntelligenceExport,
+  buildMeetingOutputAdapterManifestJson,
   failMeetingIntelligence,
   initialMeetingIntelligence,
   markIntelligenceRecording,
@@ -256,6 +257,53 @@ describe('meeting intelligence state and exports', () => {
       vendor_specific: false,
     });
     expect(bundle.integrationJson.toLowerCase()).not.toContain('workcube');
+  });
+
+  it('builds a standalone vendor-neutral ERP CRM adapter manifest', () => {
+    const manifest = JSON.parse(buildMeetingOutputAdapterManifestJson(1782741700000)) as {
+      schema_version: string;
+      profile_id: string;
+      adapter_kind: string;
+      target_family: string;
+      target: string;
+      vendor_specific: boolean;
+      write_policy: string;
+      desktop_direct_backend_mutation: boolean;
+      privacy_guards: Record<string, unknown>;
+      required_capabilities: string[];
+      object_contracts: Array<Record<string, unknown>>;
+    };
+
+    expect(manifest).toMatchObject({
+      schema_version: 'platform-desktop.meeting-output-adapter-manifest.v1',
+      profile_id: 'generic-erp-crm-meeting-output',
+      adapter_kind: 'vendor-neutral-meeting-output-adapter',
+      target_family: 'erp_crm',
+      target: 'Generic ERP/CRM meeting workspace',
+      vendor_specific: false,
+      generated_at: '2026-06-29T14:01:40.000Z',
+      write_policy: 'review_before_write',
+      desktop_direct_backend_mutation: false,
+      privacy_guards: {
+        raw_audio_included: false,
+        raw_transcript_included: false,
+        requires_human_review: true,
+      },
+    });
+    expect(manifest.required_capabilities).toEqual([
+      'upsert_meeting_note',
+      'upsert_decision_record',
+      'upsert_action_task',
+      'source_reference_mapping',
+      'idempotent_write',
+      'human_review_gate',
+    ]);
+    expect(manifest.object_contracts.map((contract) => contract.object)).toEqual([
+      'meeting_note',
+      'decision_record',
+      'action_task',
+    ]);
+    expect(JSON.stringify(manifest).toLowerCase()).not.toContain('workcube');
   });
 
   it('marks ERP CRM handoff as review required when open action ownership is incomplete', () => {

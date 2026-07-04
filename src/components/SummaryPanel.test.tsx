@@ -563,6 +563,35 @@ describe('SummaryPanel', () => {
       expect.stringContaining('"import_targets": ['),
       'application/json',
     );
+
+    await userEvent.click(screen.getByRole('button', { name: 'Manifest kopyala' }));
+    await waitFor(() => {
+      expect(adapter.copyText).toHaveBeenCalledWith(
+        expect.stringContaining('platform-desktop.meeting-output-adapter-manifest.v1'),
+      );
+    });
+    const manifest = JSON.parse(String(vi.mocked(adapter.copyText).mock.calls.at(-1)?.[0])) as {
+      profile_id: string;
+      target_family: string;
+      vendor_specific: boolean;
+      required_capabilities: string[];
+      object_contracts: Array<Record<string, unknown>>;
+      privacy_guards: Record<string, unknown>;
+    };
+    expect(manifest).toMatchObject({
+      profile_id: MEETING_OUTPUT_ADAPTER_PROFILE_ID,
+      target_family: 'erp_crm',
+      vendor_specific: false,
+      required_capabilities: MEETING_OUTPUT_ADAPTER_CAPABILITIES,
+      object_contracts: MEETING_OUTPUT_ADAPTER_OBJECT_CONTRACTS,
+      privacy_guards: {
+        raw_audio_included: false,
+        raw_transcript_included: false,
+        requires_human_review: true,
+      },
+    });
+    expect(JSON.stringify(manifest).toLowerCase()).not.toContain('workcube');
+    expect(screen.getByText('Adapter manifesti panoya kopyalandı.')).toBeInTheDocument();
   });
 
   it('shares reviewed meeting output through clipboard email and Teams drafts', async () => {

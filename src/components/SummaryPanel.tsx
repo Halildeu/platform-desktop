@@ -12,6 +12,7 @@ import {
   analyzeMeetingOutputHandoffReadiness,
   actionStatusLabel,
   buildIntelligenceExport,
+  buildMeetingOutputAdapterManifestJson,
   decisionStatusLabel,
   formatCitationTime,
   intelligenceStatusLabel,
@@ -481,10 +482,22 @@ export function SummaryPanel({
   }, [resultKey, result?.summaryMarkdown]);
 
   const runExport = async (
-    kind: 'copy' | 'markdown' | 'csv' | 'print' | 'integration-copy' | 'integration-json',
+    kind:
+      | 'copy'
+      | 'markdown'
+      | 'csv'
+      | 'print'
+      | 'integration-copy'
+      | 'integration-json'
+      | 'adapter-manifest-copy',
   ): Promise<void> => {
     setMessage(null);
     try {
+      if (kind === 'adapter-manifest-copy') {
+        await exportAdapter.copyText(buildMeetingOutputAdapterManifestJson(Date.now()));
+        setMessage('Adapter manifesti panoya kopyalandı.');
+        return;
+      }
       const bundle = buildIntelligenceExport(exportIntelligence, Date.now(), outputSourceEvidence);
       if (kind === 'copy') {
         await exportAdapter.copyText(bundle.markdown);
@@ -803,6 +816,13 @@ export function SummaryPanel({
               onClick={() => void runExport('integration-json')}
             >
               Entegrasyon JSON
+            </button>
+            <button
+              className="secondary-action"
+              type="button"
+              onClick={() => void runExport('adapter-manifest-copy')}
+            >
+              Manifest kopyala
             </button>
             <button
               className="secondary-action"
