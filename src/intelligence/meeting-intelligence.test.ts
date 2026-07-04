@@ -141,6 +141,12 @@ describe('meeting intelligence state and exports', () => {
         desktop_mutates_erp_crm: false,
         failure_mode: 'fail_closed',
       },
+      handoff_readiness: {
+        status: 'ready',
+        can_handoff: true,
+        blockers: [],
+        warnings: [],
+      },
     });
     const adapterContract = integrationPackage.adapter_contract as Record<string, string>;
     expect(adapterContract.idempotency_key).toContain(adapterContract.content_fingerprint);
@@ -175,6 +181,159 @@ describe('meeting intelligence state and exports', () => {
     expect(bundle.integrationJson).toContain('"status_label": "Karar"');
     expect(bundle.integrationJson).not.toContain('"transcript"');
     expect(bundle.integrationJson).not.toContain('"raw_audio":');
+  });
+
+  it('marks ERP CRM handoff as review required when open action ownership is incomplete', () => {
+    const ready = setMeetingIntelligenceResult(
+      {
+        ...initialMeetingIntelligence(),
+        meetingId: '22222222-2222-4222-8222-222222222222',
+        sessionId: 'SES-1',
+      },
+      {
+        ...RESULT,
+        citationCoverage: 0.4,
+        decisions: [
+          {
+            ...RESULT.decisions[0],
+            owner: undefined,
+            citations: [],
+          },
+        ],
+        actionItems: [
+          {
+            ...RESULT.actionItems[0],
+            assignee: undefined,
+            dueDate: undefined,
+            citations: [],
+          },
+        ],
+      },
+    );
+
+    const integrationPackage = JSON.parse(buildIntelligenceExport(ready).integrationJson) as {
+      handoff_readiness: {
+        status: string;
+        can_handoff: boolean;
+        blockers: Array<{ code: string; severity: string; label: string; count?: number }>;
+        warnings: Array<{ code: string; severity: string; label: string; count?: number }>;
+      };
+    };
+
+    expect(integrationPackage.handoff_readiness).toMatchObject({
+      status: 'needs_review',
+      can_handoff: false,
+    });
+    expect(integrationPackage.handoff_readiness.blockers).toEqual(
+      expect.arrayContaining([
+        {
+          code: 'missing_action_assignee',
+          severity: 'blocker',
+          label: '1 açık aksiyonda sahip eksik',
+          count: 1,
+        },
+        {
+          code: 'missing_decision_owner',
+          severity: 'blocker',
+          label: '1 kararda sahip eksik',
+          count: 1,
+        },
+      ]),
+    );
+    expect(integrationPackage.handoff_readiness.warnings).toEqual(
+      expect.arrayContaining([
+        {
+          code: 'missing_action_due_date',
+          severity: 'warning',
+          label: '1 açık aksiyonda tarih eksik',
+          count: 1,
+        },
+        {
+          code: 'missing_source_reference',
+          severity: 'warning',
+          label: '2 karar/aksiyonda kaynak referansı eksik',
+          count: 2,
+        },
+        {
+          code: 'low_citation_coverage',
+          severity: 'warning',
+          label: 'Kaynak kapsamı %50 altında',
+        },
+      ]),
+    );
+  });
+
+  it('normalizes citation coverage bounds for ERP CRM handoff readiness', () => {
+    const buildPackage = (
+      citationCoverage: number,
+    ): { handoff_readiness: { can_handoff: boolean; warnings: Array<{ code: string }> } } => {
+      const ready = setMeetingIntelligenceResult(
+        {
+          ...initialMeetingIntelligence(),
+          meetingId: '22222222-2222-4222-8222-222222222222',
+          sessionId: 'SES-1',
+        },
+        {
+          ...RESULT,
+          citationCoverage,
+        },
+      );
+      return JSON.parse(buildIntelligenceExport(ready).integrationJson) as {
+        handoff_readiness: {
+          can_handoff: boolean;
+          warnings: Array<{ code: string }>;
+        };
+      };
+    };
+
+    expect(buildPackage(1.4).handoff_readiness).toMatchObject({
+      can_handoff: true,
+      warnings: [],
+    });
+    expect(buildPackage(-0.2).handoff_readiness).toMatchObject({
+      can_handoff: false,
+      warnings: expect.arrayContaining([
+        expect.objectContaining({ code: 'low_citation_coverage' }),
+      ]),
+    });
+    expect(buildPackage(Number.NaN).handoff_readiness).toMatchObject({
+      can_handoff: false,
+      warnings: expect.arrayContaining([
+        expect.objectContaining({ code: 'unknown_citation_coverage' }),
+      ]),
+    });
+  });
+
+  it('blocks ERP CRM handoff when the meeting summary is blank', () => {
+    const ready = setMeetingIntelligenceResult(
+      {
+        ...initialMeetingIntelligence(),
+        meetingId: '22222222-2222-4222-8222-222222222222',
+        sessionId: 'SES-1',
+      },
+      {
+        ...RESULT,
+        summaryMarkdown: '   ',
+      },
+    );
+
+    const integrationPackage = JSON.parse(buildIntelligenceExport(ready).integrationJson) as {
+      handoff_readiness: {
+        can_handoff: boolean;
+        blockers: Array<{ code: string; severity: string; label: string }>;
+      };
+    };
+
+    expect(integrationPackage.handoff_readiness).toMatchObject({
+      can_handoff: false,
+      blockers: expect.arrayContaining([
+        expect.objectContaining({
+          code: 'missing_summary',
+          severity: 'blocker',
+          label: 'Toplantı özeti boş',
+        }),
+      ]),
+    });
   });
 
   it('rejects exports before intelligence output is ready', () => {

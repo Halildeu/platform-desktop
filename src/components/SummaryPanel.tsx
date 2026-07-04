@@ -6,6 +6,7 @@ import {
   MEETING_OUTPUT_SUPPORTED_OBJECTS,
 } from '../intelligence/meeting-output-contract';
 import {
+  analyzeMeetingOutputHandoffReadiness,
   actionStatusLabel,
   buildIntelligenceExport,
   decisionStatusLabel,
@@ -18,6 +19,7 @@ import {
   type IntelligenceCitation,
   type MeetingIntelligenceResult,
   type MeetingIntelligenceState,
+  type MeetingOutputHandoffReadiness,
   setMeetingIntelligenceResult,
 } from '../intelligence/meeting-intelligence';
 import {
@@ -161,6 +163,23 @@ function integrationObjectCountLabel(result: MeetingIntelligenceResult): string 
 
 function integrationSupportedObjectLabel(): string {
   return MEETING_OUTPUT_SUPPORTED_OBJECTS.join(', ');
+}
+
+function handoffStatusLabel(readiness: MeetingOutputHandoffReadiness): string {
+  return readiness.canHandoff ? 'Aktarıma hazır' : 'Review gerekli';
+}
+
+function handoffIssueLabel(readiness: MeetingOutputHandoffReadiness): string {
+  const issues = [...readiness.blockers, ...readiness.warnings];
+  if (issues.length === 0) {
+    return 'Eksik alan yok';
+  }
+  const visibleIssues = issues.slice(0, 3).map((issue) => issue.label);
+  const hiddenIssueCount = issues.length - visibleIssues.length;
+  if (hiddenIssueCount <= 0) {
+    return visibleIssues.join(' · ');
+  }
+  return `${visibleIssues.join(' · ')} · +${hiddenIssueCount} daha`;
 }
 
 function normalizedCitationCoverage(value: number | null | undefined): number | null {
@@ -376,6 +395,9 @@ export function SummaryPanel({
         decisions: applyDecisionReviewDrafts(result.decisions, decisionDrafts),
         actionItems: applyActionReviewDrafts(result.actionItems, actionDrafts),
       }
+    : null;
+  const handoffReadiness = displayResult
+    ? analyzeMeetingOutputHandoffReadiness(displayResult)
     : null;
   const exportIntelligence = displayResult
     ? setMeetingIntelligenceResult(visibleIntelligence, displayResult)
@@ -850,6 +872,14 @@ export function SummaryPanel({
               <div>
                 <span>Vendor</span>
                 <strong>Adapter seçilecek</strong>
+              </div>
+              <div>
+                <span>Aktarım kapısı</span>
+                <strong>{handoffReadiness ? handoffStatusLabel(handoffReadiness) : '-'}</strong>
+              </div>
+              <div>
+                <span>Kontrol</span>
+                <strong>{handoffReadiness ? handoffIssueLabel(handoffReadiness) : '-'}</strong>
               </div>
               <div>
                 <span>Nesneler</span>

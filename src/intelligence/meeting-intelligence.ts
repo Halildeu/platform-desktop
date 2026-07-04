@@ -43,6 +43,33 @@ export interface MeetingIntelligenceResult {
   citationCoverage: number;
 }
 
+export type MeetingOutputHandoffReadinessStatus = 'ready' | 'needs_review';
+
+export type MeetingOutputHandoffIssueSeverity = 'blocker' | 'warning';
+
+export type MeetingOutputHandoffIssueCode =
+  | 'missing_summary'
+  | 'missing_action_assignee'
+  | 'missing_action_due_date'
+  | 'missing_decision_owner'
+  | 'missing_source_reference'
+  | 'unknown_citation_coverage'
+  | 'low_citation_coverage';
+
+export interface MeetingOutputHandoffIssue {
+  code: MeetingOutputHandoffIssueCode;
+  severity: MeetingOutputHandoffIssueSeverity;
+  label: string;
+  count?: number;
+}
+
+export interface MeetingOutputHandoffReadiness {
+  status: MeetingOutputHandoffReadinessStatus;
+  canHandoff: boolean;
+  blockers: MeetingOutputHandoffIssue[];
+  warnings: MeetingOutputHandoffIssue[];
+}
+
 export interface MeetingIntelligenceState {
   status: IntelligenceStatus;
   meetingId: string | null;
@@ -212,6 +239,88 @@ export function buildIntelligenceExport(
   };
 }
 
+export function analyzeMeetingOutputHandoffReadiness(
+  result: MeetingIntelligenceResult,
+): MeetingOutputHandoffReadiness {
+  const blockers: MeetingOutputHandoffIssue[] = [];
+  const warnings: MeetingOutputHandoffIssue[] = [];
+  const openActions = result.actionItems.filter((item) => item.status !== 'done');
+  const missingActionAssigneeCount = openActions.filter(
+    (item) => !hasMeaningfulText(item.assignee),
+  ).length;
+  const missingActionDueDateCount = openActions.filter(
+    (item) => !hasMeaningfulText(item.dueDate),
+  ).length;
+  const missingDecisionOwnerCount = result.decisions.filter(
+    (decision) => !hasMeaningfulText(decision.owner),
+  ).length;
+  const uncitedRecordCount =
+    result.decisions.filter((decision) => decision.citations.length === 0).length +
+    result.actionItems.filter((item) => item.citations.length === 0).length;
+  const citationCoverage = normalizedHandoffCitationCoverage(result.citationCoverage);
+
+  if (!hasMeaningfulText(result.summaryMarkdown)) {
+    blockers.push({
+      code: 'missing_summary',
+      severity: 'blocker',
+      label: 'Toplantı özeti boş',
+    });
+  }
+  if (missingActionAssigneeCount > 0) {
+    blockers.push({
+      code: 'missing_action_assignee',
+      severity: 'blocker',
+      label: `${missingActionAssigneeCount} açık aksiyonda sahip eksik`,
+      count: missingActionAssigneeCount,
+    });
+  }
+  if (missingActionDueDateCount > 0) {
+    warnings.push({
+      code: 'missing_action_due_date',
+      severity: 'warning',
+      label: `${missingActionDueDateCount} açık aksiyonda tarih eksik`,
+      count: missingActionDueDateCount,
+    });
+  }
+  if (missingDecisionOwnerCount > 0) {
+    blockers.push({
+      code: 'missing_decision_owner',
+      severity: 'blocker',
+      label: `${missingDecisionOwnerCount} kararda sahip eksik`,
+      count: missingDecisionOwnerCount,
+    });
+  }
+  if (uncitedRecordCount > 0) {
+    warnings.push({
+      code: 'missing_source_reference',
+      severity: 'warning',
+      label: `${uncitedRecordCount} karar/aksiyonda kaynak referansı eksik`,
+      count: uncitedRecordCount,
+    });
+  }
+  if (citationCoverage === null) {
+    warnings.push({
+      code: 'unknown_citation_coverage',
+      severity: 'warning',
+      label: 'Kaynak kapsamı bilinmiyor',
+    });
+  } else if (citationCoverage < 0.5) {
+    warnings.push({
+      code: 'low_citation_coverage',
+      severity: 'warning',
+      label: 'Kaynak kapsamı %50 altında',
+    });
+  }
+
+  const canHandoff = blockers.length === 0 && warnings.length === 0;
+  return {
+    status: canHandoff ? 'ready' : 'needs_review',
+    canHandoff,
+    blockers,
+    warnings,
+  };
+}
+
 function buildMarkdown(state: MeetingIntelligenceState): string {
   const result = state.result;
   if (!result) {
@@ -293,6 +402,7 @@ function buildIntegrationJson(state: MeetingIntelligenceState, nowMs: number): s
     throw new Error('Meeting intelligence output is not ready');
   }
   const contentFingerprint = intelligenceContentFingerprint(result);
+  const handoffReadiness = analyzeMeetingOutputHandoffReadiness(result);
   const idempotencyKey = [
     'meeting-output',
     state.meetingId ?? 'meeting',
@@ -341,6 +451,12 @@ function buildIntegrationJson(state: MeetingIntelligenceState, nowMs: number): s
         requires_human_review: true,
         desktop_mutates_erp_crm: false,
         failure_mode: 'fail_closed',
+      },
+      handoff_readiness: {
+        status: handoffReadiness.status,
+        can_handoff: handoffReadiness.canHandoff,
+        blockers: handoffReadiness.blockers,
+        warnings: handoffReadiness.warnings,
       },
       field_mappings: {
         mapping_type: 'field_pointer',
@@ -415,6 +531,17 @@ function intelligenceContentFingerprint(result: MeetingIntelligenceResult): stri
     citationCoverage: result.citationCoverage,
   });
   return `fnv1a64:${fnv1a64(payload)}`;
+}
+
+function hasMeaningfulText(value: string | null | undefined): boolean {
+  return typeof value === 'string' && value.trim().length > 0;
+}
+
+function normalizedHandoffCitationCoverage(value: number): number | null {
+  if (!Number.isFinite(value)) {
+    return null;
+  }
+  return Math.min(1, Math.max(0, value));
 }
 
 function fnv1a64(value: string): string {

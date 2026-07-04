@@ -182,6 +182,9 @@ describe('SummaryPanel', () => {
     expect(within(outputQuality).getByText('%100')).toBeInTheDocument();
     expect(within(outputQuality).getByText('meeting-ai pilot')).toBeInTheDocument();
     expect(within(outputQuality).getByText('Kontrol bekliyor')).toBeInTheDocument();
+    const readiness = screen.getByLabelText('ERP/CRM entegrasyon hazırlığı');
+    expect(within(readiness).getByText('Aktarıma hazır')).toBeInTheDocument();
+    expect(within(readiness).getByText('Eksik alan yok')).toBeInTheDocument();
   });
 
   it('renders safe output quality fallbacks and confidence bands', () => {
@@ -225,6 +228,42 @@ describe('SummaryPanel', () => {
     outputQuality = screen.getByLabelText('Toplantı çıktısı kalite durumu');
     expect(within(outputQuality).getByText('Bilinmiyor')).toBeInTheDocument();
     expect(within(outputQuality).getAllByText('-')).toHaveLength(2);
+  });
+
+  it('surfaces ERP CRM handoff review blockers before adapter export', () => {
+    const base = readyState();
+    if (!base.result) {
+      throw new Error('readyState fixture must include a result');
+    }
+
+    render(
+      <SummaryPanel
+        intelligence={setMeetingIntelligenceResult(base, {
+          ...base.result,
+          citationCoverage: 0.4,
+          decisions: [
+            {
+              ...base.result.decisions[0],
+              owner: undefined,
+            },
+          ],
+          actionItems: [
+            {
+              ...base.result.actionItems[0],
+              assignee: undefined,
+              dueDate: undefined,
+            },
+          ],
+        })}
+      />,
+    );
+
+    const readiness = screen.getByLabelText('ERP/CRM entegrasyon hazırlığı');
+    expect(within(readiness).getByText('Review gerekli')).toBeInTheDocument();
+    expect(within(readiness).getByText(/1 açık aksiyonda sahip eksik/)).toBeInTheDocument();
+    expect(within(readiness).getByText(/1 kararda sahip eksik/)).toBeInTheDocument();
+    expect(within(readiness).getByText(/1 açık aksiyonda tarih eksik/)).toBeInTheDocument();
+    expect(within(readiness).getByText(/\+1 daha/)).toBeInTheDocument();
   });
 
   it('uses export adapter for copy and file downloads', async () => {
