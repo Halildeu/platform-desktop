@@ -111,6 +111,14 @@ export interface MeetingOutputSourceEvidence {
     final_ratio: number;
     reviewed_count: number;
     reviewed_ratio: number;
+    result_freshness: {
+      status: string;
+      label: string;
+      result_generated_at_ms: number;
+      latest_source_at_ms: number | null;
+      stale_by_ms: number;
+      raw_transcript_included: false;
+    } | null;
     raw_transcript_included: false;
   } | null;
 }

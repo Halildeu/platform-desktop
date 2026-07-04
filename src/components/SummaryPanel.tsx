@@ -107,6 +107,16 @@ type ActionReviewDraft = Partial<Pick<ActionItem, 'assignee' | 'dueDate' | 'stat
 type DecisionReviewDraft = Partial<Pick<DecisionItem, 'owner' | 'status'>>;
 
 type ShareChannel = 'clipboard' | 'email' | 'teams';
+type OutputFreshnessStatus = 'current' | 'source_changed' | 'no_source' | 'unknown';
+
+interface OutputFreshness {
+  status: OutputFreshnessStatus;
+  label: string;
+  detail: string;
+  resultGeneratedAtMs: number;
+  latestSourceAtMs: number | null;
+  staleByMs: number;
+}
 
 function transcriptSegments(transcript: TranscriptSessionState | undefined): TranscriptSegment[] {
   return (
@@ -172,10 +182,68 @@ function transcriptReviewCoverageLabel(
   return `${readiness.reviewedCount}/${totalSegments} · ${formatPercent(readiness.reviewedRatio)}`;
 }
 
+function latestSourceAtMs(segments: TranscriptSegment[]): number | null {
+  const values = segments
+    .map((segment) => segment.receivedAtMs ?? segment.startedAtMs)
+    .filter((value): value is number => Number.isFinite(value));
+  return values.length > 0 ? Math.max(...values) : null;
+}
+
+function buildOutputFreshness(
+  result: MeetingIntelligenceResult,
+  transcript: TranscriptSessionState | undefined,
+  segments: TranscriptSegment[],
+): OutputFreshness {
+  if (!transcript || segments.length === 0) {
+    return {
+      status: 'no_source',
+      label: 'Kaynak yok',
+      detail: 'Çıktı için karşılaştırılabilir transkript kaynağı yok.',
+      resultGeneratedAtMs: result.generatedAtMs,
+      latestSourceAtMs: null,
+      staleByMs: 0,
+    };
+  }
+
+  const sourceAtMs = latestSourceAtMs(segments);
+  if (sourceAtMs === null) {
+    return {
+      status: 'unknown',
+      label: 'Zaman bilinmiyor',
+      detail: 'Transkript zaman damgası okunamadı; çıktı güncelliği kanıtlanamadı.',
+      resultGeneratedAtMs: result.generatedAtMs,
+      latestSourceAtMs: null,
+      staleByMs: 0,
+    };
+  }
+
+  const staleByMs = Math.max(0, sourceAtMs - result.generatedAtMs);
+  if (staleByMs > 500) {
+    return {
+      status: 'source_changed',
+      label: 'Kaynak değişti',
+      detail: 'Transkript AI çıktısından sonra değişti; Meeting AI yeniden gönderilmeli.',
+      resultGeneratedAtMs: result.generatedAtMs,
+      latestSourceAtMs: sourceAtMs,
+      staleByMs,
+    };
+  }
+
+  return {
+    status: 'current',
+    label: 'Güncel',
+    detail: 'AI çıktısı mevcut transkript kaynağıyla uyumlu görünüyor.',
+    resultGeneratedAtMs: result.generatedAtMs,
+    latestSourceAtMs: sourceAtMs,
+    staleByMs: 0,
+  };
+}
+
 function buildOutputSourceEvidence(
   transcript: TranscriptSessionState | undefined,
   readiness: ReturnType<typeof analyzeTranscriptSourceReadiness>,
   segmentCount: number,
+  freshness: OutputFreshness | null,
 ): MeetingOutputSourceEvidence | null {
   if (!transcript || segmentCount === 0) {
     return null;
@@ -194,6 +262,16 @@ function buildOutputSourceEvidence(
       final_ratio: readiness.finalRatio,
       reviewed_count: readiness.reviewedCount,
       reviewed_ratio: readiness.reviewedRatio,
+      result_freshness: freshness
+        ? {
+            status: freshness.status,
+            label: freshness.label,
+            result_generated_at_ms: freshness.resultGeneratedAtMs,
+            latest_source_at_ms: freshness.latestSourceAtMs,
+            stale_by_ms: freshness.staleByMs,
+            raw_transcript_included: false,
+          }
+        : null,
       raw_transcript_included: false,
     },
   };
@@ -467,11 +545,6 @@ export function SummaryPanel({
   const transcriptReadiness = transcript
     ? analyzeTranscriptSourceReadiness(transcript)
     : analyzeTranscriptSourceReadiness(initialTranscriptSessionFallback);
-  const outputSourceEvidence = buildOutputSourceEvidence(
-    transcript,
-    transcriptReadiness,
-    transcriptSourceSegments.length,
-  );
   const meetingAiGate = transcript
     ? buildMeetingAiSourceGate(transcript, transcriptReadiness)
     : buildMeetingAiSourceGate(initialTranscriptSessionFallback, transcriptReadiness);
@@ -507,6 +580,15 @@ export function SummaryPanel({
         actionItems: applyActionReviewDrafts(result.actionItems, actionDrafts),
       }
     : null;
+  const outputFreshness = result
+    ? buildOutputFreshness(result, transcript, transcriptSourceSegments)
+    : null;
+  const outputSourceEvidence = buildOutputSourceEvidence(
+    transcript,
+    transcriptReadiness,
+    transcriptSourceSegments.length,
+    outputFreshness,
+  );
   const handoffReadiness = displayResult
     ? analyzeMeetingOutputHandoffReadiness(displayResult)
     : null;
@@ -991,6 +1073,16 @@ export function SummaryPanel({
                 <span>İnsan kontrolü</span>
                 <strong>{hasUserReviewChanges ? 'Revizyonlu' : 'Kontrol bekliyor'}</strong>
               </div>
+              {outputFreshness ? (
+                <div
+                  className={`output-freshness output-freshness-${outputFreshness.status}`}
+                  aria-label="Çıktı güncelliği"
+                >
+                  <span>Çıktı güncelliği</span>
+                  <strong>{outputFreshness.label}</strong>
+                  <small>{outputFreshness.detail}</small>
+                </div>
+              ) : null}
               {outputSourceEvidence?.transcript ? (
                 <div>
                   <span>Transkript review</span>

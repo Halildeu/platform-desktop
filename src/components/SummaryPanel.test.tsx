@@ -225,6 +225,11 @@ describe('SummaryPanel', () => {
     expect(within(outputQuality).getByText('%100')).toBeInTheDocument();
     expect(within(outputQuality).getByText('meeting-ai gateway')).toBeInTheDocument();
     expect(within(outputQuality).getByText('Kontrol bekliyor')).toBeInTheDocument();
+    const freshness = screen.getByLabelText('Çıktı güncelliği');
+    expect(within(freshness).getByText('Kaynak yok')).toBeInTheDocument();
+    expect(
+      within(freshness).getByText('Çıktı için karşılaştırılabilir transkript kaynağı yok.'),
+    ).toBeInTheDocument();
     const readiness = screen.getByLabelText('ERP/CRM entegrasyon hazırlığı');
     expect(within(readiness).getByText('Aktarıma hazır')).toBeInTheDocument();
     expect(within(readiness).getByText('Eksik alan yok')).toBeInTheDocument();
@@ -271,6 +276,39 @@ describe('SummaryPanel', () => {
     outputQuality = screen.getByLabelText('Toplantı çıktısı kalite durumu');
     expect(within(outputQuality).getByText('Bilinmiyor')).toBeInTheDocument();
     expect(within(outputQuality).getAllByText('-')).toHaveLength(2);
+  });
+
+  it('marks meeting output stale when transcript source changes after generation', () => {
+    const transcript = reportReadyTranscriptState();
+    const base = readyState();
+    if (!base.result) {
+      throw new Error('readyState fixture must include a result');
+    }
+
+    render(
+      <SummaryPanel
+        intelligence={setMeetingIntelligenceResult(
+          {
+            ...initialMeetingIntelligence(),
+            meetingId: transcript.meetingId,
+            sessionId: transcript.sessionId,
+          },
+          {
+            ...base.result,
+            generatedAtMs: 1781820005000,
+          },
+        )}
+        transcript={transcript}
+      />,
+    );
+
+    const freshness = screen.getByLabelText('Çıktı güncelliği');
+    expect(within(freshness).getByText('Kaynak değişti')).toBeInTheDocument();
+    expect(
+      within(freshness).getByText(
+        'Transkript AI çıktısından sonra değişti; Meeting AI yeniden gönderilmeli.',
+      ),
+    ).toBeInTheDocument();
   });
 
   it('surfaces ERP CRM handoff review blockers before adapter export', async () => {
@@ -586,6 +624,13 @@ describe('SummaryPanel', () => {
       draft_count: 0,
       reviewed_count: 1,
       reviewed_ratio: 0.5,
+      result_freshness: {
+        status: 'current',
+        label: 'Güncel',
+        latest_source_at_ms: 1781820021000,
+        stale_by_ms: 0,
+        raw_transcript_included: false,
+      },
       raw_transcript_included: false,
     });
     expect(JSON.stringify(integrationPackage.source_evidence)).not.toContain('Direct STT kaynağı');
@@ -601,6 +646,7 @@ describe('SummaryPanel', () => {
     });
     const outputQuality = screen.getByLabelText('Toplantı çıktısı kalite durumu');
     expect(within(outputQuality).getByText('Revizyonlu')).toBeInTheDocument();
+    expect(within(outputQuality).getByText('Güncel')).toBeInTheDocument();
     expect(within(outputQuality).getByText('Transkript review')).toBeInTheDocument();
     expect(within(outputQuality).getByText('1/2 · %50')).toBeInTheDocument();
     const readiness = screen.getByLabelText('ERP/CRM entegrasyon hazırlığı');
