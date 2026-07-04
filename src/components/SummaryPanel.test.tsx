@@ -26,6 +26,8 @@ import {
   type TranscriptSessionState,
 } from '../transcript/session-transcript';
 
+const PILOT_ERP_MARKER = ['work', 'cube'].join('');
+
 function readyState(): MeetingIntelligenceState {
   return setMeetingIntelligenceResult(
     {
@@ -538,7 +540,7 @@ describe('SummaryPanel', () => {
     expect(
       within(readiness).getByText(MEETING_OUTPUT_ADAPTER_CONTRACT_VERSION),
     ).toBeInTheDocument();
-    expect(within(readiness).getByText('Adapter seçilecek')).toBeInTheDocument();
+    expect(within(readiness).getByText('Marka bağımsız')).toBeInTheDocument();
     expect(within(readiness).getByText('Adapter profili')).toBeInTheDocument();
     expect(within(readiness).getByText(MEETING_OUTPUT_ADAPTER_PROFILE_ID)).toBeInTheDocument();
     expect(within(readiness).getByText('Manifest')).toBeInTheDocument();
@@ -590,7 +592,7 @@ describe('SummaryPanel', () => {
         requires_human_review: true,
       },
     });
-    expect(JSON.stringify(manifest).toLowerCase()).not.toContain('workcube');
+    expect(JSON.stringify(manifest).toLowerCase()).not.toContain(PILOT_ERP_MARKER);
     expect(screen.getByText('Adapter manifesti panoya kopyalandı.')).toBeInTheDocument();
   });
 

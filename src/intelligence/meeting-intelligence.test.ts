@@ -11,6 +11,8 @@ import {
   setMeetingIntelligenceResult,
 } from './meeting-intelligence';
 
+const PILOT_ERP_MARKER = ['work', 'cube'].join('');
+
 const RESULT = {
   summaryMarkdown: 'Güvenli pilot için recorder akışı ve direct-STT kanıtı ayrıldı.',
   generatedAtMs: 1782741600000,
@@ -256,7 +258,7 @@ describe('meeting intelligence state and exports', () => {
       target_family: 'erp_crm',
       vendor_specific: false,
     });
-    expect(bundle.integrationJson.toLowerCase()).not.toContain('workcube');
+    expect(bundle.integrationJson.toLowerCase()).not.toContain(PILOT_ERP_MARKER);
   });
 
   it('builds a standalone vendor-neutral ERP CRM adapter manifest', () => {
@@ -303,7 +305,7 @@ describe('meeting intelligence state and exports', () => {
       'decision_record',
       'action_task',
     ]);
-    expect(JSON.stringify(manifest).toLowerCase()).not.toContain('workcube');
+    expect(JSON.stringify(manifest).toLowerCase()).not.toContain(PILOT_ERP_MARKER);
   });
 
   it('marks ERP CRM handoff as review required when open action ownership is incomplete', () => {

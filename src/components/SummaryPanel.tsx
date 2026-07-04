@@ -948,8 +948,8 @@ export function SummaryPanel({
                 <strong>{MEETING_OUTPUT_ADAPTER_CONTRACT_VERSION}</strong>
               </div>
               <div>
-                <span>Vendor</span>
-                <strong>Adapter seçilecek</strong>
+                <span>Marka</span>
+                <strong>Marka bağımsız</strong>
               </div>
               <div>
                 <span>Adapter profili</span>
