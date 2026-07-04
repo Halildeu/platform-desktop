@@ -284,6 +284,12 @@ describe('TranscriptPanel', () => {
     expect(
       within(flowHealth).getByText('Ses ve transcript zamanı birlikte ilerliyor.'),
     ).toBeInTheDocument();
+    expect(within(flowHealth).getByText('Sonraki aksiyon')).toBeInTheDocument();
+    expect(
+      within(flowHealth).getByText(
+        'Kayıt sonrası toplantı çıktısını kaynak kanıtıyla review’a alın.',
+      ),
+    ).toBeInTheDocument();
   });
 
   it('searches long transcript rows without changing newest-first order', async () => {
@@ -617,6 +623,10 @@ describe('TranscriptPanel', () => {
     expect(snapshot).toContain('audioCaptureWorklet=file:///app/dist/pcm-worklet.js');
     expect(snapshot).toContain('audioRms=0.026');
     expect(snapshot).toContain('flow.health=Akış takipte');
+    expect(snapshot).toContain('flow.risk=none');
+    expect(snapshot).toContain(
+      'flow.nextAction=Kayıt sonrası toplantı çıktısını kaynak kanıtıyla review’a alın.',
+    );
     expect(snapshot).toContain('flow.segmentDensityPerMinute=-');
     expect(snapshot).toContain('flow.wordsPerMinute=-');
     expect(snapshot).toContain('segments.total=1');
@@ -663,6 +673,11 @@ describe('TranscriptPanel', () => {
     expect(
       within(flowHealth).getByText(
         'Mikrofon sesi görülüyor ancak henüz transcript satırı alınmadı.',
+      ),
+    ).toBeInTheDocument();
+    expect(
+      within(flowHealth).getByText(
+        'Mikrofon girişini ve direct STT bağlantısını kontrol edin; durum sürerse tanıyı kopyalayın.',
       ),
     ).toBeInTheDocument();
   });
@@ -745,6 +760,11 @@ describe('TranscriptPanel', () => {
         'Ses zamanı metinden önde; stream backlog, ağ veya model kuyruğu kontrol edilmeli.',
       ),
     ).toBeInTheDocument();
+    expect(
+      within(flowHealth).getByText(
+        'Tanıyı kopyalayın; direct STT backlog, ağ gecikmesi ve model kuyruğu metrikleriyle karşılaştırın.',
+      ),
+    ).toBeInTheDocument();
   });
 
   it('flags low word coverage when audio is active but transcript text is sparse', () => {
@@ -796,6 +816,11 @@ describe('TranscriptPanel', () => {
     expect(
       within(flowHealth).getByText(
         'Ses var ama kelime üretim hızı düşük; konuşmanın önemli kısmı transcript akışına düşmüyor olabilir.',
+      ),
+    ).toBeInTheDocument();
+    expect(
+      within(flowHealth).getByText(
+        'Tanıyı kopyalayın; kaynak kalite gate’i bu transcripti review’da tutar, çıktı üretimi öncesi mikrofon/direct STT zinciri doğrulanmalı.',
       ),
     ).toBeInTheDocument();
   });

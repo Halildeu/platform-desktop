@@ -355,6 +355,17 @@ button:disabled {
   line-height: 1.4;
 }
 
+.transcript-flow-health .flow-next-action {
+  display: grid;
+  gap: 3px;
+  padding-top: 4px;
+}
+
+.transcript-flow-health .flow-next-action strong {
+  margin: 0;
+  font-size: 12px;
+}
+
 .transcript-flow-ok {
   background: #f0fdfa;
 }

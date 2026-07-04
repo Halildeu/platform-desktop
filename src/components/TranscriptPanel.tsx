@@ -381,11 +381,21 @@ interface InterruptionSignal {
 }
 
 type TranscriptFlowHealthLevel = 'idle' | 'ok' | 'watch' | 'warn';
+type TranscriptFlowRisk =
+  | 'none'
+  | 'connection_error'
+  | 'no_text'
+  | 'lagging'
+  | 'low_word_coverage'
+  | 'low_segment_density'
+  | 'waiting_audio';
 
 interface TranscriptFlowHealth {
   label: string;
   detail: string;
+  nextAction: string;
   level: TranscriptFlowHealthLevel;
+  risk: TranscriptFlowRisk;
   words: number;
   spanMs: number | null;
   segmentsPerMinute: number | null;
@@ -668,7 +678,12 @@ function transcriptFlowHealth(
         session.segments.length > 0
           ? 'Kayıt aktif değil; mevcut satırlar incelenebilir.'
           : 'Kayıt başlayınca ses ve metin akışı izlenir.',
+      nextAction:
+        session.segments.length > 0
+          ? 'Mevcut satırları inceleyin veya toplantı çıktısı üretimine geçin.'
+          : 'Kayıt başlatılınca akış kalitesi otomatik ölçülür.',
       level: 'idle',
+      risk: 'none',
       words,
       spanMs,
       segmentsPerMinute,
@@ -683,7 +698,10 @@ function transcriptFlowHealth(
       label: 'Bağlantı hatası',
       detail:
         'Direct stream kapalı veya hata verdi; gateway fallback ve tanı snapshotı kontrol edilmeli.',
+      nextAction:
+        'Tanıyı kopyalayın; direct STT URL, sertifika ve gateway fallback loglarını eşleştirin.',
       level: 'warn',
+      risk: 'connection_error',
       words,
       spanMs,
       segmentsPerMinute,
@@ -697,7 +715,10 @@ function transcriptFlowHealth(
     return {
       label: 'Ses var, metin yok',
       detail: 'Mikrofon sesi görülüyor ancak henüz transcript satırı alınmadı.',
+      nextAction:
+        'Mikrofon girişini ve direct STT bağlantısını kontrol edin; durum sürerse tanıyı kopyalayın.',
       level: 'warn',
+      risk: 'no_text',
       words,
       spanMs,
       segmentsPerMinute,
@@ -711,7 +732,10 @@ function transcriptFlowHealth(
     return {
       label: 'Metin gecikiyor',
       detail: 'Ses zamanı metinden önde; stream backlog, ağ veya model kuyruğu kontrol edilmeli.',
+      nextAction:
+        'Tanıyı kopyalayın; direct STT backlog, ağ gecikmesi ve model kuyruğu metrikleriyle karşılaştırın.',
       level: 'warn',
+      risk: 'lagging',
       words,
       spanMs,
       segmentsPerMinute,
@@ -732,7 +756,10 @@ function transcriptFlowHealth(
       label: 'Metin kapsamı düşük',
       detail:
         'Ses var ama kelime üretim hızı düşük; konuşmanın önemli kısmı transcript akışına düşmüyor olabilir.',
+      nextAction:
+        'Tanıyı kopyalayın; kaynak kalite gate’i bu transcripti review’da tutar, çıktı üretimi öncesi mikrofon/direct STT zinciri doğrulanmalı.',
       level: 'warn',
+      risk: 'low_word_coverage',
       words,
       spanMs,
       segmentsPerMinute,
@@ -753,7 +780,10 @@ function transcriptFlowHealth(
       label: 'Metin seyrek',
       detail:
         'Ses var ama satır yoğunluğu düşük; mikrofon seçimi ve direct stream teslimi kontrol edilmeli.',
+      nextAction:
+        'Mikrofon seçimi, capture worklet ve direct stream teslim aralığını kontrol edin.',
       level: 'watch',
+      risk: 'low_segment_density',
       words,
       spanMs,
       segmentsPerMinute,
@@ -767,7 +797,9 @@ function transcriptFlowHealth(
     return {
       label: 'Akış takipte',
       detail: 'Ses ve transcript zamanı birlikte ilerliyor.',
+      nextAction: 'Kayıt sonrası toplantı çıktısını kaynak kanıtıyla review’a alın.',
       level: 'ok',
+      risk: 'none',
       words,
       spanMs,
       segmentsPerMinute,
@@ -783,7 +815,12 @@ function transcriptFlowHealth(
       session.segments.length > 0
         ? 'Transcript var; yeni ses sinyali bekleniyor.'
         : 'Mikrofon sinyali bekleniyor.',
+    nextAction:
+      session.segments.length > 0
+        ? 'Yeni konuşma bekleniyor; mevcut satırlar korunur.'
+        : 'Mikrofon girişini ve kayıt kaynağını kontrol edin.',
     level: 'watch',
+    risk: 'waiting_audio',
     words,
     spanMs,
     segmentsPerMinute,
@@ -920,6 +957,8 @@ function buildTranscriptDiagnostics(
     `lastTranscriptAt=${formatDiagnosticTimestamp(lastTranscriptAtMs)}`,
     `lagMs=${lagMs ?? '-'}`,
     `flow.health=${health.label}`,
+    `flow.risk=${health.risk}`,
+    `flow.nextAction=${health.nextAction}`,
     `flow.segmentDensityPerMinute=${formatDiagnosticNumber(health.segmentsPerMinute, 2)}`,
     `flow.wordsPerMinute=${formatDiagnosticNumber(health.wordsPerMinute, 2)}`,
     `segments.total=${session.segments.length}`,
@@ -1149,6 +1188,10 @@ export function TranscriptPanel({
           </strong>
         </div>
         <p>{flowHealth.detail}</p>
+        <p className="flow-next-action">
+          <span>Sonraki aksiyon</span>
+          <strong>{flowHealth.nextAction}</strong>
+        </p>
       </div>
 
       {hasSegments ? (
