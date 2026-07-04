@@ -26,7 +26,7 @@ import {
   type TranscriptSessionState,
 } from '../transcript/session-transcript';
 
-const PILOT_ERP_MARKER = ['work', 'cube'].join('');
+const FORBIDDEN_ERP_BRAND_MARKER = ['work', 'cube'].join('');
 
 function readyState(): MeetingIntelligenceState {
   return setMeetingIntelligenceResult(
@@ -38,7 +38,7 @@ function readyState(): MeetingIntelligenceState {
     {
       summaryMarkdown: 'Toplantıda direct-STT kanıtı ve recorder tekrar denemesi ayrıştırıldı.',
       generatedAtMs: 1782741600000,
-      providerLabel: 'meeting-ai pilot',
+      providerLabel: 'meeting-ai gateway',
       citationCoverage: 1,
       decisions: [
         {
@@ -223,7 +223,7 @@ describe('SummaryPanel', () => {
     const outputQuality = screen.getByLabelText('Toplantı çıktısı kalite durumu');
     expect(within(outputQuality).getByText('Kaynak güçlü')).toBeInTheDocument();
     expect(within(outputQuality).getByText('%100')).toBeInTheDocument();
-    expect(within(outputQuality).getByText('meeting-ai pilot')).toBeInTheDocument();
+    expect(within(outputQuality).getByText('meeting-ai gateway')).toBeInTheDocument();
     expect(within(outputQuality).getByText('Kontrol bekliyor')).toBeInTheDocument();
     const readiness = screen.getByLabelText('ERP/CRM entegrasyon hazırlığı');
     expect(within(readiness).getByText('Aktarıma hazır')).toBeInTheDocument();
@@ -314,7 +314,7 @@ describe('SummaryPanel', () => {
     expect(within(packageStatus).getByText('Fail-closed')).toBeInTheDocument();
     expect(
       within(packageStatus).getByText(
-        'Genel amaçlı ERP/CRM aktarım paketi; pilot hedefler yalnızca backend adapter eşlemesiyle bağlanır.',
+        "Genel amaçlı ERP/CRM aktarım paketi; ERP/CRM'ye özel hedefler yalnızca backend adapter eşlemesiyle bağlanır.",
       ),
     ).toBeInTheDocument();
     expect(within(readiness).getAllByText(/1 açık aksiyonda sahip eksik/)).toHaveLength(3);
@@ -633,7 +633,7 @@ describe('SummaryPanel', () => {
     expect(within(packageStatus).getByText('Fail-closed')).toBeInTheDocument();
     expect(
       within(packageStatus).getByText(
-        'Genel amaçlı ERP/CRM aktarım paketi; pilot hedefler yalnızca backend adapter eşlemesiyle bağlanır.',
+        "Genel amaçlı ERP/CRM aktarım paketi; ERP/CRM'ye özel hedefler yalnızca backend adapter eşlemesiyle bağlanır.",
       ),
     ).toBeInTheDocument();
     const objectPreview = within(readiness).getByLabelText('ERP/CRM nesne önizlemesi');
@@ -681,7 +681,7 @@ describe('SummaryPanel', () => {
         requires_human_review: true,
       },
     });
-    expect(JSON.stringify(manifest).toLowerCase()).not.toContain(PILOT_ERP_MARKER);
+    expect(JSON.stringify(manifest).toLowerCase()).not.toContain(FORBIDDEN_ERP_BRAND_MARKER);
     expect(screen.getByText('Adapter manifesti panoya kopyalandı.')).toBeInTheDocument();
   });
 

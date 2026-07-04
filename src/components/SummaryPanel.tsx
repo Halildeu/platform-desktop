@@ -1070,8 +1070,8 @@ export function SummaryPanel({
                   <strong>Fail-closed</strong>
                 </div>
                 <p>
-                  Genel amaçlı ERP/CRM aktarım paketi; pilot hedefler yalnızca backend adapter
-                  eşlemesiyle bağlanır.
+                  Genel amaçlı ERP/CRM aktarım paketi; ERP/CRM'ye özel hedefler yalnızca backend
+                  adapter eşlemesiyle bağlanır.
                 </p>
               </div>
               {handoffIssues.length > 0 ? (

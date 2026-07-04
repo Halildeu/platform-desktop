@@ -11,12 +11,12 @@ import {
   setMeetingIntelligenceResult,
 } from './meeting-intelligence';
 
-const PILOT_ERP_MARKER = ['work', 'cube'].join('');
+const FORBIDDEN_ERP_BRAND_MARKER = ['work', 'cube'].join('');
 
 const RESULT = {
-  summaryMarkdown: 'Güvenli pilot için recorder akışı ve direct-STT kanıtı ayrıldı.',
+  summaryMarkdown: 'Güvenli ERP/CRM aktarımı için recorder akışı ve direct-STT kanıtı ayrıldı.',
   generatedAtMs: 1782741600000,
-  providerLabel: 'meeting-ai pilot',
+  providerLabel: 'meeting-ai gateway',
   citationCoverage: 1,
   decisions: [
     {
@@ -293,7 +293,7 @@ describe('meeting intelligence state and exports', () => {
       target_family: 'erp_crm',
       vendor_specific: false,
     });
-    expect(bundle.integrationJson.toLowerCase()).not.toContain(PILOT_ERP_MARKER);
+    expect(bundle.integrationJson.toLowerCase()).not.toContain(FORBIDDEN_ERP_BRAND_MARKER);
   });
 
   it('builds a standalone vendor-neutral ERP CRM adapter manifest', () => {
@@ -340,7 +340,7 @@ describe('meeting intelligence state and exports', () => {
       'decision_record',
       'action_task',
     ]);
-    expect(JSON.stringify(manifest).toLowerCase()).not.toContain(PILOT_ERP_MARKER);
+    expect(JSON.stringify(manifest).toLowerCase()).not.toContain(FORBIDDEN_ERP_BRAND_MARKER);
   });
 
   it('marks ERP CRM handoff as review required when open action ownership is incomplete', () => {

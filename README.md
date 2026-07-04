@@ -4,7 +4,7 @@ Meeting Intelligence Desktop Client — **Faz 24 bağımsız Meeting Intelligenc
 
 ## Amaç
 
-ERP/CRM bağımsız toplantı zekası için masaüstü deneyimi (mac/Windows/Linux). Belirli bir ERP adı runtime contract'a gömülmez; pilot hedefler entegrasyon adapter'ları üzerinden map edilir.
+ERP/CRM bağımsız toplantı zekası için masaüstü deneyimi (mac/Windows/Linux). Belirli bir ERP adı runtime contract'a gömülmez; ERP/CRM'ye özel hedefler entegrasyon adapter'ları üzerinden map edilir.
 
 - 🎙️ Sistem sesi (loopback) + mikrofon yakalama — tüm platform / yüz yüze / hibrit tek client
 - 📡 REST chunk akışı → `audio-gateway-service` (`POST /sessions → /chunks → /finish`)
@@ -188,7 +188,7 @@ Boundaries:
 - Meeting-intelligence content is shown only when an approved result is supplied to the renderer
   state model or generated through the backend gateway adapter. Real provider/runtime acceptance
   remains tracked by the Faz 24 GitOps/runtime issues.
-- ERP/CRM brand names are not product contracts; pilot targets are mapped only through backend
+- ERP/CRM brand names are not product contracts; ERP/CRM-specific targets are mapped only through backend
   adapters and the desktop surface stays generic across ERP/CRM systems.
 
 ## Lisans
