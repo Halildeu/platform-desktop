@@ -215,6 +215,31 @@ function handoffStatusLabel(readiness: MeetingOutputHandoffReadiness): string {
   return readiness.canHandoff ? 'Aktarıma hazır' : 'Review gerekli';
 }
 
+function handoffPackageStatusLabel(readiness: MeetingOutputHandoffReadiness | null): string {
+  if (!readiness) {
+    return 'Paket bekliyor';
+  }
+  return readiness.canHandoff ? 'Aktarım paketi hazır' : 'Review paketi';
+}
+
+function handoffPackageCopyButtonLabel(readiness: MeetingOutputHandoffReadiness | null): string {
+  return readiness?.canHandoff ? 'Aktarım paketi kopyala' : 'Review paketi kopyala';
+}
+
+function handoffPackageJsonButtonLabel(readiness: MeetingOutputHandoffReadiness | null): string {
+  return readiness?.canHandoff ? 'Aktarım JSON' : 'Review JSON';
+}
+
+function handoffPackageCopyMessage(readiness: MeetingOutputHandoffReadiness | null): string {
+  return readiness?.canHandoff
+    ? 'Aktarım paketi panoya kopyalandı.'
+    : 'Review paketi panoya kopyalandı.';
+}
+
+function handoffPackageDownloadMessage(readiness: MeetingOutputHandoffReadiness | null): string {
+  return readiness?.canHandoff ? 'Aktarım JSON indirildi.' : 'Review JSON indirildi.';
+}
+
 function handoffIssueLabel(readiness: MeetingOutputHandoffReadiness): string {
   const issues = [...readiness.blockers, ...readiness.warnings];
   if (issues.length === 0) {
@@ -552,14 +577,14 @@ export function SummaryPanel({
         setMessage('CSV indirildi.');
       } else if (kind === 'integration-copy') {
         await exportAdapter.copyText(bundle.integrationJson);
-        setMessage('Entegrasyon paketi panoya kopyalandı.');
+        setMessage(handoffPackageCopyMessage(handoffReadiness));
       } else if (kind === 'integration-json') {
         exportAdapter.downloadText(
           bundle.integrationJsonFileName,
           bundle.integrationJson,
           'application/json',
         );
-        setMessage('Entegrasyon JSON indirildi.');
+        setMessage(handoffPackageDownloadMessage(handoffReadiness));
       } else {
         exportAdapter.print();
         setMessage('PDF için yazdırma penceresi açıldı.');
@@ -850,14 +875,14 @@ export function SummaryPanel({
               type="button"
               onClick={() => void runExport('integration-copy')}
             >
-              Entegrasyon kopyala
+              {handoffPackageCopyButtonLabel(handoffReadiness)}
             </button>
             <button
               className="secondary-action"
               type="button"
               onClick={() => void runExport('integration-json')}
             >
-              Entegrasyon JSON
+              {handoffPackageJsonButtonLabel(handoffReadiness)}
             </button>
             <button
               className="secondary-action"
@@ -1006,6 +1031,10 @@ export function SummaryPanel({
                 <strong>{handoffReadiness ? handoffStatusLabel(handoffReadiness) : '-'}</strong>
               </div>
               <div>
+                <span>Paket</span>
+                <strong>{handoffPackageStatusLabel(handoffReadiness)}</strong>
+              </div>
+              <div>
                 <span>Kontrol</span>
                 <strong>{handoffReadiness ? handoffIssueLabel(handoffReadiness) : '-'}</strong>
               </div>
@@ -1027,6 +1056,24 @@ export function SummaryPanel({
                   <strong>Review metrikli</strong>
                 </div>
               ) : null}
+              <div className="handoff-package" aria-label="ERP/CRM aktarım paketi durumu">
+                <div>
+                  <span>Yetki</span>
+                  <strong>Backend adapter</strong>
+                </div>
+                <div>
+                  <span>Kural</span>
+                  <strong>Review-before-write</strong>
+                </div>
+                <div>
+                  <span>Hata modu</span>
+                  <strong>Fail-closed</strong>
+                </div>
+                <p>
+                  Genel amaçlı ERP/CRM aktarım paketi; pilot hedefler yalnızca backend adapter
+                  eşlemesiyle bağlanır.
+                </p>
+              </div>
               {handoffIssues.length > 0 ? (
                 <ul className="handoff-issue-list" aria-label="Aktarım review detayları">
                   {handoffIssues.map((issue) => (

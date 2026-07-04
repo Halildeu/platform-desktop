@@ -172,11 +172,12 @@ The recorder now exposes two user-facing workspaces:
   stable-row review actions, and an honest empty state while no transcript stream is connected.
 - **Toplantı Çıktısı**: typed meeting-intelligence result surface for summary, decisions,
   action items, citation timestamps, source readiness, Meeting AI source-package export,
-  Markdown/TXT/CSV/JSON export, share drafts, native print/PDF flow, and generic ERP/CRM
-  adapter handoff preview.
+  Markdown/TXT/CSV/JSON export, share drafts, native print/PDF flow, generic ERP/CRM
+  adapter handoff preview, and explicit package readiness state.
 - **ERP/CRM handoff**: vendor-neutral adapter manifest, review-before-write readiness gate,
   source-evidence metadata, object-level dry-run plan (`meeting_note`, `decision_record`,
-  `action_task`), and idempotent integration JSON for backend-owned adapters.
+  `action_task`), review-vs-transfer package labels, and idempotent integration JSON for
+  backend-owned adapters.
 
 Boundaries:
 
@@ -186,7 +187,8 @@ Boundaries:
 - Meeting-intelligence content is shown only when an approved result is supplied to the renderer
   state model or generated through the backend gateway adapter. Real provider/runtime acceptance
   remains tracked by the Faz 24 GitOps/runtime issues.
-- ERP/CRM brand names are not product contracts; pilot targets are mapped through adapters.
+- ERP/CRM brand names are not product contracts; pilot targets are mapped only through backend
+  adapters and the desktop surface stays generic across ERP/CRM systems.
 
 ## Lisans
 

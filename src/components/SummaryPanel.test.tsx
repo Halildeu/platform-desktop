@@ -305,6 +305,18 @@ describe('SummaryPanel', () => {
 
     const readiness = screen.getByLabelText('ERP/CRM entegrasyon hazırlığı');
     expect(within(readiness).getByText('Review gerekli')).toBeInTheDocument();
+    expect(within(readiness).getByText('Review paketi')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Review paketi kopyala' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Review JSON' })).toBeInTheDocument();
+    const packageStatus = within(readiness).getByLabelText('ERP/CRM aktarım paketi durumu');
+    expect(within(packageStatus).getByText('Backend adapter')).toBeInTheDocument();
+    expect(within(packageStatus).getByText('Review-before-write')).toBeInTheDocument();
+    expect(within(packageStatus).getByText('Fail-closed')).toBeInTheDocument();
+    expect(
+      within(packageStatus).getByText(
+        'Genel amaçlı ERP/CRM aktarım paketi; pilot hedefler yalnızca backend adapter eşlemesiyle bağlanır.',
+      ),
+    ).toBeInTheDocument();
     expect(within(readiness).getAllByText(/1 açık aksiyonda sahip eksik/)).toHaveLength(3);
     expect(within(readiness).getAllByText(/1 kararda sahip eksik/)).toHaveLength(3);
     expect(within(readiness).getAllByText(/1 açık aksiyonda tarih eksik/)).toHaveLength(3);
@@ -504,7 +516,7 @@ describe('SummaryPanel', () => {
     await userEvent.type(screen.getByLabelText(`Sahip: ${actionTitle}`), 'Zeynep Akkılıç');
     await userEvent.selectOptions(screen.getByLabelText(`Durum: ${actionTitle}`), 'blocked');
 
-    await userEvent.click(screen.getByRole('button', { name: 'Entegrasyon kopyala' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Aktarım paketi kopyala' }));
 
     await waitFor(() => {
       expect(adapter.copyText).toHaveBeenCalledWith(
@@ -601,6 +613,7 @@ describe('SummaryPanel', () => {
     expect(within(readiness).getByText('Adapter profili')).toBeInTheDocument();
     expect(within(readiness).getByText(MEETING_OUTPUT_ADAPTER_PROFILE_ID)).toBeInTheDocument();
     expect(within(readiness).getByText('Manifest')).toBeInTheDocument();
+    expect(within(readiness).getByText('Aktarım paketi hazır')).toBeInTheDocument();
     expect(
       within(readiness).getByText(
         `${MEETING_OUTPUT_ADAPTER_OBJECT_CONTRACTS.length} nesne / ${MEETING_OUTPUT_ADAPTER_CAPABILITIES.length} kabiliyet`,
@@ -614,6 +627,15 @@ describe('SummaryPanel', () => {
     expect(
       within(readiness).getByText('meeting_note, decision_record, action_task'),
     ).toBeInTheDocument();
+    const packageStatus = within(readiness).getByLabelText('ERP/CRM aktarım paketi durumu');
+    expect(within(packageStatus).getByText('Backend adapter')).toBeInTheDocument();
+    expect(within(packageStatus).getByText('Review-before-write')).toBeInTheDocument();
+    expect(within(packageStatus).getByText('Fail-closed')).toBeInTheDocument();
+    expect(
+      within(packageStatus).getByText(
+        'Genel amaçlı ERP/CRM aktarım paketi; pilot hedefler yalnızca backend adapter eşlemesiyle bağlanır.',
+      ),
+    ).toBeInTheDocument();
     const objectPreview = within(readiness).getByLabelText('ERP/CRM nesne önizlemesi');
     expect(within(objectPreview).getByText('Toplantı notu')).toBeInTheDocument();
     expect(within(objectPreview).getByText('Karar kayıtları')).toBeInTheDocument();
@@ -624,9 +646,9 @@ describe('SummaryPanel', () => {
     expect(within(objectPreview).getByText('action.id')).toBeInTheDocument();
     expect(within(objectPreview).getAllByText('Hazır')).toHaveLength(3);
     expect(within(objectPreview).getAllByText('Eksik yok')).toHaveLength(3);
-    expect(screen.getByText('Entegrasyon paketi panoya kopyalandı.')).toBeInTheDocument();
+    expect(screen.getByText('Aktarım paketi panoya kopyalandı.')).toBeInTheDocument();
 
-    await userEvent.click(screen.getByRole('button', { name: 'Entegrasyon JSON' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Aktarım JSON' }));
     expect(adapter.downloadText).toHaveBeenCalledWith(
       expect.stringMatching(/^meeting-output-integration-22222222-2222-4222-8222-222222222222-/),
       expect.stringContaining('"import_targets": ['),

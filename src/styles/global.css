@@ -754,6 +754,25 @@ button:disabled {
   overflow-wrap: anywhere;
 }
 
+.handoff-package {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 8px;
+  padding-top: 8px;
+  border-top: 1px solid #99f6e4;
+}
+
+.handoff-package p {
+  grid-column: 1 / -1;
+  margin: 0;
+  color: #475569;
+  font-size: 12px;
+  font-weight: 650;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
 .handoff-issue-list {
   grid-column: 1 / -1;
   display: grid;
