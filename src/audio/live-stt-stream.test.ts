@@ -425,9 +425,7 @@ describe('connectLiveSttStream', () => {
     });
     vi.advanceTimersByTime(210);
 
-    expect(events.at(-1)?.text).toBe(
-      'Merhaba sesim geliyor mu beni duyuyor musun burada hava çok',
-    );
+    expect(events.at(-1)?.text).toBe('Merhaba sesim geliyor mu beni duyuyor musun burada hava çok');
 
     stream.close();
   });
@@ -1629,6 +1627,59 @@ describe('connectLiveSttStream', () => {
     second?.open();
     second?.message({ type: 'ready' });
     expect(second?.sent).toHaveLength(1);
+
+    stream.close();
+  });
+
+  it('reconnects when active audio only receives duplicate partials without transcript growth', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(0));
+    vi.stubGlobal('WebSocket', FakeWebSocket);
+    const statuses: LiveSttStreamStatusEvent[] = [];
+    const events: LiveSttTranscriptEvent[] = [];
+
+    const stream = connectLiveSttStream('ws://127.0.0.1:18220/ws/stream', {
+      onStatus: (event) => statuses.push(event),
+      onTranscriptEvent: (event) => events.push(event),
+    });
+    const first = FakeWebSocket.instances[0];
+    first?.open();
+    first?.message({ type: 'ready' });
+    first?.message({
+      type: 'partial',
+      seq: 0,
+      confirmed: '',
+      tentative: 'Merhaba',
+      elapsed_ms: 120,
+      rms: 0.04,
+      source: 'medium',
+    });
+    expect(events.map((event) => event.text)).toEqual(['Merhaba']);
+
+    vi.advanceTimersByTime(11_999);
+    first?.message({
+      type: 'partial',
+      seq: 0,
+      confirmed: '',
+      tentative: 'Merhaba',
+      elapsed_ms: 12_119,
+      rms: 0.04,
+      source: 'medium',
+    });
+    expect(events.map((event) => event.text)).toEqual(['Merhaba']);
+
+    vi.advanceTimersByTime(1);
+    stream.send(new Float32Array([0.002, 0.002]));
+
+    expect(first?.readyState).toBe(FakeWebSocket.CLOSED);
+    expect(statuses).toContainEqual(
+      expect.objectContaining({
+        status: 'reconnecting',
+        attempt: 1,
+        maxAttempts: 60,
+        reason: 'transcript akışı gecikti',
+      }),
+    );
 
     stream.close();
   });

@@ -605,10 +605,7 @@ function mergeFinalTranscript(previousText: string, finalText: string): string {
     return previous;
   }
 
-  const draftPreservingMerge = mergeShortFinalWithoutDroppingDraft(
-    previousRawWords,
-    finalRawWords,
-  );
+  const draftPreservingMerge = mergeShortFinalWithoutDroppingDraft(previousRawWords, finalRawWords);
   if (draftPreservingMerge) {
     return draftPreservingMerge;
   }
@@ -795,6 +792,10 @@ export function connectLiveSttStream(
     callbacks.onStatus?.(event);
   };
 
+  const markUsableTranscript = (): void => {
+    lastUsableTranscriptAtMs = Date.now();
+  };
+
   const flushPending = (): void => {
     const socket = ws;
     if (!ready || !socket || socket.readyState !== WebSocket.OPEN) {
@@ -888,7 +889,6 @@ export function connectLiveSttStream(
         ensureOpenSegment(event.seq);
         const startedAtMs = segmentStartedAt.get(event.seq) ?? Date.now();
         segmentStartedAt.set(event.seq, startedAtMs);
-        lastUsableTranscriptAtMs = Date.now();
         emitProgressivePartial(event, text, startedAtMs);
         return;
       }
@@ -937,7 +937,7 @@ export function connectLiveSttStream(
         segmentFinalText.set(event.seq, text);
         lastEmittedFinalText = text;
         recentEmittedFinalText = appendRecentFinalText(recentEmittedFinalText, text);
-        lastUsableTranscriptAtMs = Date.now();
+        markUsableTranscript();
         callbacks.onTranscriptEvent?.({
           id: segmentId(event.seq),
           startedAtMs,
@@ -1012,6 +1012,7 @@ export function connectLiveSttStream(
 
   const emitPartial = (event: LiveSttServerPartial, text: string, startedAtMs: number): void => {
     segmentDraftText.set(event.seq, text);
+    markUsableTranscript();
     callbacks.onTranscriptEvent?.({
       id: segmentId(event.seq),
       startedAtMs,
