@@ -4,8 +4,10 @@ import { CONSENT_LOCALE, CONSENT_TEXT_HASH, CONSENT_VERSION } from './ConsentDia
 import {
   MEETING_OUTPUT_ADAPTER_CAPABILITIES,
   MEETING_OUTPUT_ADAPTER_CONTRACT_VERSION,
+  MEETING_OUTPUT_ADAPTER_KIND,
   MEETING_OUTPUT_ADAPTER_OBJECT_CONTRACTS,
   MEETING_OUTPUT_ADAPTER_PROFILE_ID,
+  MEETING_OUTPUT_ADAPTER_TARGET,
   MEETING_OUTPUT_SUPPORTED_OBJECTS,
 } from '../intelligence/meeting-output-contract';
 import {
@@ -289,6 +291,25 @@ function integrationSupportedObjectLabel(): string {
 
 function adapterManifestSummaryLabel(): string {
   return `${MEETING_OUTPUT_ADAPTER_OBJECT_CONTRACTS.length} nesne / ${MEETING_OUTPUT_ADAPTER_CAPABILITIES.length} kabiliyet`;
+}
+
+function adapterCapabilityLabel(capability: string): string {
+  switch (capability) {
+    case 'upsert_meeting_note':
+      return 'Toplantı notu upsert';
+    case 'upsert_decision_record':
+      return 'Karar kaydı upsert';
+    case 'upsert_action_task':
+      return 'Aksiyon görevi upsert';
+    case 'source_reference_mapping':
+      return 'Kaynak referansı eşleme';
+    case 'idempotent_write':
+      return 'Idempotent yazım';
+    case 'human_review_gate':
+      return 'İnsan review kapısı';
+    default:
+      return capability.replaceAll('_', ' ');
+  }
 }
 
 function handoffStatusLabel(readiness: MeetingOutputHandoffReadiness): string {
@@ -1188,6 +1209,24 @@ export function SummaryPanel({
                   Genel amaçlı ERP/CRM aktarım paketi; ERP/CRM'ye özel hedefler yalnızca backend
                   adapter eşlemesiyle bağlanır.
                 </p>
+              </div>
+              <div className="adapter-manifest" aria-label="Genel ERP/CRM adapter manifesti">
+                <div>
+                  <span>Adapter türü</span>
+                  <strong>{MEETING_OUTPUT_ADAPTER_KIND}</strong>
+                </div>
+                <div>
+                  <span>Çalışma alanı</span>
+                  <strong>{MEETING_OUTPUT_ADAPTER_TARGET}</strong>
+                </div>
+                <ul className="adapter-capability-list" aria-label="Adapter kabiliyetleri">
+                  {MEETING_OUTPUT_ADAPTER_CAPABILITIES.map((capability) => (
+                    <li key={capability}>
+                      <span>{adapterCapabilityLabel(capability)}</span>
+                      <code>{capability}</code>
+                    </li>
+                  ))}
+                </ul>
               </div>
               {handoffIssues.length > 0 ? (
                 <ul className="handoff-issue-list" aria-label="Aktarım review detayları">

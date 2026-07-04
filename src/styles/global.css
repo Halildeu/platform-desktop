@@ -846,6 +846,55 @@ button:disabled {
   overflow-wrap: anywhere;
 }
 
+.adapter-manifest {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 8px;
+  padding-top: 8px;
+  border-top: 1px solid #99f6e4;
+}
+
+.adapter-capability-list {
+  grid-column: 1 / -1;
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.adapter-capability-list li {
+  display: inline-flex;
+  max-width: 100%;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 8px;
+  border: 1px solid #99f6e4;
+  border-radius: 6px;
+  background: #ffffff;
+  color: #17202a;
+  font-size: 12px;
+  font-weight: 650;
+  line-height: 1.35;
+}
+
+.adapter-capability-list span {
+  color: #17202a;
+  font-size: 12px;
+  font-weight: 750;
+  text-transform: none;
+}
+
+.adapter-capability-list code {
+  min-width: 0;
+  color: #475569;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', monospace;
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
 .handoff-issue-list {
   grid-column: 1 / -1;
   display: grid;

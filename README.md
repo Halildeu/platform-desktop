@@ -175,7 +175,8 @@ The recorder now exposes two user-facing workspaces:
   action items, citation timestamps, source readiness, Meeting AI source-package export,
   Markdown/TXT/CSV/JSON export, share drafts, native print/PDF flow, generic ERP/CRM
   adapter handoff preview, and explicit package readiness state.
-- **ERP/CRM handoff**: vendor-neutral adapter manifest, review-before-write readiness gate,
+- **ERP/CRM handoff**: visible vendor-neutral adapter manifest and capability list,
+  review-before-write readiness gate,
   source-evidence metadata, object-level dry-run plan (`meeting_note`, `decision_record`,
   `action_task`), stale-source fail-closed gating, review-vs-transfer package labels, and
   idempotent integration JSON for backend-owned adapters.

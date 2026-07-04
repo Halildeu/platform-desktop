@@ -10,8 +10,10 @@ import { SummaryPanel, type ExportAdapter, type MeetingAiSubmitAdapter } from '.
 import {
   MEETING_OUTPUT_ADAPTER_CAPABILITIES,
   MEETING_OUTPUT_ADAPTER_CONTRACT_VERSION,
+  MEETING_OUTPUT_ADAPTER_KIND,
   MEETING_OUTPUT_ADAPTER_OBJECT_CONTRACTS,
   MEETING_OUTPUT_ADAPTER_PROFILE_ID,
+  MEETING_OUTPUT_ADAPTER_TARGET,
 } from '../intelligence/meeting-output-contract';
 import {
   initialMeetingIntelligence,
@@ -469,6 +471,19 @@ describe('SummaryPanel', () => {
         "Genel amaçlı ERP/CRM aktarım paketi; ERP/CRM'ye özel hedefler yalnızca backend adapter eşlemesiyle bağlanır.",
       ),
     ).toBeInTheDocument();
+    const adapterManifest = within(readiness).getByLabelText('Genel ERP/CRM adapter manifesti');
+    expect(within(adapterManifest).getByText(MEETING_OUTPUT_ADAPTER_KIND)).toBeInTheDocument();
+    expect(within(adapterManifest).getByText(MEETING_OUTPUT_ADAPTER_TARGET)).toBeInTheDocument();
+    const capabilities = within(adapterManifest).getByLabelText('Adapter kabiliyetleri');
+    expect(within(capabilities).getByText('Toplantı notu upsert')).toBeInTheDocument();
+    expect(within(capabilities).getByText('Karar kaydı upsert')).toBeInTheDocument();
+    expect(within(capabilities).getByText('Aksiyon görevi upsert')).toBeInTheDocument();
+    expect(within(capabilities).getByText('Kaynak referansı eşleme')).toBeInTheDocument();
+    expect(within(capabilities).getByText('Idempotent yazım')).toBeInTheDocument();
+    expect(within(capabilities).getByText('İnsan review kapısı')).toBeInTheDocument();
+    for (const capability of MEETING_OUTPUT_ADAPTER_CAPABILITIES) {
+      expect(within(capabilities).getByText(capability)).toBeInTheDocument();
+    }
     expect(within(readiness).getAllByText(/1 açık aksiyonda sahip eksik/)).toHaveLength(3);
     expect(within(readiness).getAllByText(/1 kararda sahip eksik/)).toHaveLength(3);
     expect(within(readiness).getAllByText(/1 açık aksiyonda tarih eksik/)).toHaveLength(3);
