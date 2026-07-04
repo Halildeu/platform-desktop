@@ -176,7 +176,7 @@ const STATUS_RANK: Record<TranscriptSegmentStatus, number> = {
 const REPORT_READY_MIN_WORDS = 20;
 const REPORT_READY_MIN_DURATION_MS = 15_000;
 const REPORT_WORD_RATE_WARN_MIN_DURATION_MS = 20_000;
-const REPORT_LOW_WORDS_PER_MINUTE = 8;
+const REPORT_LOW_WORDS_PER_MINUTE = 35;
 
 function hasMinimumMeetingAiSource(readiness: TranscriptSourceReadiness): boolean {
   return (

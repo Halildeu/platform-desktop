@@ -15,7 +15,7 @@ const TRANSCRIPT_DENSITY_READY_MIN_MS = 10_000;
 const TRANSCRIPT_LOW_DENSITY_WARN_MS = 15_000;
 const TRANSCRIPT_LOW_DENSITY_SEGMENTS_PER_MINUTE = 1;
 const TRANSCRIPT_LOW_WORD_RATE_WARN_MS = 20_000;
-const TRANSCRIPT_LOW_WORDS_PER_MINUTE = 8;
+const TRANSCRIPT_LOW_WORDS_PER_MINUTE = 35;
 const SPEAKER_COLORS = ['#0f766e', '#2563eb', '#b45309', '#7c3aed', '#be123c', '#0f766e'];
 
 type TranscriptFilter =
@@ -670,6 +670,14 @@ function transcriptFlowHealth(
   const segmentsPerMinute = transcriptSegmentsPerMinute(session.segments.length, spanMs);
   const wordsPerMinute = transcriptWordsPerMinute(words, spanMs);
   const lagMs = streamLagMs(stream, lastTranscriptAtMs, recordingActive);
+  const coverageWindowActive = Boolean(
+    recordingActive &&
+    session.segments.length > 0 &&
+    (stream?.audioActive ||
+      stream?.directActive ||
+      stream?.directReady ||
+      stream?.directConfigured),
+  );
 
   if (!recordingActive) {
     return {
@@ -746,7 +754,7 @@ function transcriptFlowHealth(
   }
 
   if (
-    stream?.audioActive &&
+    coverageWindowActive &&
     spanMs !== null &&
     spanMs >= TRANSCRIPT_LOW_WORD_RATE_WARN_MS &&
     wordsPerMinute !== null &&
@@ -755,7 +763,7 @@ function transcriptFlowHealth(
     return {
       label: 'Metin kapsamı düşük',
       detail:
-        'Ses var ama kelime üretim hızı düşük; konuşmanın önemli kısmı transcript akışına düşmüyor olabilir.',
+        'Kayıt penceresine göre kelime üretim hızı düşük; konuşmanın önemli kısmı transcript akışına düşmüyor olabilir.',
       nextAction:
         'Tanıyı kopyalayın; kaynak kalite gate’i bu transcripti review’da tutar, çıktı üretimi öncesi mikrofon/direct STT zinciri doğrulanmalı.',
       level: 'warn',

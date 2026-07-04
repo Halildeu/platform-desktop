@@ -276,18 +276,20 @@ describe('TranscriptPanel', () => {
     );
 
     const flowHealth = screen.getByLabelText('Transkript akış kalitesi');
-    expect(within(flowHealth).getByText('Akış takipte')).toBeInTheDocument();
+    expect(within(flowHealth).getByText('Metin kapsamı düşük')).toBeInTheDocument();
     expect(within(flowHealth).getByText('1.9 satır/dk')).toBeInTheDocument();
     expect(within(flowHealth).getByText('16')).toBeInTheDocument();
     expect(within(flowHealth).getByText('15 kelime/dk')).toBeInTheDocument();
     expect(within(flowHealth).getByText('Direct 1 / Gateway 1')).toBeInTheDocument();
     expect(
-      within(flowHealth).getByText('Ses ve transcript zamanı birlikte ilerliyor.'),
+      within(flowHealth).getByText(
+        'Kayıt penceresine göre kelime üretim hızı düşük; konuşmanın önemli kısmı transcript akışına düşmüyor olabilir.',
+      ),
     ).toBeInTheDocument();
     expect(within(flowHealth).getByText('Sonraki aksiyon')).toBeInTheDocument();
     expect(
       within(flowHealth).getByText(
-        'Kayıt sonrası toplantı çıktısını kaynak kanıtıyla review’a alın.',
+        'Tanıyı kopyalayın; kaynak kalite gate’i bu transcripti review’da tutar, çıktı üretimi öncesi mikrofon/direct STT zinciri doğrulanmalı.',
       ),
     ).toBeInTheDocument();
   });
@@ -815,12 +817,55 @@ describe('TranscriptPanel', () => {
     expect(within(flowHealth).getByText('2.0 kelime/dk')).toBeInTheDocument();
     expect(
       within(flowHealth).getByText(
-        'Ses var ama kelime üretim hızı düşük; konuşmanın önemli kısmı transcript akışına düşmüyor olabilir.',
+        'Kayıt penceresine göre kelime üretim hızı düşük; konuşmanın önemli kısmı transcript akışına düşmüyor olabilir.',
       ),
     ).toBeInTheDocument();
     expect(
       within(flowHealth).getByText(
         'Tanıyı kopyalayın; kaynak kalite gate’i bu transcripti review’da tutar, çıktı üretimi öncesi mikrofon/direct STT zinciri doğrulanmalı.',
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it('flags low word coverage after speech capture becomes quiet but the recording window stays sparse', () => {
+    const recording = startTranscriptSession(initialTranscriptSession(), {
+      sessionId: 'SES-1',
+      meetingId: '22222222-2222-4222-8222-222222222222',
+      deviceId: 'desktop-1',
+      hasLoopback: false,
+      startedAtMs: 1781820000000,
+    });
+    const withSparseTranscript = upsertTranscriptSegment(recording, {
+      id: 'seg-1',
+      speakerLabel: 'Konuşmacı',
+      startedAtMs: 1781820040000,
+      status: 'final',
+      text: 'Kısa çıktı',
+      source: 'direct-stream',
+      receivedAtMs: 1781820041200,
+    });
+
+    render(
+      <TranscriptPanel
+        session={withSparseTranscript}
+        stream={{
+          directConfigured: true,
+          directReady: true,
+          directActive: true,
+          audioRms: 0.001,
+          audioActive: false,
+          lastAudioAtMs: 1781820065000,
+          disabledReason: null,
+        }}
+      />,
+    );
+
+    const flowHealth = screen.getByLabelText('Transkript akış kalitesi');
+    expect(within(flowHealth).getByText('Metin kapsamı düşük')).toBeInTheDocument();
+    expect(within(flowHealth).getByText('1.8 kelime/dk')).toBeInTheDocument();
+    expect(
+      within(flowHealth).getByText(
+        'Kayıt penceresine göre kelime üretim hızı düşük; konuşmanın önemli kısmı transcript akışına düşmüyor olabilir.',
       ),
     ).toBeInTheDocument();
   });
