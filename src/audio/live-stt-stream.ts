@@ -420,9 +420,18 @@ function isKnownShortArtifact(text: string): boolean {
   return normalized === 'neroba';
 }
 
+function isKnownCaptionArtifact(text: string): boolean {
+  const normalized = normalizedWords(splitWords(text)).join(' ');
+  return (
+    normalized === 'izlediğiniz için teşekkür ederim' ||
+    normalized === 'istediğiniz için teşekkür ederim'
+  );
+}
+
 function isUnstableFinalText(text: string): boolean {
   return (
     isKnownShortArtifact(text) ||
+    isKnownCaptionArtifact(text) ||
     isLowInformationRepetition(text) ||
     isShortRepeatedDecodeChain(text) ||
     isRepeatedDecodeChain(text) ||
