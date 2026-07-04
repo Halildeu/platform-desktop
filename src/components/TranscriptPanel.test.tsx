@@ -270,7 +270,7 @@ describe('TranscriptPanel', () => {
 
     expect(
       screen.getByText(
-        'Görünen 3/3 · Final 2 · Revize 1 · İncelenen 1 · Taslak 0 · Direct 2 · Gateway 1',
+        'Görünen 3/3 · Final 2 · Revize 1 · İncelenen 1 · Kontrol bekleyen 2 · Taslak 0 · Direct 2 · Gateway 1',
       ),
     ).toBeInTheDocument();
     expect(screen.getAllByRole('article')[0]).toHaveTextContent('Revize karar satırı');
@@ -282,7 +282,7 @@ describe('TranscriptPanel', () => {
     expect(searchedArticles[0]).toHaveTextContent('Bütçe onayı');
     expect(
       screen.getByText(
-        'Görünen 1/3 · Final 2 · Revize 1 · İncelenen 1 · Taslak 0 · Direct 2 · Gateway 1',
+        'Görünen 1/3 · Final 2 · Revize 1 · İncelenen 1 · Kontrol bekleyen 2 · Taslak 0 · Direct 2 · Gateway 1',
       ),
     ).toBeInTheDocument();
 
@@ -327,6 +327,19 @@ describe('TranscriptPanel', () => {
     });
 
     render(<TranscriptPanel session={withRevised} />);
+
+    await userEvent.click(screen.getByRole('button', { name: 'Kontrol bekleyen' }));
+
+    const pendingArticles = screen.getAllByRole('article');
+    expect(pendingArticles).toHaveLength(1);
+    expect(pendingArticles[0]).toHaveTextContent('Gateway final toplantı satırı');
+    expect(screen.queryByText('Canlı direct draft satırı')).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('button', { name: 'İncelenen' }));
+
+    const reviewedArticles = screen.getAllByRole('article');
+    expect(reviewedArticles).toHaveLength(1);
+    expect(reviewedArticles[0]).toHaveTextContent('Direct revize toplantı satırı');
 
     await userEvent.click(screen.getByRole('button', { name: 'Revizeler' }));
 
@@ -396,10 +409,7 @@ describe('TranscriptPanel', () => {
     await userEvent.type(editor, 'Düzeltilmiş toplantı satırı');
     await userEvent.click(within(articles[1]).getByRole('button', { name: 'Kaydet' }));
 
-    expect(onSegmentTextChange).toHaveBeenCalledWith(
-      'seg-final',
-      'Düzeltilmiş toplantı satırı',
-    );
+    expect(onSegmentTextChange).toHaveBeenCalledWith('seg-final', 'Düzeltilmiş toplantı satırı');
   });
 
   it('renders speaker timeline distribution and lets reviewed labels drive the transcript view', async () => {

@@ -13,10 +13,20 @@ import type { AudioCapturePreflightState } from '../audio/capture';
 const TRANSCRIPT_LAG_WARN_MS = 5_000;
 const SPEAKER_COLORS = ['#0f766e', '#2563eb', '#b45309', '#7c3aed', '#be123c', '#0f766e'];
 
-type TranscriptFilter = 'all' | 'draft' | 'final' | 'revised' | 'direct' | 'gateway';
+type TranscriptFilter =
+  | 'all'
+  | 'review-pending'
+  | 'reviewed'
+  | 'draft'
+  | 'final'
+  | 'revised'
+  | 'direct'
+  | 'gateway';
 
 const TRANSCRIPT_FILTERS: Array<{ key: TranscriptFilter; label: string }> = [
   { key: 'all', label: 'Tümü' },
+  { key: 'review-pending', label: 'Kontrol bekleyen' },
+  { key: 'reviewed', label: 'İncelenen' },
   { key: 'draft', label: 'Taslaklar' },
   { key: 'final', label: 'Finaller' },
   { key: 'revised', label: 'Revizeler' },
@@ -512,6 +522,17 @@ function isReviewedSegment(segment: TranscriptSessionState['segments'][number]):
   return segment.status === 'revised' || typeof segment.reviewedAtMs === 'number';
 }
 
+function isReviewPendingSegment(
+  session: TranscriptSessionState,
+  segment: TranscriptSessionState['segments'][number],
+): boolean {
+  return Boolean(
+    segment.text.trim() &&
+    !isReviewedSegment(segment) &&
+    !(session.lifecycle === 'recording' && isLiveDirectDraft(segment)),
+  );
+}
+
 function formatDiagnosticTimestamp(value: number | null | undefined): string {
   if (typeof value !== 'number' || !Number.isFinite(value)) {
     return '-';
@@ -563,11 +584,18 @@ function normalizeTranscriptQuery(value: string): string {
 }
 
 function matchesTranscriptFilter(
+  session: TranscriptSessionState,
   segment: TranscriptSessionState['segments'][number],
   filter: TranscriptFilter,
 ): boolean {
   if (filter === 'all') {
     return true;
+  }
+  if (filter === 'review-pending') {
+    return isReviewPendingSegment(session, segment);
+  }
+  if (filter === 'reviewed') {
+    return isReviewedSegment(segment);
   }
   if (filter === 'draft') {
     return segment.status === 'draft' || segment.status === 'stabilizing';
@@ -599,6 +627,7 @@ function matchesTranscriptQuery(
     speakerLabelFor(segment.speakerLabel, speakerLabels),
     transcriptStatusLabel(segment.status),
     segmentSourceLabel(segment.source),
+    isReviewedSegment(segment) ? 'İncelendi' : '',
   ]
     .join(' ')
     .toLocaleLowerCase('tr-TR');
@@ -610,11 +639,15 @@ function transcriptReviewSummary(session: TranscriptSessionState, visibleCount: 
   const statusCounts = transcriptStatusCounts(session);
   const sourceCounts = transcriptSourceCounts(session);
   const reviewedCount = session.segments.filter(isReviewedSegment).length;
+  const reviewPendingCount = session.segments.filter((segment) =>
+    isReviewPendingSegment(session, segment),
+  ).length;
   return [
     `Görünen ${visibleCount}/${session.segments.length}`,
     `Final ${statusCounts.final}`,
     `Revize ${statusCounts.revised}`,
     `İncelenen ${reviewedCount}`,
+    `Kontrol bekleyen ${reviewPendingCount}`,
     `Taslak ${statusCounts.draft + statusCounts.stabilizing}`,
     `Direct ${sourceCounts.direct}`,
     `Gateway ${sourceCounts.gateway}`,
@@ -657,6 +690,9 @@ function buildTranscriptDiagnostics(
     `segments.final=${statusCounts.final}`,
     `segments.revised=${statusCounts.revised}`,
     `segments.reviewed=${session.segments.filter(isReviewedSegment).length}`,
+    `segments.reviewPending=${
+      session.segments.filter((segment) => isReviewPendingSegment(session, segment)).length
+    }`,
     `segments.direct=${sourceCounts.direct}`,
     `segments.gateway=${sourceCounts.gateway}`,
     `segments.unknown=${sourceCounts.unknown}`,
@@ -682,7 +718,7 @@ export function TranscriptPanel({
   const normalizedTranscriptQuery = normalizeTranscriptQuery(transcriptQuery);
   const filteredSegments = visibleSegments.filter(
     (segment) =>
-      matchesTranscriptFilter(segment, transcriptFilter) &&
+      matchesTranscriptFilter(session, segment, transcriptFilter) &&
       matchesTranscriptQuery(segment, normalizedTranscriptQuery, speakerLabels),
   );
   const speakerTimeline = buildSpeakerTimeline(session, speakerLabels);
