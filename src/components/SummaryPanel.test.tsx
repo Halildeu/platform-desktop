@@ -231,8 +231,11 @@ describe('SummaryPanel', () => {
       within(freshness).getByText('Çıktı için karşılaştırılabilir transkript kaynağı yok.'),
     ).toBeInTheDocument();
     const readiness = screen.getByLabelText('ERP/CRM entegrasyon hazırlığı');
-    expect(within(readiness).getByText('Aktarıma hazır')).toBeInTheDocument();
-    expect(within(readiness).getByText('Eksik alan yok')).toBeInTheDocument();
+    expect(within(readiness).getByText('Review gerekli')).toBeInTheDocument();
+    expect(within(readiness).getByText('Review paketi')).toBeInTheDocument();
+    expect(
+      within(readiness).getAllByText('Transkript kaynak kanıtı yok').length,
+    ).toBeGreaterThanOrEqual(1);
   });
 
   it('renders safe output quality fallbacks and confidence bands', () => {
@@ -469,18 +472,20 @@ describe('SummaryPanel', () => {
     expect(within(readiness).getAllByText(/1 açık aksiyonda sahip eksik/)).toHaveLength(3);
     expect(within(readiness).getAllByText(/1 kararda sahip eksik/)).toHaveLength(3);
     expect(within(readiness).getAllByText(/1 açık aksiyonda tarih eksik/)).toHaveLength(3);
-    expect(within(readiness).getByText(/\+1 daha/)).toBeInTheDocument();
+    expect(within(readiness).getByText(/\+2 daha/)).toBeInTheDocument();
     const reviewDetails = within(readiness).getByLabelText('Aktarım review detayları');
     expect(within(reviewDetails).getAllByText('Blokaj')).toHaveLength(2);
-    expect(within(reviewDetails).getAllByText('Uyarı')).toHaveLength(2);
+    expect(within(reviewDetails).getAllByText('Uyarı')).toHaveLength(3);
     expect(within(reviewDetails).getByText('Kaynak kapsamı %50 altında')).toBeInTheDocument();
+    expect(within(reviewDetails).getByText('Transkript kaynak kanıtı yok')).toBeInTheDocument();
     const objectPreview = within(readiness).getByLabelText('ERP/CRM nesne önizlemesi');
     expect(within(objectPreview).getByText('Toplantı notu')).toBeInTheDocument();
     expect(within(objectPreview).getByText('Karar kayıtları')).toBeInTheDocument();
     expect(within(objectPreview).getByText('Aksiyon görevleri')).toBeInTheDocument();
     expect(within(objectPreview).getAllByText('Kontrol gerekli')).toHaveLength(3);
-    expect(within(objectPreview).getByText('Kaynak kapsamı %50 altında')).toBeInTheDocument();
-    expect(within(objectPreview).getByText('1 kararda sahip eksik')).toBeInTheDocument();
+    expect(within(objectPreview).getByText(/Kaynak kapsamı %50 altında/)).toBeInTheDocument();
+    expect(within(objectPreview).getByText(/1 kararda sahip eksik/)).toBeInTheDocument();
+    expect(within(objectPreview).getAllByText(/Transkript kaynak kanıtı yok/)).toHaveLength(3);
     expect(
       within(objectPreview).getByText(
         /1 açık aksiyonda sahip eksik · 1 açık aksiyonda tarih eksik/,

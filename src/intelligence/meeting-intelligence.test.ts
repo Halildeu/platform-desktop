@@ -9,6 +9,7 @@ import {
   markIntelligenceRecording,
   markIntelligenceWaiting,
   setMeetingIntelligenceResult,
+  type MeetingOutputSourceEvidence,
 } from './meeting-intelligence';
 
 const FORBIDDEN_ERP_BRAND_MARKER = ['work', 'cube'].join('');
@@ -38,6 +39,31 @@ const RESULT = {
       citations: [{ segmentId: 'seg-2', startedAtMs: 64_000 }],
     },
   ],
+};
+
+const CURRENT_SOURCE_EVIDENCE: MeetingOutputSourceEvidence = {
+  transcript: {
+    source_level: 'ready',
+    source_label: 'Çıktıya uygun',
+    lifecycle: 'finished',
+    segment_count: 2,
+    word_count: 18,
+    duration_ms: 18_000,
+    final_count: 2,
+    draft_count: 0,
+    final_ratio: 1,
+    reviewed_count: 1,
+    reviewed_ratio: 0.5,
+    result_freshness: {
+      status: 'current',
+      label: 'Güncel',
+      result_generated_at_ms: 1782741600000,
+      latest_source_at_ms: 1782741600000,
+      stale_by_ms: 0,
+      raw_transcript_included: false,
+    },
+    raw_transcript_included: false,
+  },
 };
 
 describe('meeting intelligence state and exports', () => {
@@ -183,10 +209,16 @@ describe('meeting intelligence state and exports', () => {
         failure_mode: 'fail_closed',
       },
       handoff_readiness: {
-        status: 'ready',
-        can_handoff: true,
+        status: 'needs_review',
+        can_handoff: false,
         blockers: [],
-        warnings: [],
+        warnings: [
+          {
+            code: 'missing_source_evidence',
+            severity: 'warning',
+            label: 'Transkript kaynak kanıtı yok',
+          },
+        ],
       },
       object_plan: [
         {
@@ -197,8 +229,14 @@ describe('meeting intelligence state and exports', () => {
           external_key: 'meeting_id',
           required_fields: ['display_title', 'summary_markdown'],
           optional_fields: ['citations', 'source_evidence'],
-          status: 'ready',
-          issues: [],
+          status: 'needs_review',
+          issues: [
+            {
+              code: 'missing_source_evidence',
+              severity: 'warning',
+              label: 'Transkript kaynak kanıtı yok',
+            },
+          ],
         },
         {
           object: 'decision_record',
@@ -208,8 +246,14 @@ describe('meeting intelligence state and exports', () => {
           external_key: 'decision.id',
           required_fields: ['decision.title', 'decision.owner', 'decision.status'],
           optional_fields: ['decision.citations'],
-          status: 'ready',
-          issues: [],
+          status: 'needs_review',
+          issues: [
+            {
+              code: 'missing_source_evidence',
+              severity: 'warning',
+              label: 'Transkript kaynak kanıtı yok',
+            },
+          ],
         },
         {
           object: 'action_task',
@@ -219,8 +263,14 @@ describe('meeting intelligence state and exports', () => {
           external_key: 'action.id',
           required_fields: ['action.title', 'action.assignee', 'action.status'],
           optional_fields: ['action.due_date', 'action.priority', 'action.citations'],
-          status: 'ready',
-          issues: [],
+          status: 'needs_review',
+          issues: [
+            {
+              code: 'missing_source_evidence',
+              severity: 'warning',
+              label: 'Transkript kaynak kanıtı yok',
+            },
+          ],
         },
       ],
     });
@@ -371,7 +421,9 @@ describe('meeting intelligence state and exports', () => {
       },
     );
 
-    const integrationPackage = JSON.parse(buildIntelligenceExport(ready).integrationJson) as {
+    const integrationPackage = JSON.parse(
+      buildIntelligenceExport(ready, Date.now(), CURRENT_SOURCE_EVIDENCE).integrationJson,
+    ) as {
       handoff_readiness: {
         status: string;
         can_handoff: boolean;
@@ -498,7 +550,9 @@ describe('meeting intelligence state and exports', () => {
           citationCoverage,
         },
       );
-      return JSON.parse(buildIntelligenceExport(ready).integrationJson) as {
+      return JSON.parse(
+        buildIntelligenceExport(ready, Date.now(), CURRENT_SOURCE_EVIDENCE).integrationJson,
+      ) as {
         handoff_readiness: {
           can_handoff: boolean;
           warnings: Array<{ code: string }>;
@@ -537,7 +591,9 @@ describe('meeting intelligence state and exports', () => {
       },
     );
 
-    const integrationPackage = JSON.parse(buildIntelligenceExport(ready).integrationJson) as {
+    const integrationPackage = JSON.parse(
+      buildIntelligenceExport(ready, Date.now(), CURRENT_SOURCE_EVIDENCE).integrationJson,
+    ) as {
       handoff_readiness: {
         can_handoff: boolean;
         blockers: Array<{ code: string; severity: string; label: string }>;

@@ -185,6 +185,8 @@ Boundaries:
 - No fake AI summary is rendered.
 - No raw audio or transcript is persisted to local disk by default.
 - Raw audio and raw transcript are excluded from ERP/CRM handoff packages by default.
+- ERP/CRM transfer-ready packages require comparable transcript source evidence; missing or
+  unknown source freshness is downgraded to a review package instead of writing to any adapter.
 - If the transcript source changes after Meeting AI output generation, the ERP/CRM package is
   downgraded to a review package and the product surface offers a Meeting AI refresh action when
   the latest source is eligible for backend-gateway submission.

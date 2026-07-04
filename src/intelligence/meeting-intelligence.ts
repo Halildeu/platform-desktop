@@ -57,8 +57,10 @@ export type MeetingOutputHandoffIssueCode =
   | 'missing_action_due_date'
   | 'missing_decision_owner'
   | 'missing_source_reference'
+  | 'missing_source_evidence'
   | 'unknown_citation_coverage'
   | 'low_citation_coverage'
+  | 'unknown_source_freshness'
   | 'stale_source_evidence';
 
 export interface MeetingOutputHandoffIssue {
@@ -427,20 +429,24 @@ export function applyMeetingOutputSourceEvidenceReadiness(
   readiness: MeetingOutputHandoffReadiness,
   sourceEvidence: MeetingOutputSourceEvidence | null,
 ): MeetingOutputHandoffReadiness {
-  const sourceIssue = staleSourceEvidenceIssue(sourceEvidence);
+  const sourceIssue = sourceEvidenceReadinessIssue(sourceEvidence);
   if (!sourceIssue) {
     return readiness;
   }
 
-  const blockers = [
-    ...readiness.blockers.filter((issue) => issue.code !== sourceIssue.code),
-    sourceIssue,
-  ];
+  const blockers = readiness.blockers.filter((issue) => issue.code !== sourceIssue.code);
+  const warnings = readiness.warnings.filter((issue) => issue.code !== sourceIssue.code);
+  if (sourceIssue.severity === 'blocker') {
+    blockers.push(sourceIssue);
+  } else {
+    warnings.push(sourceIssue);
+  }
+  const canHandoff = blockers.length === 0 && warnings.length === 0;
   return {
-    status: 'needs_review',
-    canHandoff: false,
+    status: canHandoff ? 'ready' : 'needs_review',
+    canHandoff,
     blockers,
-    warnings: readiness.warnings,
+    warnings,
   };
 }
 
@@ -448,7 +454,7 @@ export function applyMeetingOutputSourceEvidenceObjectPlan(
   objectPlan: MeetingOutputHandoffObjectPlan[],
   sourceEvidence: MeetingOutputSourceEvidence | null,
 ): MeetingOutputHandoffObjectPlan[] {
-  const sourceIssue = staleSourceEvidenceIssue(sourceEvidence);
+  const sourceIssue = sourceEvidenceReadinessIssue(sourceEvidence);
   if (!sourceIssue) {
     return objectPlan;
   }
@@ -460,10 +466,27 @@ export function applyMeetingOutputSourceEvidenceObjectPlan(
   }));
 }
 
-function staleSourceEvidenceIssue(
+function sourceEvidenceReadinessIssue(
   sourceEvidence: MeetingOutputSourceEvidence | null,
 ): MeetingOutputHandoffIssue | null {
-  if (sourceEvidence?.transcript?.result_freshness?.status !== 'source_changed') {
+  if (!sourceEvidence?.transcript) {
+    return {
+      code: 'missing_source_evidence',
+      severity: 'warning',
+      label: 'Transkript kaynak kanıtı yok',
+    };
+  }
+
+  const freshness = sourceEvidence.transcript.result_freshness;
+  if (!freshness || freshness.status === 'unknown') {
+    return {
+      code: 'unknown_source_freshness',
+      severity: 'warning',
+      label: 'Çıktı güncelliği kanıtlanamadı',
+    };
+  }
+
+  if (freshness.status !== 'source_changed') {
     return null;
   }
 
