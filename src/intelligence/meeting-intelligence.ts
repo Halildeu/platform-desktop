@@ -78,6 +78,23 @@ export interface MeetingIntelligenceState {
   result: MeetingIntelligenceResult | null;
 }
 
+export interface MeetingOutputSourceEvidence {
+  transcript: {
+    source_level: string;
+    source_label: string;
+    lifecycle: string;
+    segment_count: number;
+    word_count: number;
+    duration_ms: number;
+    final_count: number;
+    draft_count: number;
+    final_ratio: number;
+    reviewed_count: number;
+    reviewed_ratio: number;
+    raw_transcript_included: false;
+  } | null;
+}
+
 export interface ExportBundle {
   markdown: string;
   csv: string;
@@ -222,6 +239,7 @@ function formatDuration(ms: number): string {
 export function buildIntelligenceExport(
   state: MeetingIntelligenceState,
   nowMs: number = Date.now(),
+  sourceEvidence: MeetingOutputSourceEvidence | null = null,
 ): ExportBundle {
   if (!state.result) {
     throw new Error('Meeting intelligence output is not ready');
@@ -232,7 +250,7 @@ export function buildIntelligenceExport(
   return {
     markdown: buildMarkdown(state),
     csv: buildCsv(state.result),
-    integrationJson: buildIntegrationJson(state, nowMs),
+    integrationJson: buildIntegrationJson(state, nowMs, sourceEvidence),
     markdownFileName: `meeting-intelligence-${safeMeetingId}-${stamp}.md`,
     csvFileName: `meeting-intelligence-actions-${safeMeetingId}-${stamp}.csv`,
     integrationJsonFileName: `meeting-output-integration-${safeMeetingId}-${stamp}.json`,
@@ -396,7 +414,11 @@ function buildCsv(result: MeetingIntelligenceResult): string {
   return `${rows.map((row) => row.map(csvCell).join(',')).join('\n')}\n`;
 }
 
-function buildIntegrationJson(state: MeetingIntelligenceState, nowMs: number): string {
+function buildIntegrationJson(
+  state: MeetingIntelligenceState,
+  nowMs: number,
+  sourceEvidence: MeetingOutputSourceEvidence | null,
+): string {
   const result = state.result;
   if (!result) {
     throw new Error('Meeting intelligence output is not ready');
@@ -439,6 +461,7 @@ function buildIntegrationJson(state: MeetingIntelligenceState, nowMs: number): s
         contains_reviewed_actions: true,
         contains_reviewed_decisions: true,
       },
+      source_evidence: sourceEvidence,
       meeting_id: state.meetingId,
       session_id: state.sessionId,
       exported_at: new Date(nowMs).toISOString(),

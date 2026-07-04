@@ -119,6 +119,7 @@ describe('meeting intelligence state and exports', () => {
         raw_audio_included: false,
         raw_transcript_included: false,
       },
+      source_evidence: null,
       route: {
         target: 'Generic ERP/CRM meeting workspace',
         expected_authority: 'backend-gateway / meeting-service integration adapter',

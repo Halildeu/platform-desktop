@@ -120,6 +120,41 @@ function reportReadyTranscriptState(): TranscriptSessionState {
   };
 }
 
+function reviewedHandoffTranscriptState(): TranscriptSessionState {
+  const recording = startTranscriptSession(initialTranscriptSession(), {
+    sessionId: 'SES-1',
+    meetingId: '22222222-2222-4222-8222-222222222222',
+    deviceId: 'desktop-1',
+    hasLoopback: false,
+    startedAtMs: 1781820000000,
+  });
+
+  const withFirstSegment = upsertTranscriptSegment(recording, {
+    id: 'seg-1',
+    speakerLabel: 'Konuşmacı',
+    startedAtMs: 1781820003000,
+    status: 'final',
+    source: 'direct-stream',
+    text: 'Direct STT kaynağı karar ve aksiyon üretimine temel olacak şekilde incelendi.',
+    reviewedAtMs: 1781820009000,
+  });
+
+  const withSecondSegment = upsertTranscriptSegment(withFirstSegment, {
+    id: 'seg-2',
+    speakerLabel: 'Konuşmacı',
+    startedAtMs: 1781820021000,
+    status: 'final',
+    source: 'direct-stream',
+    text: 'Toplantı çıktısı vendor bağımsız ERP CRM adaptörüne review sonrası taşınacak.',
+  });
+
+  return {
+    ...withSecondSegment,
+    lifecycle: 'finished',
+    finishedAtMs: 1781820025000,
+  };
+}
+
 function draftSubmitTranscriptState(): TranscriptSessionState {
   const recording = startTranscriptSession(initialTranscriptSession(), {
     sessionId: 'SES-3',
@@ -408,7 +443,13 @@ describe('SummaryPanel', () => {
       downloadText: vi.fn(),
       print: vi.fn(),
     };
-    render(<SummaryPanel intelligence={readyState()} exportAdapter={adapter} />);
+    render(
+      <SummaryPanel
+        intelligence={readyState()}
+        transcript={reviewedHandoffTranscriptState()}
+        exportAdapter={adapter}
+      />,
+    );
 
     const decisionTitle = 'Recorder fresh login sonrası tekrar denenecek';
     await userEvent.clear(screen.getByLabelText(`Karar sahibi: ${decisionTitle}`));
@@ -435,6 +476,9 @@ describe('SummaryPanel', () => {
     ) as {
       privacy: Record<string, unknown>;
       route: Record<string, unknown>;
+      source_evidence: {
+        transcript: Record<string, unknown> | null;
+      } | null;
       decisions: Array<Record<string, unknown>>;
       action_items: Array<Record<string, unknown>>;
     };
@@ -449,6 +493,18 @@ describe('SummaryPanel', () => {
       expected_authority: 'backend-gateway / meeting-service integration adapter',
       desktop_direct_backend_mutation: false,
     });
+    expect(integrationPackage.source_evidence?.transcript).toMatchObject({
+      source_level: 'ready',
+      source_label: 'Çıktıya uygun',
+      lifecycle: 'finished',
+      segment_count: 2,
+      final_count: 2,
+      draft_count: 0,
+      reviewed_count: 1,
+      reviewed_ratio: 0.5,
+      raw_transcript_included: false,
+    });
+    expect(JSON.stringify(integrationPackage.source_evidence)).not.toContain('Direct STT kaynağı');
     expect(integrationPackage.decisions[0]).toMatchObject({
       owner: 'Halil',
       status: 'revised',

@@ -19,6 +19,7 @@ import {
   type IntelligenceCitation,
   type MeetingIntelligenceResult,
   type MeetingIntelligenceState,
+  type MeetingOutputSourceEvidence,
   type MeetingOutputHandoffReadiness,
   setMeetingIntelligenceResult,
 } from '../intelligence/meeting-intelligence';
@@ -162,6 +163,33 @@ function transcriptReviewCoverageLabel(
   totalSegments: number,
 ): string {
   return `${readiness.reviewedCount}/${totalSegments} · ${formatPercent(readiness.reviewedRatio)}`;
+}
+
+function buildOutputSourceEvidence(
+  transcript: TranscriptSessionState | undefined,
+  readiness: ReturnType<typeof analyzeTranscriptSourceReadiness>,
+  segmentCount: number,
+): MeetingOutputSourceEvidence | null {
+  if (!transcript || segmentCount === 0) {
+    return null;
+  }
+
+  return {
+    transcript: {
+      source_level: readiness.level,
+      source_label: readiness.label,
+      lifecycle: transcript.lifecycle,
+      segment_count: segmentCount,
+      word_count: readiness.wordCount,
+      duration_ms: readiness.durationMs,
+      final_count: readiness.finalCount,
+      draft_count: readiness.draftCount,
+      final_ratio: readiness.finalRatio,
+      reviewed_count: readiness.reviewedCount,
+      reviewed_ratio: readiness.reviewedRatio,
+      raw_transcript_included: false,
+    },
+  };
 }
 
 function integrationObjectCountLabel(result: MeetingIntelligenceResult): string {
@@ -368,6 +396,11 @@ export function SummaryPanel({
   const transcriptReadiness = transcript
     ? analyzeTranscriptSourceReadiness(transcript)
     : analyzeTranscriptSourceReadiness(initialTranscriptSessionFallback);
+  const outputSourceEvidence = buildOutputSourceEvidence(
+    transcript,
+    transcriptReadiness,
+    transcriptSourceSegments.length,
+  );
   const meetingAiGate = transcript
     ? buildMeetingAiSourceGate(transcript, transcriptReadiness)
     : buildMeetingAiSourceGate(initialTranscriptSessionFallback, transcriptReadiness);
@@ -445,7 +478,7 @@ export function SummaryPanel({
   ): Promise<void> => {
     setMessage(null);
     try {
-      const bundle = buildIntelligenceExport(exportIntelligence);
+      const bundle = buildIntelligenceExport(exportIntelligence, Date.now(), outputSourceEvidence);
       if (kind === 'copy') {
         await exportAdapter.copyText(bundle.markdown);
         setMessage('Markdown panoya kopyalandı.');
@@ -477,7 +510,7 @@ export function SummaryPanel({
   const openShareDialog = (): void => {
     setMessage(null);
     try {
-      const bundle = buildIntelligenceExport(exportIntelligence);
+      const bundle = buildIntelligenceExport(exportIntelligence, Date.now(), outputSourceEvidence);
       setShareText(bundle.markdown);
       setShareOpen(true);
     } catch (error) {
