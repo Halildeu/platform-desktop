@@ -196,6 +196,8 @@ Boundaries:
   remains tracked by the Faz 24 GitOps/runtime issues.
 - ERP/CRM brand names are not product contracts; ERP/CRM-specific targets are mapped only through backend
   adapters and the desktop surface stays generic across ERP/CRM systems.
+- Specific ERP pilot references stay outside the product contract; package identity, window title, adapter
+  manifest, handoff JSON, and runtime copy remain vendor-neutral by default.
 
 ## Lisans
 

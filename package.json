@@ -67,7 +67,7 @@
   },
   "build": {
     "appId": "com.acik.platform.meeting-intelligence",
-    "productName": "Platform Meeting Intelligence",
+    "productName": "Meeting Intelligence",
     "directories": {
       "output": "release"
     },
