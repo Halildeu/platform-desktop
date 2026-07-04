@@ -273,11 +273,13 @@ describe('SummaryPanel', () => {
     expect(within(outputQuality).getAllByText('-')).toHaveLength(2);
   });
 
-  it('surfaces ERP CRM handoff review blockers before adapter export', () => {
+  it('surfaces ERP CRM handoff review blockers before adapter export', async () => {
     const base = readyState();
     if (!base.result) {
       throw new Error('readyState fixture must include a result');
     }
+    const decisionTitle = 'Recorder fresh login sonrası tekrar denenecek';
+    const actionTitle = 'audio_record rolü yeni token claim özetinde doğrulanacak';
 
     render(
       <SummaryPanel
@@ -323,6 +325,21 @@ describe('SummaryPanel', () => {
         /1 açık aksiyonda sahip eksik · 1 açık aksiyonda tarih eksik/,
       ),
     ).toBeInTheDocument();
+
+    const decisionTable = screen.getByRole('table', { name: 'Kararlar' });
+    expect(within(decisionTable).getByText('Sahip eksik')).toBeInTheDocument();
+    const actionTable = screen.getByRole('table', { name: 'Aksiyonlar' });
+    expect(within(actionTable).getByText('Sahip eksik')).toBeInTheDocument();
+    expect(within(actionTable).getByText('Tarih eksik')).toBeInTheDocument();
+
+    await userEvent.type(screen.getByLabelText(`Karar sahibi: ${decisionTitle}`), 'Halil');
+    await userEvent.type(screen.getByLabelText(`Sahip: ${actionTitle}`), 'Zeynep Akkılıç');
+    fireEvent.change(screen.getByLabelText(`Tarih: ${actionTitle}`), {
+      target: { value: '2026-07-05' },
+    });
+
+    expect(within(decisionTable).getAllByText('Hazır')).toHaveLength(1);
+    expect(within(actionTable).getAllByText('Hazır')).toHaveLength(1);
   });
 
   it('uses export adapter for copy and file downloads', async () => {

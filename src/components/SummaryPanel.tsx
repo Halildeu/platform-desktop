@@ -247,6 +247,22 @@ function handoffObjectIssueLabel(entry: MeetingOutputHandoffObjectPlan): string 
   return entry.issues.map((issue) => issue.label).join(' · ');
 }
 
+function decisionReviewIssues(decision: DecisionItem): string[] {
+  return [
+    ...(!decision.owner?.trim() ? ['Sahip eksik'] : []),
+    ...(decision.citations.length === 0 ? ['Kaynak yok'] : []),
+  ];
+}
+
+function actionReviewIssues(item: ActionItem): string[] {
+  const openAction = item.status !== 'done';
+  return [
+    ...(openAction && !item.assignee?.trim() ? ['Sahip eksik'] : []),
+    ...(openAction && !item.dueDate?.trim() ? ['Tarih eksik'] : []),
+    ...(item.citations.length === 0 ? ['Kaynak yok'] : []),
+  ];
+}
+
 function normalizedCitationCoverage(value: number | null | undefined): number | null {
   if (typeof value !== 'number' || !Number.isFinite(value)) {
     return null;
@@ -1120,44 +1136,53 @@ export function SummaryPanel({
                     <span role="columnheader">Sahip</span>
                     <span role="columnheader">Durum</span>
                     <span role="columnheader">Kaynak</span>
+                    <span role="columnheader">Review</span>
                   </div>
-                  {displayResult.decisions.map((decision) => (
-                    <div className="action-row" role="row" key={decision.id}>
-                      <span role="cell">
-                        <strong>{decision.title}</strong>
-                      </span>
-                      <span className="action-field" role="cell">
-                        <input
-                          className="action-input"
-                          aria-label={`Karar sahibi: ${decision.title}`}
-                          value={decision.owner ?? ''}
-                          placeholder="-"
-                          onChange={(event) =>
-                            updateDecisionDraft(decision.id, { owner: event.target.value })
-                          }
-                        />
-                      </span>
-                      <span className="action-field" role="cell">
-                        <select
-                          className="action-input"
-                          aria-label={`Karar durumu: ${decision.title}`}
-                          value={decision.status}
-                          onChange={(event) =>
-                            updateDecisionDraft(decision.id, {
-                              status: event.target.value as DecisionStatus,
-                            })
-                          }
-                        >
-                          {DECISION_STATUS_OPTIONS.map((status) => (
-                            <option key={status} value={status}>
-                              {decisionStatusLabel(status)}
-                            </option>
-                          ))}
-                        </select>
-                      </span>
-                      <span role="cell">{formatCitations(decision.citations)}</span>
-                    </div>
-                  ))}
+                  {displayResult.decisions.map((decision) => {
+                    const issues = decisionReviewIssues(decision);
+                    return (
+                      <div className="action-row" role="row" key={decision.id}>
+                        <span role="cell">
+                          <strong>{decision.title}</strong>
+                        </span>
+                        <span className="action-field" role="cell">
+                          <input
+                            className="action-input"
+                            aria-label={`Karar sahibi: ${decision.title}`}
+                            value={decision.owner ?? ''}
+                            placeholder="-"
+                            onChange={(event) =>
+                              updateDecisionDraft(decision.id, { owner: event.target.value })
+                            }
+                          />
+                        </span>
+                        <span className="action-field" role="cell">
+                          <select
+                            className="action-input"
+                            aria-label={`Karar durumu: ${decision.title}`}
+                            value={decision.status}
+                            onChange={(event) =>
+                              updateDecisionDraft(decision.id, {
+                                status: event.target.value as DecisionStatus,
+                              })
+                            }
+                          >
+                            {DECISION_STATUS_OPTIONS.map((status) => (
+                              <option key={status} value={status}>
+                                {decisionStatusLabel(status)}
+                              </option>
+                            ))}
+                          </select>
+                        </span>
+                        <span role="cell">{formatCitations(decision.citations)}</span>
+                        <span className="row-review" role="cell">
+                          {issues.length > 0
+                            ? issues.map((issue) => <small key={issue}>{issue}</small>)
+                            : 'Hazır'}
+                        </span>
+                      </div>
+                    );
+                  })}
                 </div>
               ) : (
                 <p className="muted-line">Karar yok.</p>
@@ -1185,53 +1210,62 @@ export function SummaryPanel({
                     <span role="columnheader">Tarih</span>
                     <span role="columnheader">Durum</span>
                     <span role="columnheader">Kaynak</span>
+                    <span role="columnheader">Review</span>
                   </div>
-                  {displayResult.actionItems.map((item) => (
-                    <div className="action-row" role="row" key={item.id}>
-                      <span role="cell">{item.title}</span>
-                      <span className="action-field" role="cell">
-                        <input
-                          className="action-input"
-                          aria-label={`Sahip: ${item.title}`}
-                          value={item.assignee ?? ''}
-                          placeholder="-"
-                          onChange={(event) =>
-                            updateActionDraft(item.id, { assignee: event.target.value })
-                          }
-                        />
-                      </span>
-                      <span className="action-field" role="cell">
-                        <input
-                          className="action-input"
-                          aria-label={`Tarih: ${item.title}`}
-                          type="date"
-                          value={item.dueDate ?? ''}
-                          onChange={(event) =>
-                            updateActionDraft(item.id, { dueDate: event.target.value })
-                          }
-                        />
-                      </span>
-                      <span className="action-field" role="cell">
-                        <select
-                          className="action-input"
-                          aria-label={`Durum: ${item.title}`}
-                          value={item.status}
-                          onChange={(event) =>
-                            updateActionDraft(item.id, {
-                              status: event.target.value as ActionStatus,
-                            })
-                          }
-                        >
-                          {ACTION_STATUS_OPTIONS.map((status) => (
-                            <option key={status} value={status}>
-                              {actionStatusLabel(status)}
-                            </option>
-                          ))}
-                        </select>
-                      </span>
-                      <span role="cell">{formatCitations(item.citations)}</span>
-                    </div>
-                  ))}
+                  {displayResult.actionItems.map((item) => {
+                    const issues = actionReviewIssues(item);
+                    return (
+                      <div className="action-row" role="row" key={item.id}>
+                        <span role="cell">{item.title}</span>
+                        <span className="action-field" role="cell">
+                          <input
+                            className="action-input"
+                            aria-label={`Sahip: ${item.title}`}
+                            value={item.assignee ?? ''}
+                            placeholder="-"
+                            onChange={(event) =>
+                              updateActionDraft(item.id, { assignee: event.target.value })
+                            }
+                          />
+                        </span>
+                        <span className="action-field" role="cell">
+                          <input
+                            className="action-input"
+                            aria-label={`Tarih: ${item.title}`}
+                            type="date"
+                            value={item.dueDate ?? ''}
+                            onChange={(event) =>
+                              updateActionDraft(item.id, { dueDate: event.target.value })
+                            }
+                          />
+                        </span>
+                        <span className="action-field" role="cell">
+                          <select
+                            className="action-input"
+                            aria-label={`Durum: ${item.title}`}
+                            value={item.status}
+                            onChange={(event) =>
+                              updateActionDraft(item.id, {
+                                status: event.target.value as ActionStatus,
+                              })
+                            }
+                          >
+                            {ACTION_STATUS_OPTIONS.map((status) => (
+                              <option key={status} value={status}>
+                                {actionStatusLabel(status)}
+                              </option>
+                            ))}
+                          </select>
+                        </span>
+                        <span role="cell">{formatCitations(item.citations)}</span>
+                        <span className="row-review" role="cell">
+                          {issues.length > 0
+                            ? issues.map((issue) => <small key={issue}>{issue}</small>)
+                            : 'Hazır'}
+                        </span>
+                      </div>
+                    );
+                  })}
                 </div>
               ) : (
                 <p className="muted-line">Aksiyon yok.</p>

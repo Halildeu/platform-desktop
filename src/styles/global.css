@@ -1291,7 +1291,9 @@ button:disabled {
 
 .action-row {
   display: grid;
-  grid-template-columns: minmax(180px, 1.6fr) minmax(90px, 0.8fr) 96px 94px 90px;
+  grid-template-columns:
+    minmax(170px, 1.5fr) minmax(90px, 0.75fr) 96px 94px 86px
+    minmax(104px, 0.85fr);
   gap: 10px;
   padding: 10px 12px;
   border-top: 1px solid #e2e8f0;
@@ -1299,7 +1301,7 @@ button:disabled {
 }
 
 .decision-table .action-row {
-  grid-template-columns: minmax(180px, 1.6fr) minmax(90px, 0.8fr) 110px 90px;
+  grid-template-columns: minmax(170px, 1.5fr) minmax(90px, 0.8fr) 110px 90px minmax(104px, 0.85fr);
 }
 
 .action-row:first-child {
@@ -1336,6 +1338,30 @@ button:disabled {
   outline: none;
 }
 
+.row-review {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  align-content: flex-start;
+  color: #0f766e;
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.row-review small {
+  display: inline-flex;
+  min-width: 0;
+  padding: 2px 6px;
+  border: 1px solid #fed7aa;
+  border-radius: 999px;
+  color: #9a3412;
+  background: #fff7ed;
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
 @media (max-width: 900px) {
   .recorder-shell {
     grid-template-columns: 1fr;
@@ -1356,7 +1382,8 @@ button:disabled {
 
   .action-row span:nth-child(3),
   .action-row span:nth-child(4),
-  .action-row span:nth-child(5) {
+  .action-row span:nth-child(5),
+  .action-row span:nth-child(6) {
     grid-column: span 1;
   }
 }
