@@ -88,6 +88,9 @@ const CARRY_OVER_DROP_MIN_NEW_WORDS = 3;
 const SHORT_FINAL_PRESERVE_MIN_PREVIOUS_WORDS = 8;
 const SHORT_FINAL_PRESERVE_MAX_RATIO = 0.55;
 const SHORT_FINAL_PRESERVE_MAX_SHARED_RATIO = 0.35;
+const SHORT_FINAL_MERGE_MIN_PREVIOUS_WORDS = 5;
+const SHORT_FINAL_MERGE_MAX_RATIO = 0.75;
+const SHORT_FINAL_MERGE_MIN_SHARED_RATIO = 0.5;
 const SAME_OPENER_APPEND_MIN_PREVIOUS_WORDS = 4;
 const SAME_OPENER_APPEND_MAX_PREVIOUS_WORDS = 14;
 const SAME_OPENER_APPEND_MIN_NEXT_TAIL_WORDS = 3;
@@ -602,6 +605,14 @@ function mergeFinalTranscript(previousText: string, finalText: string): string {
     return previous;
   }
 
+  const draftPreservingMerge = mergeShortFinalWithoutDroppingDraft(
+    previousRawWords,
+    finalRawWords,
+  );
+  if (draftPreservingMerge) {
+    return draftPreservingMerge;
+  }
+
   if (finalWords.length <= previousWords.length + 1 && finalWords.length <= 3) {
     return previous;
   }
@@ -628,6 +639,38 @@ function shouldPreserveStableDraftForShortFinal(
     normalizedFamilies(finalRawWords),
   );
   return sharedFamilyRatio <= SHORT_FINAL_PRESERVE_MAX_SHARED_RATIO;
+}
+
+function mergeShortFinalWithoutDroppingDraft(
+  previousRawWords: string[],
+  finalRawWords: string[],
+): string | null {
+  if (
+    previousRawWords.length < SHORT_FINAL_MERGE_MIN_PREVIOUS_WORDS ||
+    finalRawWords.length === 0 ||
+    finalRawWords.length >= previousRawWords.length ||
+    finalRawWords.length / previousRawWords.length > SHORT_FINAL_MERGE_MAX_RATIO
+  ) {
+    return null;
+  }
+
+  const previousFamilies = normalizedOverlapFamilies(previousRawWords);
+  const finalFamilies = normalizedOverlapFamilies(finalRawWords);
+  const sharedFamilyRatio = sharedTokenRatio(previousFamilies, finalFamilies);
+  if (sharedFamilyRatio < SHORT_FINAL_MERGE_MIN_SHARED_RATIO) {
+    return null;
+  }
+
+  let lastSharedFinalIndex = -1;
+  for (let index = finalFamilies.length - 1; index >= 0; index -= 1) {
+    if (previousFamilies.includes(finalFamilies[index])) {
+      lastSharedFinalIndex = index;
+      break;
+    }
+  }
+
+  const finalTail = finalRawWords.slice(lastSharedFinalIndex + 1);
+  return [...previousRawWords, ...finalTail].join(' ');
 }
 
 function dropLeadingTailOverlap(
@@ -875,7 +918,8 @@ export function connectLiveSttStream(
           finalText = previousText;
         }
         let text = mergeFinalTranscript(previousText, finalText);
-        if (!text || isUnstableFinalText(text)) {
+        const preservesVisibleDraft = Boolean(previousText) && hasSamePrefix(previousText, text);
+        if (!text || (isUnstableFinalText(text) && !preservesVisibleDraft)) {
           return;
         }
         text = dropLeadingTailOverlap(recentEmittedFinalText || lastEmittedFinalText, text, {

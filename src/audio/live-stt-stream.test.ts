@@ -1104,7 +1104,7 @@ describe('connectLiveSttStream', () => {
     stream.close();
   });
 
-  it('replaces a medium draft when a shorter final is a related correction fragment', () => {
+  it('keeps a medium draft and appends final-only tail words from a short correction fragment', () => {
     vi.useFakeTimers();
     vi.stubGlobal('WebSocket', FakeWebSocket);
     const events: LiveSttTranscriptEvent[] = [];
@@ -1137,7 +1137,7 @@ describe('connectLiveSttStream', () => {
     expect(events.at(-1)).toMatchObject({
       id: 'stream:0',
       status: 'final',
-      text: 'Kısmın yarısının neden yok?',
+      text: 'Söylediklerimin yarısını ne söylediklerimin yarısını neden yok?',
     });
 
     stream.close();

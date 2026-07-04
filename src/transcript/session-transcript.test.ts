@@ -132,7 +132,7 @@ describe('session transcript state', () => {
     });
   });
 
-  it('allows direct-stream drafts to grow and final events to correct shorter text', () => {
+  it('keeps visible direct-stream words when a final event is only a short prefix', () => {
     const recording = startTranscriptSession(initialTranscriptSession(), {
       sessionId: 'SES-1',
       meetingId: '22222222-2222-4222-8222-222222222222',
@@ -172,7 +172,7 @@ describe('session transcript state', () => {
     });
     expect(finalCorrection.segments[0]).toMatchObject({
       status: 'final',
-      text: 'Merhaba sesim geliyor mu?',
+      text: 'Merhaba sesim geliyor mu beni duyuyor musun',
     });
   });
 

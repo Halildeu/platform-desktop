@@ -319,7 +319,7 @@ function shouldPreserveDirectDraftText(
     existing.source !== 'direct-stream' ||
     incoming.source !== 'direct-stream' ||
     existing.status !== 'draft' ||
-    incoming.status !== 'draft'
+    (incoming.status !== 'draft' && incoming.status !== 'final')
   ) {
     return false;
   }
