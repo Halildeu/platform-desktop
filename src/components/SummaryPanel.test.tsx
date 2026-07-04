@@ -303,9 +303,9 @@ describe('SummaryPanel', () => {
 
     const readiness = screen.getByLabelText('ERP/CRM entegrasyon hazırlığı');
     expect(within(readiness).getByText('Review gerekli')).toBeInTheDocument();
-    expect(within(readiness).getAllByText(/1 açık aksiyonda sahip eksik/)).toHaveLength(2);
-    expect(within(readiness).getAllByText(/1 kararda sahip eksik/)).toHaveLength(2);
-    expect(within(readiness).getAllByText(/1 açık aksiyonda tarih eksik/)).toHaveLength(2);
+    expect(within(readiness).getAllByText(/1 açık aksiyonda sahip eksik/)).toHaveLength(3);
+    expect(within(readiness).getAllByText(/1 kararda sahip eksik/)).toHaveLength(3);
+    expect(within(readiness).getAllByText(/1 açık aksiyonda tarih eksik/)).toHaveLength(3);
     expect(within(readiness).getByText(/\+1 daha/)).toBeInTheDocument();
     const reviewDetails = within(readiness).getByLabelText('Aktarım review detayları');
     expect(within(reviewDetails).getAllByText('Blokaj')).toHaveLength(2);
@@ -316,6 +316,13 @@ describe('SummaryPanel', () => {
     expect(within(objectPreview).getByText('Karar kayıtları')).toBeInTheDocument();
     expect(within(objectPreview).getByText('Aksiyon görevleri')).toBeInTheDocument();
     expect(within(objectPreview).getAllByText('Kontrol gerekli')).toHaveLength(3);
+    expect(within(objectPreview).getByText('Kaynak kapsamı %50 altında')).toBeInTheDocument();
+    expect(within(objectPreview).getByText('1 kararda sahip eksik')).toBeInTheDocument();
+    expect(
+      within(objectPreview).getByText(
+        /1 açık aksiyonda sahip eksik · 1 açık aksiyonda tarih eksik/,
+      ),
+    ).toBeInTheDocument();
   });
 
   it('uses export adapter for copy and file downloads', async () => {
@@ -599,6 +606,7 @@ describe('SummaryPanel', () => {
     expect(within(objectPreview).getByText('decision.id')).toBeInTheDocument();
     expect(within(objectPreview).getByText('action.id')).toBeInTheDocument();
     expect(within(objectPreview).getAllByText('Hazır')).toHaveLength(3);
+    expect(within(objectPreview).getAllByText('Eksik yok')).toHaveLength(3);
     expect(screen.getByText('Entegrasyon paketi panoya kopyalandı.')).toBeInTheDocument();
 
     await userEvent.click(screen.getByRole('button', { name: 'Entegrasyon JSON' }));

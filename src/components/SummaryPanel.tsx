@@ -1031,15 +1031,15 @@ export function SummaryPanel({
                     <span>Kayıt</span>
                     <span>Anahtar</span>
                     <span>Durum</span>
+                    <span>Kontrol</span>
                   </div>
                   {handoffObjectPlan.map((entry) => (
                     <div className="handoff-object-row" key={entry.object}>
                       <strong>{entry.label}</strong>
                       <span>{handoffObjectRecordLabel(entry)}</span>
                       <span>{entry.externalKey}</span>
-                      <span title={handoffObjectIssueLabel(entry)}>
-                        {handoffObjectStatusLabel(entry)}
-                      </span>
+                      <span>{handoffObjectStatusLabel(entry)}</span>
+                      <span>{handoffObjectIssueLabel(entry)}</span>
                     </div>
                   ))}
                 </div>

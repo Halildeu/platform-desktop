@@ -810,10 +810,9 @@ button:disabled {
 
 .handoff-object-row {
   display: grid;
-  grid-template-columns: minmax(120px, 1.2fr) minmax(76px, 0.6fr) minmax(120px, 1fr) minmax(
-      108px,
-      0.8fr
-    );
+  grid-template-columns:
+    minmax(112px, 1.1fr) minmax(70px, 0.55fr) minmax(108px, 0.95fr)
+    minmax(96px, 0.75fr) minmax(140px, 1.35fr);
   gap: 8px;
   align-items: center;
   padding: 8px 10px;
