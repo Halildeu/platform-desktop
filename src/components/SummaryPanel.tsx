@@ -157,6 +157,13 @@ function finalityLabel(segments: TranscriptSegment[]): string {
   return `${finalCount} final / ${draftCount} taslak`;
 }
 
+function transcriptReviewCoverageLabel(
+  readiness: ReturnType<typeof analyzeTranscriptSourceReadiness>,
+  totalSegments: number,
+): string {
+  return `${readiness.reviewedCount}/${totalSegments} · ${formatPercent(readiness.reviewedRatio)}`;
+}
+
 function integrationObjectCountLabel(result: MeetingIntelligenceResult): string {
   return `Toplantı notu / ${result.decisions.length} karar / ${result.actionItems.length} aksiyon`;
 }
@@ -1252,6 +1259,15 @@ export function SummaryPanel({
                 <div>
                   <span>Final oranı</span>
                   <strong>{formatPercent(transcriptReadiness.finalRatio)}</strong>
+                </div>
+                <div>
+                  <span>İnceleme</span>
+                  <strong>
+                    {transcriptReviewCoverageLabel(
+                      transcriptReadiness,
+                      transcriptSourceSegments.length,
+                    )}
+                  </strong>
                 </div>
               </div>
               {latestTranscriptSegment ? (

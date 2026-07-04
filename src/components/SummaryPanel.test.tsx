@@ -101,6 +101,7 @@ function reportReadyTranscriptState(): TranscriptSessionState {
     status: 'final',
     source: 'direct-stream',
     text: 'Canlı toplantı kaydı sırasında transkript kaynağı final satırlarla doğrulandı ve çıktı üretimi için hazırlandı.',
+    reviewedAtMs: 1781820009000,
   });
 
   const withSecondSegment = upsertTranscriptSegment(withFirstSegment, {
@@ -564,6 +565,8 @@ describe('SummaryPanel', () => {
     expect(within(sourceSummary).getByText('Direct STT')).toBeInTheDocument();
     expect(within(sourceSummary).getByText('Kelime')).toBeInTheDocument();
     expect(within(sourceSummary).getByText('Final oranı')).toBeInTheDocument();
+    expect(within(sourceSummary).getByText('İnceleme')).toBeInTheDocument();
+    expect(within(sourceSummary).getByText('0/2 · %0')).toBeInTheDocument();
     expect(screen.getByText('Son satır · Taslak · Direct STT')).toBeInTheDocument();
     expect(screen.getByText('"Toplantı notu kaynak transcript olarak hazır."')).toBeInTheDocument();
     const aiPackage = screen.getByLabelText('Meeting AI kaynak paketi');
@@ -659,6 +662,8 @@ describe('SummaryPanel', () => {
     expect(within(sourceSummary).getByText('2 final / 0 taslak')).toBeInTheDocument();
     expect(within(sourceSummary).getByText('18 sn')).toBeInTheDocument();
     expect(within(sourceSummary).getByText('%100')).toBeInTheDocument();
+    expect(within(sourceSummary).getByText('İnceleme')).toBeInTheDocument();
+    expect(within(sourceSummary).getByText('1/2 · %50')).toBeInTheDocument();
   });
 
   it('allows finished draft-only transcript submission while labeling the source as draft quality', async () => {
