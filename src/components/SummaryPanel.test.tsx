@@ -1094,8 +1094,8 @@ describe('SummaryPanel', () => {
       ),
     ).toBeInTheDocument();
     expect(within(sourceSummary).getByText('2 final / 0 taslak')).toBeInTheDocument();
-    expect(within(sourceSummary).getByText('18 sn')).toBeInTheDocument();
-    expect(within(sourceSummary).getByText('87 kelime/dk')).toBeInTheDocument();
+    expect(within(sourceSummary).getByText('25 sn')).toBeInTheDocument();
+    expect(within(sourceSummary).getByText('62 kelime/dk')).toBeInTheDocument();
     expect(within(sourceSummary).getByText('%100')).toBeInTheDocument();
     expect(within(sourceSummary).getByText('İnceleme')).toBeInTheDocument();
     expect(within(sourceSummary).getByText('1/2 · %50')).toBeInTheDocument();
@@ -1125,7 +1125,7 @@ describe('SummaryPanel', () => {
       ),
     ).toBeInTheDocument();
     const sourceSummary = screen.getByLabelText('Kaynak transkript özeti');
-    expect(within(sourceSummary).getByText('5.0 kelime/dk')).toBeInTheDocument();
+    expect(within(sourceSummary).getByText('4.9 kelime/dk')).toBeInTheDocument();
     expect(within(sourceSummary).getByText('low_word_coverage')).toBeInTheDocument();
     const aiGate = screen.getByLabelText('Meeting AI kapı kontrolü');
     expect(within(aiGate).getByText('Meeting AI kapısı bekliyor')).toBeInTheDocument();

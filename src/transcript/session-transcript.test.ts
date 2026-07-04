@@ -460,9 +460,10 @@ describe('session transcript state', () => {
     expect(bundle.package.source_quality.reviewed_ratio).toBe(0.5);
     expect(bundle.package.source_quality.quality_gate).toEqual({
       status: 'review',
-      risk: 'low_word_count',
-      label: 'Kelime eşiği eksik',
-      action: 'En az 20 kelimelik transcript kaynağı beklenir.',
+      risk: 'low_word_coverage',
+      label: 'Kapsam riski',
+      action:
+        'Mikrofon/direct STT zinciri doğrulanmadan Meeting AI veya ERP/CRM aktarımı yapılmaz.',
     });
     expect(bundle.package.source_quality.warnings).not.toContain('Transkript satırı yok.');
     expect(bundle.json).toContain('"client_direct_platform_ai": false');
@@ -614,8 +615,8 @@ describe('session transcript state', () => {
       level: 'review',
       label: 'Gözden geçirilmeli',
       wordCount: 20,
-      durationMs: 240_000,
-      wordRatePerMinute: 5,
+      durationMs: 245_000,
+      wordRatePerMinute: expect.closeTo(4.9, 1),
       qualityGate: {
         status: 'review',
         risk: 'low_word_coverage',
@@ -633,10 +634,58 @@ describe('session transcript state', () => {
       label: 'Meeting AI kapısı bekliyor',
       blocked_by: ['kaynak kalite kontrolü gerekiyor'],
     });
-    expect(bundle.package.source_quality.word_rate_per_minute).toBe(5);
+    expect(bundle.package.source_quality.word_rate_per_minute).toBeCloseTo(4.9, 1);
     expect(bundle.package.source_quality.quality_gate.risk).toBe('low_word_coverage');
-    expect(bundle.json).toContain('"word_rate_per_minute": 5');
+    expect(bundle.json).toContain('"word_rate_per_minute":');
     expect(bundle.json).toContain('"risk": "low_word_coverage"');
+  });
+
+  it('uses the finished recording window to flag sparse transcript coverage', () => {
+    const recording = startTranscriptSession(initialTranscriptSession(), {
+      sessionId: 'SES-5',
+      meetingId: '66666666-6666-4666-8666-666666666666',
+      deviceId: 'desktop-1',
+      hasLoopback: false,
+      startedAtMs: 1781820000000,
+    });
+    const finishedSparse = finishTranscriptSession(
+      upsertTranscriptSegment(recording, {
+        id: 'seg-1',
+        speakerLabel: 'Konuşmacı',
+        startedAtMs: 1781820005000,
+        endedAtMs: 1781820006200,
+        status: 'final',
+        source: 'direct-stream',
+        text: 'Uzun konuşmanın yalnız küçük kısmı düştü',
+      }),
+      1781820120000,
+    );
+
+    const readiness = analyzeTranscriptSourceReadiness(finishedSparse);
+    const bundle = buildMeetingAiSourcePackage(finishedSparse, 1781820130000);
+
+    expect(readiness).toMatchObject({
+      level: 'review',
+      label: 'Gözden geçirilmeli',
+      wordCount: 6,
+      durationMs: 120_000,
+      wordRatePerMinute: 3,
+      qualityGate: {
+        status: 'review',
+        risk: 'low_word_coverage',
+        label: 'Kapsam riski',
+      },
+    });
+    expect(readiness.warnings).toContain(
+      'Kelime üretim hızı düşük; konuşmanın önemli kısmı transcript kaynağına düşmemiş olabilir.',
+    );
+    expect(bundle.package.source_quality.duration_ms).toBe(120_000);
+    expect(bundle.package.source_quality.quality_gate.risk).toBe('low_word_coverage');
+    expect(bundle.package.gate).toMatchObject({
+      status: 'review',
+      can_submit: false,
+      blocked_by: ['kaynak kalite kontrolü gerekiyor'],
+    });
   });
 
   it('rejects source export when no transcript segment exists', () => {

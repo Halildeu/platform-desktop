@@ -719,10 +719,7 @@ export function analyzeTranscriptSourceReadiness(
   const draftCount = segments.length - finalCount;
   const reviewedCount = segments.filter(isReviewedSegment).length;
   const wordCount = segments.reduce((total, segment) => total + countWords(segment.text), 0);
-  const durationMs = Math.max(
-    0,
-    segments[segments.length - 1].startedAtMs - segments[0].startedAtMs,
-  );
+  const durationMs = transcriptSourceDurationMs(state, segments);
   const wordRatePerMinute = calculateWordRatePerMinute(wordCount, durationMs);
   const finalRatio = finalCount / segments.length;
   const reviewedRatio = reviewedCount / segments.length;
@@ -948,6 +945,43 @@ function calculateWordRatePerMinute(wordCount: number, durationMs: number): numb
     return null;
   }
   return wordCount / (durationMs / 60_000);
+}
+
+function transcriptSourceDurationMs(
+  state: TranscriptSessionState,
+  segments: TranscriptSegment[],
+): number {
+  const segmentSpanMs = transcriptSegmentSpanMs(segments);
+  const recordingSpanMs = transcriptRecordingSpanMs(state);
+
+  return recordingSpanMs === null ? segmentSpanMs : Math.max(segmentSpanMs, recordingSpanMs);
+}
+
+function transcriptSegmentSpanMs(segments: TranscriptSegment[]): number {
+  const firstStartedAtMs = segments[0]?.startedAtMs;
+  if (typeof firstStartedAtMs !== 'number') {
+    return 0;
+  }
+
+  const lastSegment = segments[segments.length - 1];
+  const lastEndedAtMs =
+    typeof lastSegment.endedAtMs === 'number' && lastSegment.endedAtMs > lastSegment.startedAtMs
+      ? lastSegment.endedAtMs
+      : lastSegment.startedAtMs;
+
+  return Math.max(0, lastEndedAtMs - firstStartedAtMs);
+}
+
+function transcriptRecordingSpanMs(state: TranscriptSessionState): number | null {
+  if (
+    typeof state.startedAtMs !== 'number' ||
+    typeof state.finishedAtMs !== 'number' ||
+    state.finishedAtMs <= state.startedAtMs
+  ) {
+    return null;
+  }
+
+  return state.finishedAtMs - state.startedAtMs;
 }
 
 function isLowWordRate(readiness: TranscriptSourceReadiness): boolean {
