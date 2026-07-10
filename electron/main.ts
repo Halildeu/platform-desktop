@@ -28,7 +28,11 @@ import {
   canGrantDisplayMedia,
   shouldGrantDisplayMediaRequest,
 } from './services/display-media-lease.js';
-import { notifyRecordingFinished, notifyRecordingStarted } from './services/notifications.js';
+import {
+  notifyRecordingError,
+  notifyRecordingFinished,
+  notifyRecordingStarted,
+} from './services/notifications.js';
 import { TrayManager } from './services/tray-manager.js';
 import { resolveWindowBounds, type WindowBounds } from './services/window-bounds.js';
 import { WindowStateStore } from './services/window-state-store.js';
@@ -118,18 +122,26 @@ ipcMain.handle('app:set-auto-launch', (_event, enabled: boolean) => {
   return isAutoLaunchEnabled();
 });
 
-ipcMain.on('tray:set-recording-active', (_event, active: boolean) => {
-  if (active === recordingActive) {
-    return;
-  }
-  recordingActive = active;
-  tray?.setRecordingActive(active);
-  if (active) {
-    notifyRecordingStarted();
-  } else {
-    notifyRecordingFinished();
-  }
-});
+ipcMain.on(
+  'tray:set-recording-active',
+  (_event, active: boolean, outcome?: 'finished' | 'error', errorMessage?: string) => {
+    if (active === recordingActive) {
+      return;
+    }
+    recordingActive = active;
+    tray?.setRecordingActive(active);
+    // Tray durum senkronu ile kullanıcıya sonuç bildirimi AYRI kavramlar:
+    // hata yolunda "Kayıt tamamlandı" bildirimi yanlış güven verir — outcome
+    // renderer'dan gelir; outcome'suz deaktivasyon sessiz state senkronudur.
+    if (active) {
+      notifyRecordingStarted();
+    } else if (outcome === 'error') {
+      notifyRecordingError(errorMessage ?? 'Kayıt hatası');
+    } else if (outcome === 'finished') {
+      notifyRecordingFinished();
+    }
+  },
+);
 
 void app.whenReady().then(() => {
   session.defaultSession.setDisplayMediaRequestHandler(async (req, callback) => {

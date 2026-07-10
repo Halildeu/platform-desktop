@@ -40,8 +40,12 @@ const electronAPI = {
     // Renderer, main process'e "kayıt aktif/pasif" durumunu bildirir — tray
     // ikonu/menüsü buna göre güncellenir. Gerçek kayıt state machine'i
     // renderer'da kalır (App.tsx); tray sadece yansıtır + kısayol sunar.
-    setRecordingActive: (active: boolean): void => {
-      ipcRenderer.send('tray:set-recording-active', active);
+    setRecordingActive: (
+      active: boolean,
+      outcome?: 'finished' | 'error',
+      errorMessage?: string,
+    ): void => {
+      ipcRenderer.send('tray:set-recording-active', active, outcome, errorMessage);
     },
     onStopRequested: (callback: () => void): (() => void) => {
       const listener = (): void => callback();

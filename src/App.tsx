@@ -340,6 +340,7 @@ function App() {
   const [claims, setClaims] = useState<SafeJwtClaims | null>(null);
   const [busy, setBusy] = useState(false);
   const [recording, setRecording] = useState(false);
+  const [stopping, setStopping] = useState(false);
   const [startPending, setStartPending] = useState(false);
   const [contractPending, setContractPending] = useState(false);
   const [showConsent, setShowConsent] = useState(false);
@@ -360,6 +361,7 @@ function App() {
   const [audioRms, setAudioRms] = useState<number | null>(null);
   const [lastAudioAtMs, setLastAudioAtMs] = useState<number | null>(null);
   const recorderRef = useRef<Recorder | null>(null);
+  const stopInFlightRef = useRef(false);
   const contractPendingRef = useRef(false);
   const liveStreamHasEventsRef = useRef(false);
   const directStreamConfiguredRef = useRef(false);
@@ -709,8 +711,8 @@ function App() {
         setAudioRms(null);
         setLastAudioAtMs(null);
         setRecording(false);
-        window.electronAPI?.tray.setRecordingActive(false);
         const message = `Kayıt hatası (ses kaybı): ${err.message}`;
+        window.electronAPI?.tray.setRecordingActive(false, 'error', message);
         setError(message);
         setStatus('');
         setTranscriptSession((current) => failTranscriptSession(current, message));
@@ -879,6 +881,16 @@ function App() {
   };
 
   const handleStop = useCallback(async (): Promise<void> => {
+    // Re-entrancy guard: ilk stop upload/finish beklerken UI butonu veya tray
+    // ikinci kez tetiklerse erken "tamamlandı" ilan edilirdi (capture.stop
+    // ikinci çağrıda hemen döner). Tek finalizasyon garantisi.
+    if (stopInFlightRef.current) {
+      return;
+    }
+    stopInFlightRef.current = true;
+    setStopping(true);
+    let stopOutcome: 'finished' | 'error' = 'finished';
+    let stopErrorMessage: string | undefined;
     try {
       await recorderRef.current?.stop();
       transcriptSessionIdRef.current = null;
@@ -893,6 +905,8 @@ function App() {
       setMeetingIntelligence((current) => markIntelligenceWaiting(current));
     } catch (e) {
       const message = `Kayıt durdurulamadı: ${(e as Error).message}`;
+      stopOutcome = 'error';
+      stopErrorMessage = message;
       setError(message);
       setTranscriptSession((current) => failTranscriptSession(current, message));
       setMeetingIntelligence((current) => failMeetingIntelligence(current, message));
@@ -904,7 +918,9 @@ function App() {
       setLiveStreamStatus(null);
       setAudioRms(null);
       setLastAudioAtMs(null);
-      window.electronAPI?.tray.setRecordingActive(false);
+      window.electronAPI?.tray.setRecordingActive(false, stopOutcome, stopErrorMessage);
+      stopInFlightRef.current = false;
+      setStopping(false);
     }
   }, []);
 
@@ -962,8 +978,13 @@ function App() {
             ) : recording ? (
               <>
                 <p className="control-copy">Kayıt sürüyor.</p>
-                <button className="danger-action" type="button" onClick={() => void handleStop()}>
-                  Bitir
+                <button
+                  className="danger-action"
+                  type="button"
+                  disabled={stopping}
+                  onClick={() => void handleStop()}
+                >
+                  {stopping ? 'Bitiriliyor...' : 'Bitir'}
                 </button>
               </>
             ) : (

@@ -54,6 +54,7 @@ interface TestTranscriptGatewayError {
 }
 
 let transcriptEventHandler: ((event: TestTranscriptGatewayEvent) => void) | null = null;
+let trayStopHandler: (() => void) | null = null;
 
 function installElectronApiMock(recorderConfig: {
   meetingId: string | null;
@@ -64,6 +65,7 @@ function installElectronApiMock(recorderConfig: {
   liveSttStreamReason?: string | null;
 }): void {
   transcriptEventHandler = null;
+  trayStopHandler = null;
   window.electronAPI = {
     app: {
       getVersion: vi.fn().mockResolvedValue('0.1.0-test'),
@@ -72,7 +74,10 @@ function installElectronApiMock(recorderConfig: {
     },
     tray: {
       setRecordingActive: vi.fn(),
-      onStopRequested: vi.fn(() => vi.fn()),
+      onStopRequested: vi.fn((callback: () => void) => {
+        trayStopHandler = callback;
+        return vi.fn();
+      }),
     },
     auth: {
       login: vi.fn(),
@@ -430,6 +435,88 @@ describe('App recorder readiness', () => {
     expect(await screen.findByText('Direct STT stream hazir. · 80 ms')).toBeInTheDocument();
     expect(screen.queryByText('Direct STT baglanti hatasi. · 500 ms')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Kaydet' })).toBeEnabled();
+  });
+
+  it('eszamanli UI + tray stop tek finalizasyon uretir (re-entrancy guard)', async () => {
+    installElectronApiMock({
+      meetingId: '22222222-2222-4222-8222-222222222222',
+      deviceId: 'desktop-1',
+      ready: true,
+      reason: null,
+    });
+    mockReadyCaptureWorklet();
+    let resolveStop: () => void = () => {};
+    const stopMock = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveStop = resolve;
+        }),
+    );
+    vi.mocked(startRecording).mockResolvedValue({
+      sessionId: 'SES-STOP-1',
+      hasLoopback: false,
+      stop: stopMock,
+      onError: vi.fn(),
+    });
+
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Kaydet' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Onaylıyorum — Kaydı Başlat' }));
+    expect(
+      await screen.findByText('Kayıt başladı (yalnız mikrofon, oturum SES-STOP-1)'),
+    ).toBeInTheDocument();
+
+    const stopButton = screen.getByRole('button', { name: 'Bitir' });
+    fireEvent.click(stopButton);
+    fireEvent.click(stopButton);
+    trayStopHandler?.();
+
+    // İlk stop hâlâ upload/finish bekliyor: erken "tamamlandı" ilan edilmemeli.
+    expect(screen.queryByText('Kayıt tamamlandı, gönderildi.')).not.toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: 'Bitiriliyor...' })).toBeDisabled();
+
+    resolveStop();
+    expect(await screen.findByText('Kayıt tamamlandı, gönderildi.')).toBeInTheDocument();
+    expect(stopMock).toHaveBeenCalledTimes(1);
+    const trayMock = vi.mocked(window.electronAPI!.tray.setRecordingActive);
+    const deactivations = trayMock.mock.calls.filter(([active]) => active === false);
+    expect(deactivations).toHaveLength(1);
+    expect(deactivations[0]).toEqual([false, 'finished', undefined]);
+  });
+
+  it('stop hatasi tray outcome olarak error tasir — sahte tamamlandi bildirimi yok', async () => {
+    installElectronApiMock({
+      meetingId: '22222222-2222-4222-8222-222222222222',
+      deviceId: 'desktop-1',
+      ready: true,
+      reason: null,
+    });
+    mockReadyCaptureWorklet();
+    vi.mocked(startRecording).mockResolvedValue({
+      sessionId: 'SES-STOP-2',
+      hasLoopback: false,
+      stop: vi.fn().mockRejectedValue(new Error('upload finish patladi')),
+      onError: vi.fn(),
+    });
+
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Kaydet' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Onaylıyorum — Kaydı Başlat' }));
+    expect(
+      await screen.findByText('Kayıt başladı (yalnız mikrofon, oturum SES-STOP-2)'),
+    ).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Bitir' }));
+
+    const errorNodes = await screen.findAllByText(/Kayıt durdurulamadı: upload finish patladi/);
+    expect(errorNodes.length).toBeGreaterThan(0);
+    const trayMock = vi.mocked(window.electronAPI!.tray.setRecordingActive);
+    const deactivations = trayMock.mock.calls.filter(([active]) => active === false);
+    expect(deactivations).toHaveLength(1);
+    expect(deactivations[0][1]).toBe('error');
+    expect(String(deactivations[0][2])).toContain('Kayıt durdurulamadı');
   });
 
   it('kayit baslatma cevapsiz kalirsa butonu serbest birakir', async () => {
