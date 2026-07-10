@@ -19,19 +19,23 @@ import { app, BrowserWindow, desktopCapturer, ipcMain, screen, session, shell } 
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { registerAudioIpc } from './ipc/audio';
-import { registerAuthIpc } from './ipc/auth';
-import { registerMeetingIpc } from './ipc/meeting';
-import { isAutoLaunchEnabled, setAutoLaunchEnabled } from './services/auto-launch';
-import { initAutoUpdate } from './services/auto-update';
+import { registerAudioIpc } from './ipc/audio.js';
+import { registerAuthIpc } from './ipc/auth.js';
+import { registerMeetingIpc } from './ipc/meeting.js';
+import { isAutoLaunchEnabled, setAutoLaunchEnabled } from './services/auto-launch.js';
+import { initAutoUpdate } from './services/auto-update.js';
 import {
   canGrantDisplayMedia,
   shouldGrantDisplayMediaRequest,
-} from './services/display-media-lease';
-import { notifyRecordingFinished, notifyRecordingStarted } from './services/notifications';
-import { TrayManager } from './services/tray-manager';
-import { resolveWindowBounds, type WindowBounds } from './services/window-bounds';
-import { WindowStateStore } from './services/window-state-store';
+} from './services/display-media-lease.js';
+import {
+  notifyRecordingError,
+  notifyRecordingFinished,
+  notifyRecordingStarted,
+} from './services/notifications.js';
+import { TrayManager } from './services/tray-manager.js';
+import { resolveWindowBounds, type WindowBounds } from './services/window-bounds.js';
+import { WindowStateStore } from './services/window-state-store.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -118,18 +122,26 @@ ipcMain.handle('app:set-auto-launch', (_event, enabled: boolean) => {
   return isAutoLaunchEnabled();
 });
 
-ipcMain.on('tray:set-recording-active', (_event, active: boolean) => {
-  if (active === recordingActive) {
-    return;
-  }
-  recordingActive = active;
-  tray?.setRecordingActive(active);
-  if (active) {
-    notifyRecordingStarted();
-  } else {
-    notifyRecordingFinished();
-  }
-});
+ipcMain.on(
+  'tray:set-recording-active',
+  (_event, active: boolean, outcome?: 'finished' | 'error', errorMessage?: string) => {
+    if (active === recordingActive) {
+      return;
+    }
+    recordingActive = active;
+    tray?.setRecordingActive(active);
+    // Tray durum senkronu ile kullanıcıya sonuç bildirimi AYRI kavramlar:
+    // hata yolunda "Kayıt tamamlandı" bildirimi yanlış güven verir — outcome
+    // renderer'dan gelir; outcome'suz deaktivasyon sessiz state senkronudur.
+    if (active) {
+      notifyRecordingStarted();
+    } else if (outcome === 'error') {
+      notifyRecordingError(errorMessage ?? 'Kayıt hatası');
+    } else if (outcome === 'finished') {
+      notifyRecordingFinished();
+    }
+  },
+);
 
 void app.whenReady().then(() => {
   session.defaultSession.setDisplayMediaRequestHandler(async (req, callback) => {

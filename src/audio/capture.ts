@@ -11,11 +11,19 @@
  * tek AudioWorkletNode ile capture edilir (frame-loss riski yok).
  */
 
-import { encodeChunk } from './pcm-encode';
+import {
+  connectLiveSttStream,
+  type LiveSttTranscriptEvent,
+  type LiveSttStreamConnection,
+  type LiveSttStreamStatusEvent,
+} from './live-stt-stream';
+import { encodeChunk, resampleLinear } from './pcm-encode';
 import { FrameBuffer } from './frame-buffer';
 
 const TARGET_RATE = 16000;
-const CHUNK_MS = 1000;
+const CHUNK_MS = 2000;
+const LIVE_STREAM_FRAME_MS = 100;
+const AUDIO_ACTIVITY_EVENT_MS = 500;
 const MAX_PENDING_AUDIO_MS = 120_000;
 const MAX_PENDING_CHUNKS = Math.ceil(MAX_PENDING_AUDIO_MS / CHUNK_MS);
 const CAPTURE_PERMISSION_TIMEOUT_MS = 45_000;
@@ -23,11 +31,89 @@ const CAPTURE_IPC_TIMEOUT_MS = 15_000;
 const LOOPBACK_CAPTURE_TIMEOUT_MS = 5_000;
 const WINDOWS_USER_AGENT_RE = /\bWindows NT\b/i;
 
+export function resolvePcmWorkletModuleUrl(baseUri = document.baseURI): string {
+  return new URL('pcm-worklet.js', baseUri).toString();
+}
+
+export type AudioCapturePreflightStatus = 'idle' | 'checking' | 'ready' | 'error';
+
+export interface AudioCapturePreflightState {
+  status: AudioCapturePreflightStatus;
+  message: string | null;
+  checkedAtMs: number | null;
+  elapsedMs: number | null;
+  moduleUrl: string | null;
+}
+
+export interface AudioCapturePreflightResult {
+  ok: boolean;
+  message: string;
+  elapsedMs: number;
+  moduleUrl: string;
+}
+
+export const initialAudioCapturePreflightState: AudioCapturePreflightState = {
+  status: 'idle',
+  message: null,
+  checkedAtMs: null,
+  elapsedMs: null,
+  moduleUrl: null,
+};
+
+export async function testAudioCaptureWorklet(
+  timeoutMs = 8_000,
+  baseUri = document.baseURI,
+): Promise<AudioCapturePreflightResult> {
+  const startedAtMs = Date.now();
+  const moduleUrl = resolvePcmWorkletModuleUrl(baseUri);
+  let ctx: AudioContext | null = null;
+  const elapsed = (): number => Math.max(0, Date.now() - startedAtMs);
+
+  try {
+    ctx = new AudioContext();
+    await withTimeout(
+      ctx.audioWorklet.addModule(moduleUrl),
+      timeoutMs,
+      'Audio worklet yukleme zaman asimina ugradi.',
+    );
+    return {
+      ok: true,
+      message: 'Ses işleyici hazır.',
+      elapsedMs: elapsed(),
+      moduleUrl,
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      message: `Ses işleyici hazır değil: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+      elapsedMs: elapsed(),
+      moduleUrl,
+    };
+  } finally {
+    if (ctx) {
+      await ctx.close().catch(() => undefined);
+    }
+  }
+}
+
 export interface Recorder {
   sessionId: string;
   hasLoopback: boolean;
+  gatewayActive?: boolean;
+  gatewayError?: string | null;
   stop: () => Promise<void>;
   onError: (handler: (err: Error) => void) => void;
+}
+
+export interface StartRecordingOptions {
+  liveSttStreamUrl?: string | null;
+  onLiveStreamReady?: () => void;
+  onLiveStreamStatus?: (event: LiveSttStreamStatusEvent) => void;
+  onAudioActivity?: (activity: { rms: number; capturedAtMs: number }) => void;
+  onLiveTranscriptEvent?: (event: LiveSttTranscriptEvent) => void;
+  onLiveTranscriptError?: (err: Error) => void;
 }
 
 function canAttemptLoopbackCapture(): boolean {
@@ -103,7 +189,62 @@ function withTimeout<T>(
   });
 }
 
-export async function startRecording(meetingId: string, deviceId: string): Promise<Recorder> {
+function rms(samples: Float32Array): number {
+  if (samples.length === 0) {
+    return 0;
+  }
+  let sum = 0;
+  for (const sample of samples) {
+    sum += sample * sample;
+  }
+  return Math.sqrt(sum / samples.length);
+}
+
+function localSessionId(): string {
+  const randomId =
+    typeof globalThis.crypto?.randomUUID === 'function'
+      ? globalThis.crypto.randomUUID()
+      : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  return `LOCAL-${randomId}`;
+}
+
+function canContinueDirectOnlyAfterRecorderStartupError(message: string): boolean {
+  const normalized = message.toLocaleLowerCase('tr-TR');
+  const isLocalContractError =
+    normalized.includes('consent required') ||
+    normalized.includes('invalid format') ||
+    normalized.includes('is required') ||
+    normalized.includes('audio capture setup failed') ||
+    normalized.includes('recording session already active');
+  if (isLocalContractError) {
+    return false;
+  }
+  return (
+    normalized.includes('direct stt') ||
+    normalized.includes('gateway') ||
+    normalized.includes('startsession failed') ||
+    normalized.includes('audio-gateway') ||
+    normalized.includes('kayıt başlatılmadı') ||
+    normalized.includes('kayit baslatilmadi') ||
+    normalized.includes('timed out') ||
+    normalized.includes('timeout') ||
+    normalized.includes('zaman aşımı') ||
+    normalized.includes('zaman asimi') ||
+    normalized.includes('bağlantı') ||
+    normalized.includes('baglanti') ||
+    normalized.includes('fetch failed') ||
+    normalized.includes('network') ||
+    normalized.includes('econn') ||
+    normalized.includes('retryable=true') ||
+    /failed:\s*5\d\d/.test(normalized)
+  );
+}
+
+export async function startRecording(
+  meetingId: string,
+  deviceId: string,
+  options: StartRecordingOptions = {},
+): Promise<Recorder> {
   const api = window.electronAPI;
   if (!api) {
     throw new Error('electronAPI yok (preload yuklenmedi)');
@@ -113,17 +254,26 @@ export async function startRecording(meetingId: string, deviceId: string): Promi
   let loopback: MediaStream | null = null;
   let ctx: AudioContext | null = null;
   let captureLeasePrepared = false;
+  let recorderStartupError: string | null = null;
 
   try {
-    await withTimeout(
-      api.audio.prepareCapture(),
-      CAPTURE_IPC_TIMEOUT_MS,
-      'Recorder izin hazırlığı zaman aşımına uğradı.',
-      () => {
-        void api.audio.cancelCapture().catch(() => undefined);
-      },
-    );
-    captureLeasePrepared = true;
+    try {
+      await withTimeout(
+        api.audio.prepareCapture(),
+        CAPTURE_IPC_TIMEOUT_MS,
+        'Recorder izin hazırlığı zaman aşımına uğradı.',
+        () => {
+          void api.audio.cancelCapture().catch(() => undefined);
+        },
+      );
+      captureLeasePrepared = true;
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
+      if (!options.liveSttStreamUrl || !canContinueDirectOnlyAfterRecorderStartupError(reason)) {
+        throw err;
+      }
+      recorderStartupError = reason;
+    }
     mic = await withTimeout(
       navigator.mediaDevices.getUserMedia({
         audio: { channelCount: 1 },
@@ -140,7 +290,7 @@ export async function startRecording(meetingId: string, deviceId: string): Promi
     ).catch(() => null);
     ctx = new AudioContext();
     await withTimeout(
-      ctx.audioWorklet.addModule('/pcm-worklet.js'),
+      ctx.audioWorklet.addModule(resolvePcmWorkletModuleUrl()),
       CAPTURE_IPC_TIMEOUT_MS,
       'Audio worklet yükleme zaman aşımına uğradı.',
     );
@@ -189,43 +339,76 @@ export async function startRecording(meetingId: string, deviceId: string): Promi
   mixedSource.connect(captureNode);
   captureNode.connect(sink).connect(audioContext.destination);
 
-  let session: { sessionId: string; captureId: string };
-  try {
-    session = await withTimeout(
-      api.audio.start(meetingId, deviceId),
-      CAPTURE_IPC_TIMEOUT_MS,
-      'Audio gateway oturumu zaman aşımına uğradı.',
-      (lateSession) => {
-        void api.audio.abort(lateSession.captureId).catch(() => undefined);
-      },
-    );
-  } catch (err) {
-    stopAllTracks(micStream, loopbackStream);
-    await audioContext.close();
-    void api.audio.cancelCapture().catch(() => undefined);
-    throw err;
+  let session: { sessionId: string; captureId: string } | null = null;
+  if (!recorderStartupError) {
+    try {
+      session = await withTimeout(
+        api.audio.start(meetingId, deviceId),
+        CAPTURE_IPC_TIMEOUT_MS,
+        'Audio gateway oturumu zaman aşımına uğradı.',
+        (lateSession) => {
+          void api.audio.abort(lateSession.captureId).catch(() => undefined);
+        },
+      );
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
+      if (!options.liveSttStreamUrl || !canContinueDirectOnlyAfterRecorderStartupError(reason)) {
+        stopAllTracks(micStream, loopbackStream);
+        await audioContext.close();
+        void api.audio.cancelCapture().catch(() => undefined);
+        throw err;
+      }
+      recorderStartupError = reason;
+    }
   }
-  const { sessionId, captureId } = session;
+  const sessionId = session?.sessionId ?? localSessionId();
+  const captureId = session?.captureId ?? null;
 
   const frameSamples = Math.round((audioContext.sampleRate * CHUNK_MS) / 1000);
   const fb = new FrameBuffer(frameSamples);
   const empty = new Float32Array(0);
+  const liveStreamFrameSamples = Math.round((TARGET_RATE * LIVE_STREAM_FRAME_MS) / 1000);
+  const liveStreamBuffer = new FrameBuffer(liveStreamFrameSamples);
+  let liveStream: LiveSttStreamConnection | null = null;
+
+  if (options.liveSttStreamUrl) {
+    try {
+      liveStream = connectLiveSttStream(options.liveSttStreamUrl, {
+        onReady: options.onLiveStreamReady,
+        onStatus: options.onLiveStreamStatus,
+        onTranscriptEvent: options.onLiveTranscriptEvent,
+        onError: options.onLiveTranscriptError,
+      });
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      options.onLiveStreamStatus?.({ status: 'error', reason });
+      options.onLiveTranscriptError?.(new Error(`Live STT stream kurulamadı: ${reason}`));
+      liveStream = null;
+    }
+  }
 
   let pendingChunks = 0;
   let uploadError: Error | null = null;
   let uploadTail: Promise<void> = Promise.resolve();
   let errorHandler: ((err: Error) => void) | null = null;
+  let lastAudioActivityEventAtMs = 0;
 
   const stopCapture = (): void => {
     captureNode.port.onmessage = null;
     captureNode.disconnect();
     sink.disconnect();
+    liveStream?.close();
     stopAllTracks(micStream, loopbackStream);
     void audioContext.close();
-    void api.audio.abort(captureId).catch(() => {});
+    if (captureId) {
+      void api.audio.abort(captureId).catch(() => {});
+    }
   };
 
   const enqueueChunk = (bytes: Uint8Array, startedAtMs: number): void => {
+    if (!captureId) {
+      return;
+    }
     if (uploadError) {
       return;
     }
@@ -258,9 +441,25 @@ export async function startRecording(meetingId: string, deviceId: string): Promi
   };
 
   captureNode.port.onmessage = (ev: MessageEvent<Float32Array>): void => {
-    for (const chunk of fb.push(ev.data)) {
-      const bytes = encodeChunk(chunk, empty, audioContext.sampleRate, TARGET_RATE);
-      enqueueChunk(bytes, Date.now());
+    const capturedAtMs = Date.now();
+    if (
+      options.onAudioActivity &&
+      capturedAtMs - lastAudioActivityEventAtMs >= AUDIO_ACTIVITY_EVENT_MS
+    ) {
+      lastAudioActivityEventAtMs = capturedAtMs;
+      options.onAudioActivity({ rms: rms(ev.data), capturedAtMs });
+    }
+    if (liveStream) {
+      const liveFrame = resampleLinear(ev.data, audioContext.sampleRate, TARGET_RATE);
+      for (const frame of liveStreamBuffer.push(liveFrame)) {
+        liveStream.send(frame);
+      }
+    }
+    if (captureId) {
+      for (const chunk of fb.push(ev.data)) {
+        const bytes = encodeChunk(chunk, empty, audioContext.sampleRate, TARGET_RATE);
+        enqueueChunk(bytes, capturedAtMs);
+      }
     }
   };
 
@@ -269,6 +468,8 @@ export async function startRecording(meetingId: string, deviceId: string): Promi
   return {
     sessionId,
     hasLoopback: loopback !== null,
+    gatewayActive: captureId !== null,
+    gatewayError: recorderStartupError,
     onError: (handler: (err: Error) => void): void => {
       errorHandler = handler;
     },
@@ -279,10 +480,18 @@ export async function startRecording(meetingId: string, deviceId: string): Promi
       captureNode.port.onmessage = null;
 
       if (!uploadError) {
-        const rest = fb.flush();
-        if (rest) {
-          const bytes = encodeChunk(rest, empty, audioContext.sampleRate, TARGET_RATE);
-          enqueueChunk(bytes, Date.now());
+        if (liveStream) {
+          const restLiveFrame = liveStreamBuffer.flush();
+          if (restLiveFrame) {
+            liveStream.send(restLiveFrame);
+          }
+        }
+        if (captureId) {
+          const rest = fb.flush();
+          if (rest) {
+            const bytes = encodeChunk(rest, empty, audioContext.sampleRate, TARGET_RATE);
+            enqueueChunk(bytes, Date.now());
+          }
         }
       }
 
@@ -292,17 +501,20 @@ export async function startRecording(meetingId: string, deviceId: string): Promi
       if (!uploadError) {
         captureNode.disconnect();
         sink.disconnect();
+        liveStream?.close();
         stopAllTracks(micStream, loopbackStream);
         await audioContext.close();
       }
 
       if (finalError) {
-        if (!uploadError) {
+        if (captureId) {
           await api.audio.abort(captureId).catch(() => {});
         }
         throw finalError;
       }
-      await api.audio.finish(captureId);
+      if (captureId) {
+        await api.audio.finish(captureId);
+      }
     },
   };
 }

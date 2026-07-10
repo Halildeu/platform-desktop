@@ -7,7 +7,7 @@
 
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron';
 
-import type { AuthStatus } from './ipc/auth';
+import type { AuthStatus } from './ipc/auth.js';
 
 export interface TranscriptGatewayEvent {
   eventId: string;
@@ -40,8 +40,12 @@ const electronAPI = {
     // Renderer, main process'e "kayıt aktif/pasif" durumunu bildirir — tray
     // ikonu/menüsü buna göre güncellenir. Gerçek kayıt state machine'i
     // renderer'da kalır (App.tsx); tray sadece yansıtır + kısayol sunar.
-    setRecordingActive: (active: boolean): void => {
-      ipcRenderer.send('tray:set-recording-active', active);
+    setRecordingActive: (
+      active: boolean,
+      outcome?: 'finished' | 'error',
+      errorMessage?: string,
+    ): void => {
+      ipcRenderer.send('tray:set-recording-active', active, outcome, errorMessage);
     },
     onStopRequested: (callback: () => void): (() => void) => {
       const listener = (): void => callback();
@@ -55,6 +59,8 @@ const electronAPI = {
       deviceId: string;
       ready: boolean;
       reason: string | null;
+      liveSttStreamUrl: string | null;
+      liveSttStreamReason: string | null;
     }> => ipcRenderer.invoke('audio:recorder-config'),
     permissionStatus: (): Promise<{ granted: boolean }> =>
       ipcRenderer.invoke('audio:permission-status'),
@@ -118,6 +124,15 @@ const electronAPI = {
       scheduledStart?: string | null;
       scheduledEnd?: string | null;
     }> => ipcRenderer.invoke('meeting:create-contract', payload),
+    analyze: (payload: {
+      meetingId: string;
+      request: {
+        transcript: string;
+        meeting_id?: string | null;
+        session_id?: string | null;
+        segments?: Array<{ text: string; start: number; end?: number }>;
+      };
+    }): Promise<unknown> => ipcRenderer.invoke('meeting:analyze', payload),
   },
 };
 

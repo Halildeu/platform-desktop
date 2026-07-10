@@ -1,6 +1,19 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
-import { type Recorder, startRecording } from './audio/capture';
+import {
+  initialAudioCapturePreflightState,
+  type AudioCapturePreflightState,
+  type Recorder,
+  startRecording,
+  testAudioCaptureWorklet,
+} from './audio/capture';
+import {
+  initialLiveSttPreflightState,
+  testLiveSttStreamConnection,
+  type LiveSttPreflightResult,
+  type LiveSttPreflightState,
+} from './audio/live-stt-preflight';
+import type { LiveSttStreamStatusEvent, LiveSttTranscriptEvent } from './audio/live-stt-stream';
 import {
   ConsentDialog,
   CONSENT_VERSION,
@@ -14,14 +27,18 @@ import {
   initialMeetingIntelligence,
   markIntelligenceRecording,
   markIntelligenceWaiting,
+  setMeetingIntelligenceResult,
 } from './intelligence/meeting-intelligence';
 import { TranscriptPanel } from './components/TranscriptPanel';
 import {
   failTranscriptSession,
   finishTranscriptSession,
   initialTranscriptSession,
+  markTranscriptSegmentReviewed,
   markTranscriptBlocked,
   markTranscriptReady,
+  markTranscriptWaitingForContract,
+  reviewTranscriptSegmentText,
   startTranscriptSession,
   type TranscriptSegmentStatus,
   upsertTranscriptSegment,
@@ -29,19 +46,36 @@ import {
 
 const MEETING_ID_MISSING_MESSAGE =
   'Geçerli meetingId bulunamadı; kayıt başlatılamaz. (meetingId kaynağı henüz belirlenmedi)';
+const RECORDER_MEETING_ID_UNSET_MARKER = 'RECORDER_MEETING_ID tanimli degil';
 const RECORDER_START_TIMEOUT_MS = 45_000;
+const TRANSCRIPT_CLIENT_CLOCK_SKEW_MS = 30_000;
+const MAX_PENDING_LIVE_TRANSCRIPT_EVENTS = 50;
+const ACTIVE_AUDIO_RMS = 0.0008;
+const LIVE_STT_PREFLIGHT_MAX_ATTEMPTS = 3;
+const LIVE_STT_PREFLIGHT_RETRY_DELAY_MS = 180;
 
 interface RecorderRuntimeConfig {
   meetingId: string | null;
   deviceId: string;
   ready: boolean;
   reason: string | null;
+  liveSttStreamUrl: string | null;
+  liveSttStreamReason: string | null;
 }
 
 interface MeetingContract {
   id: string;
   title: string;
   status: string;
+}
+
+interface StartupPreflightOutcome {
+  ok: boolean;
+  message: string;
+  captureOk: boolean;
+  captureMessage: string;
+  streamOk: boolean;
+  streamMessage: string;
 }
 
 interface SafeJwtClaims {
@@ -55,10 +89,61 @@ interface SafeJwtClaims {
   companyId?: number | string;
 }
 
-async function startRecordingWithTimeout(meetingId: string, deviceId: string): Promise<Recorder> {
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+function isRetryableLiveSttPreflightFailure(message: string): boolean {
+  const normalized = message.toLocaleLowerCase('tr-TR');
+  return (
+    normalized.includes('baglanti') ||
+    normalized.includes('bağlantı') ||
+    normalized.includes('kapandi') ||
+    normalized.includes('kapandı') ||
+    normalized.includes('acilamadi') ||
+    normalized.includes('açılamadı')
+  );
+}
+
+async function testLiveSttStreamConnectionWithRetry(
+  streamUrl: string,
+  onRetry: (attempt: number, previous: LiveSttPreflightResult) => void,
+): Promise<LiveSttPreflightResult> {
+  let lastResult: LiveSttPreflightResult | null = null;
+
+  for (let attempt = 1; attempt <= LIVE_STT_PREFLIGHT_MAX_ATTEMPTS; attempt += 1) {
+    const result = await testLiveSttStreamConnection(streamUrl);
+    lastResult = result;
+    if (result.ok || attempt === LIVE_STT_PREFLIGHT_MAX_ATTEMPTS) {
+      return result;
+    }
+    if (!isRetryableLiveSttPreflightFailure(result.message)) {
+      return result;
+    }
+    onRetry(attempt + 1, result);
+    await delay(LIVE_STT_PREFLIGHT_RETRY_DELAY_MS);
+  }
+
+  return (
+    lastResult ?? {
+      ok: false,
+      message: 'Direct STT stream kontrol edilemedi.',
+      elapsedMs: 0,
+      stage: null,
+    }
+  );
+}
+
+async function startRecordingWithTimeout(
+  meetingId: string,
+  deviceId: string,
+  options?: Parameters<typeof startRecording>[2],
+): Promise<Recorder> {
   let timeoutId: ReturnType<typeof setTimeout> | null = null;
   let didTimeout = false;
-  const pendingRecorder = startRecording(meetingId, deviceId);
+  const pendingRecorder = startRecording(meetingId, deviceId, options);
 
   void pendingRecorder
     .then((rec) => {
@@ -114,12 +199,148 @@ function transcriptStatusFromGateway(status: string): TranscriptSegmentStatus {
   }
 }
 
+function transcriptStatusFromLiveStream(
+  status: LiveSttTranscriptEvent['status'],
+): TranscriptSegmentStatus {
+  return status === 'final' ? 'final' : 'draft';
+}
+
+function transcriptTimelineStartedAtMs(event: {
+  chunkStartedAtMs: number;
+  windowStartedAtMs?: number | null;
+  receivedAtMs?: number | null;
+}): number {
+  const eventStartedAtMs =
+    typeof event.windowStartedAtMs === 'number' && Number.isFinite(event.windowStartedAtMs)
+      ? event.windowStartedAtMs
+      : event.chunkStartedAtMs;
+  const receivedAtMs = event.receivedAtMs;
+  if (
+    typeof receivedAtMs === 'number' &&
+    Number.isFinite(receivedAtMs) &&
+    eventStartedAtMs - receivedAtMs > TRANSCRIPT_CLIENT_CLOCK_SKEW_MS
+  ) {
+    return receivedAtMs;
+  }
+  return eventStartedAtMs;
+}
+
+function transcriptSegmentIdFromGateway(event: {
+  eventId: string;
+  sessionId: string;
+  windowSeq?: number | null;
+}): string {
+  if (
+    typeof event.windowSeq === 'number' &&
+    Number.isFinite(event.windowSeq) &&
+    event.windowSeq >= 0
+  ) {
+    return `gateway:${event.sessionId}:window:${event.windowSeq}`;
+  }
+  return event.eventId;
+}
+
+function normalizedTranscriptWords(text: string): string[] {
+  return text
+    .trim()
+    .split(/\s+/)
+    .map((word) => word.toLocaleLowerCase('tr-TR').replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, ''))
+    .filter(Boolean);
+}
+
+function containsContiguousWindow(haystack: string[], needle: string[]): boolean {
+  if (needle.length === 0 || needle.length > haystack.length) {
+    return false;
+  }
+
+  for (let index = 0; index <= haystack.length - needle.length; index += 1) {
+    if (needle.every((word, offset) => haystack[index + offset] === word)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function segmentAlreadyCoversGatewayText(segmentText: string, gatewayText: string): boolean {
+  const segmentWords = normalizedTranscriptWords(segmentText);
+  const gatewayWords = normalizedTranscriptWords(gatewayText);
+  if (segmentWords.length === 0 || gatewayWords.length === 0) {
+    return false;
+  }
+
+  return (
+    segmentWords.join('\u0000') === gatewayWords.join('\u0000') ||
+    containsContiguousWindow(segmentWords, gatewayWords)
+  );
+}
+
+function isGatewayFallbackStatus(status: string): boolean {
+  const normalized = status.toUpperCase();
+  return normalized === 'FINAL' || normalized === 'REVISED';
+}
+
+function shouldApplyGatewayTranscriptEvent(
+  current: ReturnType<typeof initialTranscriptSession>,
+  event: { text: string; status: string; chunkStartedAtMs: number },
+  directStreamHasEvents: boolean,
+): boolean {
+  const text = event.text.trim();
+  if (!text || !Number.isFinite(event.chunkStartedAtMs)) {
+    return false;
+  }
+
+  if (!directStreamHasEvents) {
+    return true;
+  }
+
+  if (!isGatewayFallbackStatus(event.status)) {
+    return false;
+  }
+
+  return !current.segments.some((segment) => segmentAlreadyCoversGatewayText(segment.text, text));
+}
+
+function applyLiveTranscriptEvent(
+  current: ReturnType<typeof initialTranscriptSession>,
+  event: LiveSttTranscriptEvent,
+): ReturnType<typeof initialTranscriptSession> {
+  return upsertTranscriptSegment(current, {
+    id: event.id,
+    speakerLabel: 'Konuşmacı',
+    startedAtMs: event.startedAtMs,
+    status: transcriptStatusFromLiveStream(event.status),
+    text: event.text,
+    source: 'direct-stream',
+    elapsedMs: event.elapsedMs ?? null,
+    rms: event.rms ?? null,
+    receivedAtMs: Date.now(),
+  });
+}
+
+function isContractCreationExpected(reason: string | null | undefined): boolean {
+  return typeof reason === 'string' && reason.includes(RECORDER_MEETING_ID_UNSET_MARKER);
+}
+
+function markMeetingIntelligenceWaitingForContract(
+  current: ReturnType<typeof initialMeetingIntelligence>,
+): ReturnType<typeof initialMeetingIntelligence> {
+  return {
+    ...current,
+    meetingId: null,
+    sessionId: null,
+    status: 'idle',
+    error: null,
+    result: null,
+  };
+}
+
 function App() {
   const [version, setVersion] = useState('');
   const [loggedIn, setLoggedIn] = useState(false);
   const [claims, setClaims] = useState<SafeJwtClaims | null>(null);
   const [busy, setBusy] = useState(false);
   const [recording, setRecording] = useState(false);
+  const [stopping, setStopping] = useState(false);
   const [startPending, setStartPending] = useState(false);
   const [contractPending, setContractPending] = useState(false);
   const [showConsent, setShowConsent] = useState(false);
@@ -128,8 +349,62 @@ function App() {
   const [meetingIntelligence, setMeetingIntelligence] = useState(initialMeetingIntelligence);
   const [status, setStatus] = useState('');
   const [error, setError] = useState('');
+  const [liveStreamActive, setLiveStreamActive] = useState(false);
+  const [liveStreamReady, setLiveStreamReady] = useState(false);
+  const [liveStreamStatus, setLiveStreamStatus] = useState<LiveSttStreamStatusEvent | null>(null);
+  const [liveStreamPreflight, setLiveStreamPreflight] = useState<LiveSttPreflightState>(
+    initialLiveSttPreflightState,
+  );
+  const [audioCapturePreflight, setAudioCapturePreflight] = useState<AudioCapturePreflightState>(
+    initialAudioCapturePreflightState,
+  );
+  const [audioRms, setAudioRms] = useState<number | null>(null);
+  const [lastAudioAtMs, setLastAudioAtMs] = useState<number | null>(null);
   const recorderRef = useRef<Recorder | null>(null);
+  const stopInFlightRef = useRef(false);
   const contractPendingRef = useRef(false);
+  const liveStreamHasEventsRef = useRef(false);
+  const directStreamConfiguredRef = useRef(false);
+  const transcriptSessionIdRef = useRef<string | null>(null);
+  const pendingLiveTranscriptEventsRef = useRef<LiveSttTranscriptEvent[]>([]);
+
+  const enqueuePendingLiveTranscriptEvent = (event: LiveSttTranscriptEvent): void => {
+    pendingLiveTranscriptEventsRef.current = [
+      ...pendingLiveTranscriptEventsRef.current,
+      event,
+    ].slice(-MAX_PENDING_LIVE_TRANSCRIPT_EVENTS);
+  };
+
+  useEffect(() => {
+    transcriptSessionIdRef.current = transcriptSession.sessionId;
+  }, [transcriptSession.sessionId]);
+
+  useEffect(() => {
+    directStreamConfiguredRef.current = Boolean(recorderConfig?.liveSttStreamUrl);
+  }, [recorderConfig?.liveSttStreamUrl]);
+
+  useEffect(() => {
+    setLiveStreamPreflight(initialLiveSttPreflightState);
+  }, [recorderConfig?.liveSttStreamUrl]);
+
+  useEffect(() => {
+    if (!transcriptSession.sessionId || pendingLiveTranscriptEventsRef.current.length === 0) {
+      return;
+    }
+
+    const pending = pendingLiveTranscriptEventsRef.current;
+    pendingLiveTranscriptEventsRef.current = [];
+    setTranscriptSession((current) => {
+      if (!current.sessionId) {
+        pendingLiveTranscriptEventsRef.current = [
+          ...pending,
+          ...pendingLiveTranscriptEventsRef.current,
+        ].slice(-MAX_PENDING_LIVE_TRANSCRIPT_EVENTS);
+        return current;
+      }
+      return pending.reduce(applyLiveTranscriptEvent, current);
+    });
+  }, [transcriptSession.sessionId]);
 
   useEffect(() => {
     void window.electronAPI?.app
@@ -147,6 +422,13 @@ function App() {
       .recorderConfig()
       .then((cfg) => {
         setRecorderConfig(cfg);
+        if (!cfg.ready && isContractCreationExpected(cfg.reason)) {
+          setTranscriptSession((current) =>
+            markTranscriptWaitingForContract(current, { deviceId: cfg.deviceId }),
+          );
+          setMeetingIntelligence((current) => markMeetingIntelligenceWaitingForContract(current));
+          return;
+        }
         setTranscriptSession((current) =>
           cfg.ready && cfg.meetingId
             ? markTranscriptReady(current, { meetingId: cfg.meetingId, deviceId: cfg.deviceId })
@@ -164,6 +446,8 @@ function App() {
           deviceId: 'desktop-1',
           ready: false,
           reason: 'Recorder runtime config okunamadi.',
+          liveSttStreamUrl: null,
+          liveSttStreamReason: null,
         };
         setRecorderConfig(fallback);
         setTranscriptSession((current) =>
@@ -181,15 +465,21 @@ function App() {
         if (!current.sessionId || event.sessionId !== current.sessionId) {
           return current;
         }
-        if (!event.text.trim() || !Number.isFinite(event.chunkStartedAtMs)) {
+        if (!shouldApplyGatewayTranscriptEvent(current, event, liveStreamHasEventsRef.current)) {
           return current;
         }
         return upsertTranscriptSegment(current, {
-          id: event.eventId,
+          id: transcriptSegmentIdFromGateway(event),
           speakerLabel: 'Konuşmacı',
-          startedAtMs: event.chunkStartedAtMs,
+          startedAtMs: transcriptTimelineStartedAtMs(event),
           status: transcriptStatusFromGateway(event.status),
           text: event.text,
+          source: 'gateway-events',
+          elapsedMs:
+            typeof event.durationSeconds === 'number' && Number.isFinite(event.durationSeconds)
+              ? Math.round(event.durationSeconds * 1000)
+              : null,
+          receivedAtMs: event.receivedAtMs ?? null,
         });
       });
     });
@@ -230,11 +520,13 @@ function App() {
   };
 
   const bindReadyMeetingContract = (contract: MeetingContract): void => {
-    const cfg = {
+    const cfg: RecorderRuntimeConfig = {
       meetingId: contract.id,
       deviceId: recorderConfig?.deviceId ?? 'desktop-1',
       ready: true,
       reason: null,
+      liveSttStreamUrl: recorderConfig?.liveSttStreamUrl ?? null,
+      liveSttStreamReason: recorderConfig?.liveSttStreamReason ?? null,
     };
     setRecorderConfig(cfg);
     setTranscriptSession((current) =>
@@ -282,6 +574,14 @@ function App() {
       const s = await window.electronAPI?.auth.logout();
       setLoggedIn(s?.loggedIn ?? false);
       setClaims(null);
+      transcriptSessionIdRef.current = null;
+      pendingLiveTranscriptEventsRef.current = [];
+      setLiveStreamActive(false);
+      setLiveStreamReady(false);
+      setLiveStreamStatus(null);
+      setLiveStreamPreflight(initialLiveSttPreflightState);
+      setAudioRms(null);
+      setLastAudioAtMs(null);
       setTranscriptSession(initialTranscriptSession());
       setMeetingIntelligence(initialMeetingIntelligence());
       setStatus('Çıkış yapıldı; Keycloak logout/revoke isteği gönderildi.');
@@ -333,14 +633,86 @@ function App() {
       if (!recorderConfig?.ready || !recorderConfig.meetingId) {
         throw new Error(recorderConfig?.reason ?? MEETING_ID_MISSING_MESSAGE);
       }
+      const capturePreflight = await handleAudioCapturePreflight();
+      if (!capturePreflight.ok) {
+        throw new Error(capturePreflight.message);
+      }
+      const liveSttStreamUrlForSession = recorderConfig.liveSttStreamUrl;
+      if (recorderConfig.liveSttStreamUrl) {
+        setLiveStreamPreflight({
+          status: 'checking',
+          message: 'Direct STT kayıt sırasında bağlanacak...',
+          checkedAtMs: null,
+          elapsedMs: null,
+          stage: null,
+        });
+      }
       const meetingId = recorderConfig.meetingId;
       const deviceId = recorderConfig.deviceId;
-      const rec = await startRecordingWithTimeout(meetingId, deviceId);
+      liveStreamHasEventsRef.current = false;
+      directStreamConfiguredRef.current = Boolean(liveSttStreamUrlForSession);
+      setLiveStreamActive(false);
+      setLiveStreamReady(false);
+      setLiveStreamStatus(null);
+      setAudioRms(null);
+      setLastAudioAtMs(null);
+      transcriptSessionIdRef.current = null;
+      pendingLiveTranscriptEventsRef.current = [];
+      const rec = await startRecordingWithTimeout(meetingId, deviceId, {
+        liveSttStreamUrl: liveSttStreamUrlForSession,
+        onLiveStreamReady: () => {
+          setLiveStreamReady(true);
+        },
+        onLiveStreamStatus: (event) => {
+          setLiveStreamStatus(event);
+          if (event.status !== 'ready') {
+            setLiveStreamReady(false);
+          }
+        },
+        onAudioActivity: (activity) => {
+          setAudioRms(activity.rms);
+          setLastAudioAtMs(activity.capturedAtMs);
+        },
+        onLiveTranscriptEvent: (event) => {
+          liveStreamHasEventsRef.current = true;
+          setLiveStreamReady(true);
+          setLiveStreamActive(true);
+          if (!transcriptSessionIdRef.current) {
+            enqueuePendingLiveTranscriptEvent(event);
+            return;
+          }
+          setTranscriptSession((current) => {
+            if (!current.sessionId) {
+              enqueuePendingLiveTranscriptEvent(event);
+              return current;
+            }
+            return applyLiveTranscriptEvent(current, event);
+          });
+        },
+        onLiveTranscriptError: (err) => {
+          setTranscriptSession((current) => {
+            if (!current.sessionId) {
+              return current;
+            }
+            return {
+              ...current,
+              error: `Live STT stream: ${err.message}`,
+            };
+          });
+        },
+      });
       rec.onError((err) => {
         recorderRef.current = null;
+        transcriptSessionIdRef.current = null;
+        pendingLiveTranscriptEventsRef.current = [];
+        setLiveStreamActive(false);
+        setLiveStreamReady(false);
+        setLiveStreamStatus(null);
+        setAudioRms(null);
+        setLastAudioAtMs(null);
         setRecording(false);
-        window.electronAPI?.tray.setRecordingActive(false);
         const message = `Kayıt hatası (ses kaybı): ${err.message}`;
+        window.electronAPI?.tray.setRecordingActive(false, 'error', message);
         setError(message);
         setStatus('');
         setTranscriptSession((current) => failTranscriptSession(current, message));
@@ -349,22 +721,35 @@ function App() {
       recorderRef.current = rec;
       setRecording(true);
       window.electronAPI?.tray.setRecordingActive(true);
+      const pendingLiveTranscriptEvents = pendingLiveTranscriptEventsRef.current;
+      pendingLiveTranscriptEventsRef.current = [];
       setTranscriptSession((current) =>
-        startTranscriptSession(current, {
-          sessionId: rec.sessionId,
-          meetingId,
-          deviceId,
-          hasLoopback: rec.hasLoopback,
-          startedAtMs: Date.now(),
-        }),
+        pendingLiveTranscriptEvents.reduce(
+          applyLiveTranscriptEvent,
+          startTranscriptSession(current, {
+            sessionId: rec.sessionId,
+            meetingId,
+            deviceId,
+            hasLoopback: rec.hasLoopback,
+            startedAtMs: Date.now(),
+          }),
+        ),
       );
       setMeetingIntelligence((current) =>
         markIntelligenceRecording(current, { meetingId, sessionId: rec.sessionId }),
       );
       const mode = rec.hasLoopback ? 'mikrofon + sistem sesi' : 'yalnız mikrofon';
-      setStatus(`Kayıt başladı (${mode}, oturum ${rec.sessionId})`);
+      const gatewayMode = rec.gatewayActive === false ? ', direct stream' : '';
+      setStatus(`Kayıt başladı (${mode}${gatewayMode}, oturum ${rec.sessionId})`);
     } catch (e) {
       const message = `Kayıt başlatılamadı: ${(e as Error).message}`;
+      transcriptSessionIdRef.current = null;
+      pendingLiveTranscriptEventsRef.current = [];
+      setLiveStreamActive(false);
+      setLiveStreamReady(false);
+      setLiveStreamStatus(null);
+      setAudioRms(null);
+      setLastAudioAtMs(null);
       setError(message);
       setTranscriptSession((current) => failTranscriptSession(current, message));
       setMeetingIntelligence((current) => failMeetingIntelligence(current, message));
@@ -373,21 +758,169 @@ function App() {
     }
   };
 
+  const handleAudioCapturePreflight = async (): Promise<{ ok: boolean; message: string }> => {
+    setAudioCapturePreflight({
+      status: 'checking',
+      message: 'Ses işleyici kontrol ediliyor...',
+      checkedAtMs: null,
+      elapsedMs: null,
+      moduleUrl: null,
+    });
+    try {
+      const result = await testAudioCaptureWorklet();
+      setAudioCapturePreflight({
+        status: result.ok ? 'ready' : 'error',
+        message: result.message,
+        checkedAtMs: Date.now(),
+        elapsedMs: result.elapsedMs,
+        moduleUrl: result.moduleUrl,
+      });
+      return { ok: result.ok, message: result.message };
+    } catch (error) {
+      const message = `Ses işleyici test hatası: ${
+        error instanceof Error ? error.message : String(error)
+      }`;
+      setAudioCapturePreflight({
+        status: 'error',
+        message,
+        checkedAtMs: Date.now(),
+        elapsedMs: null,
+        moduleUrl: null,
+      });
+      return { ok: false, message };
+    }
+  };
+
+  const handleLiveStreamPreflight = async (): Promise<StartupPreflightOutcome> => {
+    const captureCheck = handleAudioCapturePreflight();
+
+    const streamUrl = recorderConfig?.liveSttStreamUrl;
+    if (!streamUrl) {
+      const message = recorderConfig?.liveSttStreamReason ?? 'LIVE_STT_STREAM_URL tanimli degil.';
+      setLiveStreamPreflight({
+        status: 'error',
+        message,
+        checkedAtMs: Date.now(),
+        elapsedMs: null,
+        stage: null,
+      });
+      const captureOutcome = await captureCheck;
+      return {
+        ok: false,
+        message,
+        captureOk: captureOutcome.ok,
+        captureMessage: captureOutcome.message,
+        streamOk: false,
+        streamMessage: message,
+      };
+    }
+
+    setLiveStreamPreflight({
+      status: 'checking',
+      message: 'Direct STT stream kontrol ediliyor...',
+      checkedAtMs: null,
+      elapsedMs: null,
+      stage: null,
+    });
+    let streamOutcome: { ok: boolean; message: string } = {
+      ok: false,
+      message: 'Direct STT stream kontrol edilemedi.',
+    };
+    try {
+      const result = await testLiveSttStreamConnectionWithRetry(streamUrl, (attempt, previous) => {
+        setLiveStreamPreflight({
+          status: 'checking',
+          message: `Direct STT bağlantısı tekrar deneniyor (${attempt}/${LIVE_STT_PREFLIGHT_MAX_ATTEMPTS})... Son hata: ${previous.message}`,
+          checkedAtMs: null,
+          elapsedMs: previous.elapsedMs,
+          stage: previous.stage,
+        });
+      });
+      streamOutcome = { ok: result.ok, message: result.message };
+      setLiveStreamPreflight({
+        status: result.ok ? 'ready' : 'error',
+        message: result.message,
+        checkedAtMs: Date.now(),
+        elapsedMs: result.elapsedMs,
+        stage: result.stage,
+      });
+    } catch (error) {
+      streamOutcome = {
+        ok: false,
+        message: `Direct STT test hatasi: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      };
+      setLiveStreamPreflight({
+        status: 'error',
+        message: streamOutcome.message,
+        checkedAtMs: Date.now(),
+        elapsedMs: null,
+        stage: null,
+      });
+    }
+    const captureOutcome = await captureCheck;
+    if (!captureOutcome.ok) {
+      return {
+        ok: false,
+        message: captureOutcome.message,
+        captureOk: false,
+        captureMessage: captureOutcome.message,
+        streamOk: streamOutcome.ok,
+        streamMessage: streamOutcome.message,
+      };
+    }
+    return {
+      ok: streamOutcome.ok,
+      message: streamOutcome.message,
+      captureOk: true,
+      captureMessage: captureOutcome.message,
+      streamOk: streamOutcome.ok,
+      streamMessage: streamOutcome.message,
+    };
+  };
+
   const handleStop = useCallback(async (): Promise<void> => {
+    // Re-entrancy guard: ilk stop upload/finish beklerken UI butonu veya tray
+    // ikinci kez tetiklerse erken "tamamlandı" ilan edilirdi (capture.stop
+    // ikinci çağrıda hemen döner). Tek finalizasyon garantisi.
+    if (stopInFlightRef.current) {
+      return;
+    }
+    stopInFlightRef.current = true;
+    setStopping(true);
+    let stopOutcome: 'finished' | 'error' = 'finished';
+    let stopErrorMessage: string | undefined;
     try {
       await recorderRef.current?.stop();
+      transcriptSessionIdRef.current = null;
+      pendingLiveTranscriptEventsRef.current = [];
+      setLiveStreamActive(false);
+      setLiveStreamReady(false);
+      setLiveStreamStatus(null);
+      setAudioRms(null);
+      setLastAudioAtMs(null);
       setStatus('Kayıt tamamlandı, gönderildi.');
       setTranscriptSession((current) => finishTranscriptSession(current, Date.now()));
       setMeetingIntelligence((current) => markIntelligenceWaiting(current));
     } catch (e) {
       const message = `Kayıt durdurulamadı: ${(e as Error).message}`;
+      stopOutcome = 'error';
+      stopErrorMessage = message;
       setError(message);
       setTranscriptSession((current) => failTranscriptSession(current, message));
       setMeetingIntelligence((current) => failMeetingIntelligence(current, message));
     } finally {
       recorderRef.current = null;
       setRecording(false);
-      window.electronAPI?.tray.setRecordingActive(false);
+      setLiveStreamActive(false);
+      setLiveStreamReady(false);
+      setLiveStreamStatus(null);
+      setAudioRms(null);
+      setLastAudioAtMs(null);
+      window.electronAPI?.tray.setRecordingActive(false, stopOutcome, stopErrorMessage);
+      stopInFlightRef.current = false;
+      setStopping(false);
     }
   }, []);
 
@@ -401,6 +934,25 @@ function App() {
     });
     return () => offStopRequested?.();
   }, [handleStop]);
+
+  const handleTranscriptSegmentTextChange = (segmentId: string, text: string): void => {
+    setTranscriptSession((current) =>
+      reviewTranscriptSegmentText(current, {
+        id: segmentId,
+        text,
+        reviewedAtMs: Date.now(),
+      }),
+    );
+  };
+
+  const handleTranscriptSegmentReviewed = (segmentId: string): void => {
+    setTranscriptSession((current) =>
+      markTranscriptSegmentReviewed(current, {
+        id: segmentId,
+        reviewedAtMs: Date.now(),
+      }),
+    );
+  };
 
   return (
     <div className="app-root">
@@ -426,8 +978,13 @@ function App() {
             ) : recording ? (
               <>
                 <p className="control-copy">Kayıt sürüyor.</p>
-                <button className="danger-action" type="button" onClick={() => void handleStop()}>
-                  Bitir
+                <button
+                  className="danger-action"
+                  type="button"
+                  disabled={stopping}
+                  onClick={() => void handleStop()}
+                >
+                  {stopping ? 'Bitiriliyor...' : 'Bitir'}
                 </button>
               </>
             ) : (
@@ -491,8 +1048,35 @@ function App() {
             ) : null}
           </div>
           <div className="intelligence-workspace">
-            <TranscriptPanel session={transcriptSession} />
-            <SummaryPanel intelligence={meetingIntelligence} />
+            <TranscriptPanel
+              session={transcriptSession}
+              stream={{
+                directConfigured: Boolean(recorderConfig?.liveSttStreamUrl),
+                directReady: liveStreamReady,
+                directStatus: liveStreamStatus,
+                directActive: liveStreamActive,
+                audioRms,
+                audioActive: typeof audioRms === 'number' && audioRms >= ACTIVE_AUDIO_RMS,
+                lastAudioAtMs,
+                disabledReason: recorderConfig?.liveSttStreamReason ?? null,
+                preflight: liveStreamPreflight,
+                capturePreflight: audioCapturePreflight,
+                onPreflight: recording ? undefined : () => void handleLiveStreamPreflight(),
+              }}
+              onSegmentTextChange={handleTranscriptSegmentTextChange}
+              onSegmentReviewed={handleTranscriptSegmentReviewed}
+            />
+            <SummaryPanel
+              intelligence={meetingIntelligence}
+              transcript={transcriptSession}
+              autoSubmitMeetingAi={meetingIntelligence.status === 'waiting'}
+              onMeetingAiResult={(result) =>
+                setMeetingIntelligence((current) => setMeetingIntelligenceResult(current, result))
+              }
+              onMeetingAiError={(message) =>
+                setMeetingIntelligence((current) => failMeetingIntelligence(current, message))
+              }
+            />
           </div>
         </section>
       </main>

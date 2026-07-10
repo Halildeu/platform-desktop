@@ -1,6 +1,19 @@
-import { desktopFetch } from '../net/desktop-fetch';
+import { desktopFetch } from '../net/desktop-fetch.js';
 
 const API = '/api/v1/admin/meetings';
+const CREATE_CONTRACT_MAX_ATTEMPTS = 3;
+const CREATE_CONTRACT_RETRY_DELAY_MS = 250;
+const RETRYABLE_HTTP_STATUS = new Set([502, 503, 504]);
+const RETRYABLE_NETWORK_CODES = new Set([
+  'UND_ERR_SOCKET',
+  'UND_ERR_CONNECT_TIMEOUT',
+  'UND_ERR_HEADERS_TIMEOUT',
+  'UND_ERR_BODY_TIMEOUT',
+  'ECONNRESET',
+  'ECONNREFUSED',
+  'ETIMEDOUT',
+  'EPIPE',
+]);
 const MEETING_ID_PATTERN =
   /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
 
@@ -22,6 +35,32 @@ export interface CreateMeetingContractArgs {
   scheduledStart?: string;
   scheduledEnd?: string;
 }
+
+export interface MeetingAiAnalyzeSegment {
+  text: string;
+  start: number;
+  end?: number;
+}
+
+export interface MeetingAiAnalyzeRequest {
+  transcript: string;
+  meeting_id: string;
+  session_id?: string | null;
+  segments: MeetingAiAnalyzeSegment[];
+}
+
+export interface MeetingAiAnalyzeArgs {
+  meetingId: string;
+  request: MeetingAiAnalyzeRequest;
+}
+
+export type MeetingAiAnalyzeResponse = Record<string, unknown> & {
+  summary?: string | null;
+  decisions?: unknown[] | null;
+  action_items?: unknown[] | null;
+  citations?: unknown[] | null;
+  summary_citations?: unknown[] | null;
+};
 
 function isLocalHttp(url: URL): boolean {
   return (
@@ -57,7 +96,51 @@ export function meetingsUrl(cfg: MeetingClientConfig): string {
   return `${cfg.baseUrl}${API}`;
 }
 
-async function httpErrorMessage(res: Response): Promise<string> {
+export function meetingIntelligenceAnalyzeUrl(cfg: MeetingClientConfig, meetingId: string): string {
+  if (!MEETING_ID_PATTERN.test(meetingId)) {
+    throw new Error('meetingId must be a canonical UUID');
+  }
+  return `${meetingsUrl(cfg)}/${meetingId}/intelligence/analyze`;
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+function errorCode(error: unknown): string | null {
+  let current: unknown = error;
+  for (let depth = 0; depth < 4; depth += 1) {
+    if (!current || typeof current !== 'object') {
+      return null;
+    }
+    const record = current as { code?: unknown; cause?: unknown };
+    if (typeof record.code === 'string' && /^[A-Z0-9_]{2,64}$/.test(record.code)) {
+      return record.code;
+    }
+    current = record.cause;
+  }
+  return null;
+}
+
+function isRetryableNetworkError(error: unknown): boolean {
+  const code = errorCode(error);
+  if (code && RETRYABLE_NETWORK_CODES.has(code)) {
+    return true;
+  }
+  return error instanceof TypeError && error.message === 'fetch failed';
+}
+
+function retryableNetworkLabel(error: unknown): string {
+  return errorCode(error) ?? 'FETCH_FAILED';
+}
+
+async function retryDelay(attempt: number): Promise<void> {
+  await delay(CREATE_CONTRACT_RETRY_DELAY_MS * attempt);
+}
+
+async function httpErrorMessage(res: Response, operation: string): Promise<string> {
   const contentType = res.headers?.get('content-type') ?? '';
   let body = '';
   try {
@@ -94,7 +177,7 @@ async function httpErrorMessage(res: Response): Promise<string> {
   }
 
   const suffix = fields.length > 0 ? ` ${fields.join(' ')}` : '';
-  return `createMeetingContract failed: ${res.status}${suffix}`;
+  return `${operation} failed: ${res.status}${suffix}`;
 }
 
 function normalizeTitle(title: string | undefined): string {
@@ -128,6 +211,33 @@ function parseMeetingContract(value: unknown): MeetingContract {
   };
 }
 
+function parseMeetingAiAnalyzeResponse(value: unknown): MeetingAiAnalyzeResponse {
+  if (!value || typeof value !== 'object') {
+    throw new Error('meeting-ai response is not an object');
+  }
+  const record = value as Record<string, unknown>;
+  const arrayFields = [
+    'decisions',
+    'action_items',
+    'citations',
+    'summary_citations',
+    'rejected_claims',
+  ];
+  for (const field of arrayFields) {
+    if (record[field] !== undefined && record[field] !== null && !Array.isArray(record[field])) {
+      throw new Error(`meeting-ai response ${field} is not an array`);
+    }
+  }
+  if (
+    record.summary !== undefined &&
+    record.summary !== null &&
+    typeof record.summary !== 'string'
+  ) {
+    throw new Error('meeting-ai response summary is not a string');
+  }
+  return record as MeetingAiAnalyzeResponse;
+}
+
 export async function createMeetingContract(
   cfg: MeetingClientConfig,
   jwt: string,
@@ -140,16 +250,95 @@ export async function createMeetingContract(
     scheduledEnd: args.scheduledEnd,
   };
 
-  const res = await desktopFetch(meetingsUrl(cfg), {
+  const requestInit = {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${jwt}`,
       'Content-Type': 'application/json',
     },
     body: JSON.stringify(body),
-  });
-  if (!res.ok) {
-    throw new Error(await httpErrorMessage(res));
+  };
+
+  for (let attempt = 1; attempt <= CREATE_CONTRACT_MAX_ATTEMPTS; attempt += 1) {
+    let res: Response;
+    try {
+      res = await desktopFetch(meetingsUrl(cfg), requestInit);
+    } catch (error) {
+      if (attempt < CREATE_CONTRACT_MAX_ATTEMPTS && isRetryableNetworkError(error)) {
+        await retryDelay(attempt);
+        continue;
+      }
+      if (isRetryableNetworkError(error)) {
+        throw new Error(
+          `createMeetingContract failed before response after ${attempt} attempts: network=${retryableNetworkLabel(
+            error,
+          )}`,
+        );
+      }
+      throw error instanceof Error ? error : new Error(String(error));
+    }
+
+    if (!res.ok) {
+      if (attempt < CREATE_CONTRACT_MAX_ATTEMPTS && RETRYABLE_HTTP_STATUS.has(res.status)) {
+        await retryDelay(attempt);
+        continue;
+      }
+      throw new Error(await httpErrorMessage(res, 'createMeetingContract'));
+    }
+    return parseMeetingContract(await res.json());
   }
-  return parseMeetingContract(await res.json());
+
+  throw new Error('createMeetingContract failed: retry loop exhausted');
+}
+
+export async function analyzeMeetingIntelligence(
+  cfg: MeetingClientConfig,
+  jwt: string,
+  args: MeetingAiAnalyzeArgs,
+): Promise<MeetingAiAnalyzeResponse> {
+  const body = {
+    ...args.request,
+    meeting_id: args.meetingId,
+    segments: args.request.segments ?? [],
+  };
+  const requestInit = {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${jwt}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(body),
+  };
+
+  for (let attempt = 1; attempt <= CREATE_CONTRACT_MAX_ATTEMPTS; attempt += 1) {
+    let res: Response;
+    try {
+      res = await desktopFetch(meetingIntelligenceAnalyzeUrl(cfg, args.meetingId), requestInit);
+    } catch (error) {
+      if (attempt < CREATE_CONTRACT_MAX_ATTEMPTS && isRetryableNetworkError(error)) {
+        await retryDelay(attempt);
+        continue;
+      }
+      if (isRetryableNetworkError(error)) {
+        throw new Error(
+          `analyzeMeetingIntelligence failed before response after ${attempt} attempts: network=${retryableNetworkLabel(
+            error,
+          )}`,
+        );
+      }
+      throw error instanceof Error ? error : new Error(String(error));
+    }
+
+    if (!res.ok) {
+      if (attempt < CREATE_CONTRACT_MAX_ATTEMPTS && RETRYABLE_HTTP_STATUS.has(res.status)) {
+        await retryDelay(attempt);
+        continue;
+      }
+      throw new Error(await httpErrorMessage(res, 'analyzeMeetingIntelligence'));
+    }
+
+    return parseMeetingAiAnalyzeResponse(await res.json());
+  }
+
+  throw new Error('analyzeMeetingIntelligence failed: retry loop exhausted');
 }

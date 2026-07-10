@@ -66,6 +66,8 @@ vi.mock('../services/recorder-runtime-config', () => ({
     deviceId: 'dev1',
     ready: true,
     reason: null,
+    liveSttStreamUrl: null,
+    liveSttStreamReason: null,
   })),
 }));
 
@@ -175,6 +177,9 @@ describe('audio IPC recorder consent gate', () => {
     expect(mocks.recordConsent).toHaveBeenCalledTimes(1);
     expect(mocks.senderStart).toHaveBeenCalledTimes(1);
     expect(mocks.transcriptSubscriptionStart).toHaveBeenCalledTimes(1);
+    expect(mocks.transcriptSubscriptionCtor).toHaveBeenCalledWith(
+      expect.objectContaining({ streamPreferred: false }),
+    );
 
     const consentArgs = mocks.recordConsent.mock.calls[0][2] as {
       meetingId: string;
@@ -212,10 +217,10 @@ describe('audio IPC recorder consent gate', () => {
     expect(mocks.clearCapturePermissionLease).toHaveBeenCalledTimes(1);
   });
 
-  it('accepts one-second PCM16 mono chunks from the renderer', async () => {
+  it('accepts two-second PCM16 mono chunks from the renderer', async () => {
     await acceptConsent();
     const started = (await startHandler()({}, meetingId, deviceId)) as { captureId: string };
-    const bytes = new Uint8Array(32_000);
+    const bytes = new Uint8Array(64_000);
 
     await expect(
       chunkHandler()({}, { captureId: started.captureId, bytes, startedAtMs: 1781820000000 }),
@@ -224,7 +229,7 @@ describe('audio IPC recorder consent gate', () => {
     expect(mocks.senderSend).toHaveBeenCalledWith(bytes, 1781820000000);
   });
 
-  it('rejects chunks larger than the bounded one-second PCM16 contract', async () => {
+  it('rejects chunks larger than the bounded two-second PCM16 contract', async () => {
     await acceptConsent();
     const started = (await startHandler()({}, meetingId, deviceId)) as { captureId: string };
 
@@ -233,11 +238,11 @@ describe('audio IPC recorder consent gate', () => {
         {},
         {
           captureId: started.captureId,
-          bytes: new Uint8Array(32_001),
+          bytes: new Uint8Array(64_001),
           startedAtMs: 1781820000000,
         },
       ),
-    ).rejects.toThrow('audio chunk byte length out of bounds: 32001');
+    ).rejects.toThrow('audio chunk byte length out of bounds: 64001');
 
     expect(mocks.senderSend).not.toHaveBeenCalled();
   });
@@ -268,6 +273,20 @@ describe('audio IPC recorder consent gate', () => {
       message:
         'Transkript teslim endpointi bu audio-gateway imageinda yok; gateway rollout bekleniyor.',
     });
+  });
+
+  it('does not surface transcript long-poll timeouts as renderer errors', async () => {
+    const send = vi.fn();
+    await acceptConsent();
+    await startHandler()({ sender: { id: 7, send } }, meetingId, deviceId);
+
+    const args = mocks.transcriptSubscriptionCtor.mock.calls[0][0] as {
+      onError: (error: Error) => void;
+    };
+    args.onError(new Error('readTranscriptEvents timed out after 15000ms'));
+    args.onError(new Error('readTranscriptEvents timed out after 25000ms'));
+
+    expect(send).not.toHaveBeenCalledWith('audio:transcript-error', expect.anything());
   });
 
   it('cleans the active recorder state when its renderer unloads', async () => {

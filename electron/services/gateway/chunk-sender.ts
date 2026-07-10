@@ -12,7 +12,7 @@ import {
   newIdempotencyKey,
   sendChunk,
   startSession,
-} from './gateway-client';
+} from './gateway-client.js';
 
 export type SessionState = 'idle' | 'active' | 'finished';
 

@@ -12,10 +12,12 @@
 
 import { randomBytes } from 'node:crypto';
 
-import { desktopFetch } from '../net/desktop-fetch';
+import { desktopFetch } from '../net/desktop-fetch.js';
 
 const API = '/api/v1/audio-gateway';
 const HTTP_TIMEOUT_MS = 15_000;
+const TRANSCRIPT_EVENTS_HTTP_TIMEOUT_MS = 25_000;
+const SSE_DECODER_FATAL = false;
 
 export interface GatewayConfig {
   baseUrl: string;
@@ -76,6 +78,19 @@ export function transcriptEventsUrl(
   }
   return url.toString();
 }
+export function transcriptEventsStreamUrl(
+  cfg: GatewayConfig,
+  sessionId: string,
+  args: { after?: string | null } = {},
+): string {
+  const url = new URL(
+    `${cfg.baseUrl}${API}/sessions/${encodeURIComponent(sessionId)}/transcript-events/stream`,
+  );
+  if (args.after) {
+    url.searchParams.set('after', args.after);
+  }
+  return url.toString();
+}
 
 /** Idempotency-Key (opaque 16-128 char). */
 export function newIdempotencyKey(): string {
@@ -86,9 +101,10 @@ async function fetchWithTimeout(
   input: string,
   init: RequestInit,
   label: string,
+  timeoutMs: number = HTTP_TIMEOUT_MS,
 ): Promise<Response> {
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), HTTP_TIMEOUT_MS);
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
   if (init.signal) {
     if (init.signal.aborted) {
       controller.abort();
@@ -101,7 +117,7 @@ async function fetchWithTimeout(
   } catch (err) {
     const name = err instanceof Error ? err.name : '';
     if (name === 'AbortError' || name === 'TimeoutError') {
-      throw new Error(`${label} timed out after ${HTTP_TIMEOUT_MS}ms`);
+      throw new Error(`${label} timed out after ${timeoutMs}ms`);
     }
     throw err;
   } finally {
@@ -209,6 +225,13 @@ export interface TranscriptGatewayEvent {
   meetingId: string;
   chunkSeq: number;
   chunkStartedAtMs: number;
+  windowSeq?: number | null;
+  firstChunkSeq?: number | null;
+  lastChunkSeq?: number | null;
+  windowStartedAtMs?: number | null;
+  windowEndedAtMs?: number | null;
+  audioDurationMs?: number | null;
+  flushReason?: string | null;
   text: string;
   textLength: number;
   status: string;
@@ -224,6 +247,13 @@ export interface TranscriptEventsPage {
   events: TranscriptGatewayEvent[];
   nextCursor: string | null;
   hasMore: boolean;
+}
+
+export interface TranscriptEventsStreamArgs {
+  after?: string | null;
+  signal?: AbortSignal;
+  onEvent: (event: TranscriptGatewayEvent) => void;
+  onCursor?: (cursor: string) => void;
 }
 
 /** POST /consents — server-time audit proof before local capture starts. */
@@ -358,9 +388,137 @@ export async function readTranscriptEvents(
       signal: args.signal,
     },
     'readTranscriptEvents',
+    TRANSCRIPT_EVENTS_HTTP_TIMEOUT_MS,
   );
   if (!res.ok) {
     throw new Error(await httpErrorMessage(res, 'readTranscriptEvents'));
   }
   return (await res.json()) as TranscriptEventsPage;
+}
+
+/** GET /sessions/{id}/transcript-events/stream — SSE live transcript delivery. */
+export async function streamTranscriptEvents(
+  cfg: GatewayConfig,
+  jwt: string,
+  sessionId: string,
+  args: TranscriptEventsStreamArgs,
+): Promise<void> {
+  const res = await desktopFetch(transcriptEventsStreamUrl(cfg, sessionId, { after: args.after }), {
+    method: 'GET',
+    headers: {
+      Authorization: `Bearer ${jwt}`,
+      Accept: 'text/event-stream',
+    },
+    signal: args.signal,
+  });
+  if (!res.ok) {
+    throw new Error(await httpErrorMessage(res, 'streamTranscriptEvents'));
+  }
+  if (!res.body) {
+    throw new Error('streamTranscriptEvents failed: response body is empty');
+  }
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder('utf-8', { fatal: SSE_DECODER_FATAL });
+  const parser = new SseTranscriptParser(args.onEvent, args.onCursor);
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) {
+        break;
+      }
+      parser.push(decoder.decode(value, { stream: true }));
+    }
+    parser.push(decoder.decode());
+    parser.flush();
+  } finally {
+    reader.releaseLock();
+  }
+}
+
+class SseTranscriptParser {
+  private buffer = '';
+  private eventId: string | null = null;
+  private eventName: string | null = null;
+  private dataLines: string[] = [];
+
+  constructor(
+    private readonly onEvent: (event: TranscriptGatewayEvent) => void,
+    private readonly onCursor?: (cursor: string) => void,
+  ) {}
+
+  push(chunk: string): void {
+    this.buffer += chunk;
+    while (true) {
+      const newlineIndex = this.buffer.search(/\r?\n/);
+      if (newlineIndex < 0) {
+        return;
+      }
+      const rawLine = this.buffer.slice(0, newlineIndex);
+      const newlineLength = this.buffer[newlineIndex] === '\r' ? 2 : 1;
+      this.buffer = this.buffer.slice(newlineIndex + newlineLength);
+      this.acceptLine(rawLine);
+    }
+  }
+
+  flush(): void {
+    if (this.buffer.length > 0) {
+      this.acceptLine(this.buffer);
+      this.buffer = '';
+    }
+    this.dispatch();
+  }
+
+  private acceptLine(rawLine: string): void {
+    const line = rawLine.endsWith('\r') ? rawLine.slice(0, -1) : rawLine;
+    if (line === '') {
+      this.dispatch();
+      return;
+    }
+    if (line.startsWith(':')) {
+      return;
+    }
+
+    const sep = line.indexOf(':');
+    const field = sep >= 0 ? line.slice(0, sep) : line;
+    const value = sep >= 0 ? line.slice(sep + 1).replace(/^ /, '') : '';
+    if (field === 'id') {
+      this.eventId = value;
+    } else if (field === 'event') {
+      this.eventName = value;
+    } else if (field === 'data') {
+      this.dataLines.push(value);
+    }
+  }
+
+  private dispatch(): void {
+    const data = this.dataLines.join('\n').trim();
+    if (this.eventId) {
+      this.onCursor?.(this.eventId);
+    }
+    if (!data) {
+      this.resetEvent();
+      return;
+    }
+    if (this.eventName && this.eventName !== 'transcript-chunk') {
+      this.resetEvent();
+      return;
+    }
+
+    try {
+      const event = JSON.parse(data) as TranscriptGatewayEvent;
+      if (typeof event.eventId === 'string' && typeof event.text === 'string') {
+        this.onEvent(event);
+        this.onCursor?.(event.eventId);
+      }
+    } finally {
+      this.resetEvent();
+    }
+  }
+
+  private resetEvent(): void {
+    this.eventId = null;
+    this.eventName = null;
+    this.dataLines = [];
+  }
 }

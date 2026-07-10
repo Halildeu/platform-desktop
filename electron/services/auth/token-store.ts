@@ -15,7 +15,7 @@
 import { safeStorage } from 'electron';
 import Store from 'electron-store';
 
-import { isExpired, type TokenSet } from './token-utils';
+import { isExpired, type TokenSet } from './token-utils.js';
 
 interface PersistShape {
   /** safeStorage ile şifreli refresh-token (base64). */

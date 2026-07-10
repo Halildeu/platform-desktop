@@ -4,7 +4,7 @@ Meeting Intelligence Desktop Client — **Faz 24 bağımsız Meeting Intelligenc
 
 ## Amaç
 
-Toplantı katılımcıları için masaüstü deneyimi (mac/Windows/Linux):
+ERP/CRM bağımsız toplantı zekası için masaüstü deneyimi (mac/Windows/Linux). Belirli bir ERP adı runtime contract'a gömülmez; ERP/CRM'ye özel hedefler entegrasyon adapter'ları üzerinden map edilir.
 
 - 🎙️ Sistem sesi (loopback) + mikrofon yakalama — tüm platform / yüz yüze / hibrit tek client
 - 📡 REST chunk akışı → `audio-gateway-service` (`POST /sessions → /chunks → /finish`)
@@ -16,7 +16,7 @@ Toplantı katılımcıları için masaüstü deneyimi (mac/Windows/Linux):
 
 Faz 24 M6 Integration kapsamında konumlanır.
 
-## Repo Konumu (Workcube ekosistem haritası)
+## Repo Konumu (Platform ekosistem haritası)
 
 | Repo                                                                   | Rol                                                                              |
 | ---------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
@@ -63,7 +63,7 @@ Faz 24 M6 Integration kapsamında konumlanır.
         Renderer canlı UI güncellemesi (status/sonuç; meetingId ile tek dashboard)
 ```
 
-## Reuse — Workcube Ekosisteminden
+## Reuse — Platform Ekosisteminden
 
 - **Keycloak SSO** → OAuth2 PKCE + token refresh (auth-service realm)
 - **api-gateway** → JWT validation + routing
@@ -72,7 +72,7 @@ Faz 24 M6 Integration kapsamında konumlanır.
 - **mfe-meeting** patterns (platform-web) → React component reuse
 - **AG-Grid** → transcript timeline + speaker breakdown
 - **Cross-AI Codex review** → her PR adversarial
-- **Türkçe i18n** → Workcube dil pattern
+- **Türkçe i18n** → Platform dil pattern
 
 ## Yeni Eklemeler (Desktop özel)
 
@@ -168,17 +168,37 @@ Open acceptance boundaries before recorder can be called end-to-end production-r
 The recorder now exposes two user-facing workspaces:
 
 - **Canlı Transkript**: recorder session metadata, lifecycle state, transcript timeline states
-  (`draft`, `stabilizing`, `final`, `revised`), and an honest empty state while no transcript
-  stream is connected.
+  (`draft`, `stabilizing`, `final`, `revised`), live stream/audio diagnostics, review filters,
+  flow-health coverage signals, word-rate coverage warnings, stable-row review actions, and an
+  honest empty state while no transcript stream is connected.
 - **Toplantı Çıktısı**: typed meeting-intelligence result surface for summary, decisions,
-  action items, citation timestamps, Markdown export, CSV export, and native print/PDF flow.
+  action items, citation timestamps, source readiness, Meeting AI source-package export,
+  structured source-quality gate metadata, word-rate source-quality gating, Markdown/TXT/CSV/JSON
+  export, share drafts, native print/PDF flow, generic ERP/CRM adapter handoff preview, and
+  explicit package readiness state.
+- **ERP/CRM handoff**: visible vendor-neutral adapter manifest and capability list,
+  review-before-write readiness gate,
+  source-evidence metadata with quality-gate risk/action, object-level dry-run plan (`meeting_note`, `decision_record`,
+  `action_task`), stale-source fail-closed gating, review-vs-transfer package labels, and
+  idempotent integration JSON for backend-owned adapters.
 
 Boundaries:
 
 - No fake AI summary is rendered.
 - No raw audio or transcript is persisted to local disk by default.
+- Raw audio and raw transcript are excluded from ERP/CRM handoff packages by default.
+- ERP/CRM transfer-ready packages require comparable transcript source evidence; missing or
+  unknown source freshness is downgraded to a review package instead of writing to any adapter.
+- If the transcript source changes after Meeting AI output generation, the ERP/CRM package is
+  downgraded to a review package and the product surface offers a Meeting AI refresh action when
+  the latest source is eligible for backend-gateway submission.
 - Meeting-intelligence content is shown only when an approved result is supplied to the renderer
-  state model. Real provider/runtime acceptance remains tracked by `platform-ai#162`.
+  state model or generated through the backend gateway adapter. Real provider/runtime acceptance
+  remains tracked by the Faz 24 GitOps/runtime issues.
+- ERP/CRM brand names are not product contracts; ERP/CRM-specific targets are mapped only through backend
+  adapters and the desktop surface stays generic across ERP/CRM systems.
+- Specific ERP pilot references stay outside the product contract; package identity, window title, adapter
+  manifest, handoff JSON, and runtime copy remain vendor-neutral by default.
 
 ## Lisans
 

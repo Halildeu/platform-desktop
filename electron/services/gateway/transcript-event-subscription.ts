@@ -1,14 +1,16 @@
 import {
   readTranscriptEvents,
+  streamTranscriptEvents,
   type GatewayConfig,
   type TranscriptGatewayEvent,
-} from './gateway-client';
+} from './gateway-client.js';
 
-const DEFAULT_POLL_INTERVAL_MS = 1_000;
+const DEFAULT_POLL_INTERVAL_MS = 500;
 const DEFAULT_ERROR_RETRY_MS = 3_000;
 const DEFAULT_LIMIT = 50;
 const MAX_IMMEDIATE_DRAIN_POLLS = 20;
 const DRAIN_BACKOFF_MS = 25;
+const READ_TIMEOUT_PREFIX = 'readTranscriptEvents timed out after ';
 
 export interface TranscriptEventSubscriptionArgs {
   cfg: GatewayConfig;
@@ -19,6 +21,7 @@ export interface TranscriptEventSubscriptionArgs {
   pollIntervalMs?: number;
   errorRetryMs?: number;
   limit?: number;
+  streamPreferred?: boolean;
 }
 
 export class TranscriptEventSubscription {
@@ -36,7 +39,11 @@ export class TranscriptEventSubscription {
       return;
     }
     this.stopped = false;
-    this.schedule(0);
+    if (this.args.streamPreferred === false) {
+      this.schedule(0);
+      return;
+    }
+    this.startStream();
   }
 
   stop(): void {
@@ -59,6 +66,42 @@ export class TranscriptEventSubscription {
     this.timer = setTimeout(() => {
       void this.tick();
     }, delayMs);
+  }
+
+  private startStream(): void {
+    if (this.stopped) {
+      return;
+    }
+    const controller = new AbortController();
+    this.abortController = controller;
+    void this.runStream(controller);
+  }
+
+  private async runStream(controller: AbortController): Promise<void> {
+    try {
+      await streamTranscriptEvents(this.args.cfg, await this.args.getJwt(), this.args.sessionId, {
+        after: this.cursor,
+        signal: controller.signal,
+        onEvent: (event) => this.args.onEvent(event),
+        onCursor: (cursor) => {
+          this.cursor = cursor;
+        },
+      });
+      if (!this.stopped && !controller.signal.aborted) {
+        this.consecutiveDrainPolls = 0;
+        this.schedule(0);
+      }
+    } catch {
+      if (this.stopped || controller.signal.aborted) {
+        return;
+      }
+      this.consecutiveDrainPolls = 0;
+      this.schedule(0);
+    } finally {
+      if (this.abortController === controller) {
+        this.abortController = null;
+      }
+    }
   }
 
   private async tick(): Promise<void> {
@@ -90,6 +133,10 @@ export class TranscriptEventSubscription {
       }
       this.consecutiveDrainPolls = 0;
       const error = err instanceof Error ? err : new Error(String(err));
+      if (isReadTranscriptTimeout(error)) {
+        this.schedule(this.args.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS);
+        return;
+      }
       if (error.message !== this.lastErrorMessage) {
         this.lastErrorMessage = error.message;
         this.args.onError?.(error);
@@ -113,4 +160,8 @@ export class TranscriptEventSubscription {
     }
     return DRAIN_BACKOFF_MS;
   }
+}
+
+function isReadTranscriptTimeout(error: Error): boolean {
+  return error.message.startsWith(READ_TIMEOUT_PREFIX);
 }

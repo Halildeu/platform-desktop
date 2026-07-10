@@ -2,7 +2,7 @@
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { startRecording } from './capture';
+import { resolvePcmWorkletModuleUrl, startRecording, testAudioCaptureWorklet } from './capture';
 
 class FakeTrack {
   stop = vi.fn();
@@ -35,10 +35,12 @@ class FakeAudioNode {
 }
 
 class FakeAudioContext {
+  static addModule = vi.fn().mockResolvedValue(undefined);
+
   sampleRate = 48_000;
   destination = new FakeAudioNode();
   audioWorklet = {
-    addModule: vi.fn().mockResolvedValue(undefined),
+    addModule: FakeAudioContext.addModule,
   };
   close = vi.fn().mockResolvedValue(undefined);
 
@@ -65,6 +67,38 @@ class FakeAudioWorkletNode extends FakeAudioNode {
   constructor() {
     super();
     FakeAudioWorkletNode.lastInstance = this;
+  }
+}
+
+class FakeWebSocket extends EventTarget {
+  static CONNECTING = 0;
+  static OPEN = 1;
+  static CLOSED = 3;
+  static instances: FakeWebSocket[] = [];
+
+  readyState = FakeWebSocket.CONNECTING;
+  sent: unknown[] = [];
+
+  constructor(readonly url: string) {
+    super();
+    FakeWebSocket.instances.push(this);
+  }
+
+  send(data: unknown): void {
+    this.sent.push(data);
+  }
+
+  close(): void {
+    this.readyState = FakeWebSocket.CLOSED;
+    this.dispatchEvent(new Event('close'));
+  }
+
+  open(): void {
+    this.readyState = FakeWebSocket.OPEN;
+  }
+
+  message(payload: unknown): void {
+    this.dispatchEvent(new MessageEvent('message', { data: JSON.stringify(payload) }));
   }
 }
 
@@ -112,6 +146,7 @@ function installElectronApiMock(): void {
     },
     meeting: {
       createContract: vi.fn(),
+      analyze: vi.fn(),
     },
     audio: {
       recorderConfig: vi.fn(),
@@ -132,12 +167,60 @@ function installElectronApiMock(): void {
 
 afterEach(() => {
   FakeAudioWorkletNode.lastInstance = null;
+  FakeAudioContext.addModule.mockReset();
+  FakeAudioContext.addModule.mockResolvedValue(undefined);
+  FakeWebSocket.instances = [];
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
   delete window.electronAPI;
 });
 
 describe('startRecording', () => {
+  it('resolves the worklet next to the rendered document for file-backed Electron builds', () => {
+    expect(resolvePcmWorkletModuleUrl('file:///Applications/Meeting/dist/index.html')).toBe(
+      'file:///Applications/Meeting/dist/pcm-worklet.js',
+    );
+    expect(resolvePcmWorkletModuleUrl('http://localhost:5173/')).toBe(
+      'http://localhost:5173/pcm-worklet.js',
+    );
+  });
+
+  it('preflights the capture worklet without opening the microphone', async () => {
+    installElectronApiMock();
+    installBrowserAudioMocks();
+
+    const result = await testAudioCaptureWorklet(
+      500,
+      'file:///Applications/Meeting/dist/index.html',
+    );
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        ok: true,
+        message: 'Ses işleyici hazır.',
+        moduleUrl: 'file:///Applications/Meeting/dist/pcm-worklet.js',
+      }),
+    );
+    expect(result.elapsedMs).toBeGreaterThanOrEqual(0);
+    expect(navigator.mediaDevices.getUserMedia).not.toHaveBeenCalled();
+  });
+
+  it('reports capture worklet preload failures as preflight errors', async () => {
+    installElectronApiMock();
+    installBrowserAudioMocks();
+    FakeAudioContext.addModule.mockRejectedValueOnce(new Error('Unable to load a worklet module'));
+
+    const result = await testAudioCaptureWorklet(
+      500,
+      'file:///Applications/Meeting/dist/index.html',
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.message).toContain('Unable to load a worklet module');
+    expect(result.moduleUrl).toBe('file:///Applications/Meeting/dist/pcm-worklet.js');
+    expect(navigator.mediaDevices.getUserMedia).not.toHaveBeenCalled();
+  });
+
   it('skips loopback capture on macOS and starts mic-only recording', async () => {
     installElectronApiMock();
     setUserAgent('Mozilla/5.0 (Macintosh; Intel Mac OS X 15_5)');
@@ -170,7 +253,7 @@ describe('startRecording', () => {
     await recorder.stop();
   });
 
-  it('uploads one-second PCM16 chunks to reduce REST backpressure', async () => {
+  it('uploads two-second PCM16 chunks for a balanced latency/accuracy window', async () => {
     installElectronApiMock();
     setUserAgent('Mozilla/5.0 (Macintosh; Intel Mac OS X 15_5)');
     installBrowserAudioMocks();
@@ -180,7 +263,7 @@ describe('startRecording', () => {
     expect(captureNode?.port.onmessage).toBeTypeOf('function');
 
     captureNode?.port.onmessage?.({
-      data: new Float32Array(48_000),
+      data: new Float32Array(96_000),
     } as MessageEvent<Float32Array>);
 
     await Promise.resolve();
@@ -189,8 +272,210 @@ describe('startRecording', () => {
     expect(window.electronAPI?.audio.sendChunk).toHaveBeenCalledTimes(1);
     expect(window.electronAPI?.audio.sendChunk).toHaveBeenCalledWith({
       captureId: 'CAP-1',
-      bytes: expect.objectContaining({ byteLength: 32_000 }),
+      bytes: expect.objectContaining({ byteLength: 64_000 }),
       startedAtMs: expect.any(Number),
     });
+  });
+
+  it('streams 100ms Float32 frames to Direct-STT while keeping REST chunks at two seconds', async () => {
+    installElectronApiMock();
+    setUserAgent('Mozilla/5.0 (Macintosh; Intel Mac OS X 15_5)');
+    installBrowserAudioMocks();
+    vi.stubGlobal('WebSocket', FakeWebSocket);
+    const onLiveStreamReady = vi.fn();
+    const onAudioActivity = vi.fn();
+
+    const recorder = await startRecording('meeting-1', 'desktop-1', {
+      liveSttStreamUrl: 'ws://127.0.0.1:18220/ws/stream',
+      onLiveStreamReady,
+      onAudioActivity,
+    });
+    const captureNode = FakeAudioWorkletNode.lastInstance;
+    const ws = FakeWebSocket.instances[0];
+
+    expect(ws?.url).toBe('ws://127.0.0.1:18220/ws/stream');
+    ws?.open();
+    ws?.message({ type: 'ready' });
+    expect(onLiveStreamReady).toHaveBeenCalledTimes(1);
+
+    captureNode?.port.onmessage?.({
+      data: new Float32Array(48_000),
+    } as MessageEvent<Float32Array>);
+
+    expect(onAudioActivity).toHaveBeenCalledWith({
+      rms: 0,
+      capturedAtMs: expect.any(Number),
+    });
+    expect(ws?.sent).toHaveLength(10);
+    for (const frame of ws?.sent ?? []) {
+      expect(frame).toBeInstanceOf(ArrayBuffer);
+      expect((frame as ArrayBuffer).byteLength).toBe(6_400);
+    }
+    expect(window.electronAPI?.audio.sendChunk).not.toHaveBeenCalled();
+
+    await recorder.stop();
+  });
+
+  it('keeps microphone recording alive when Direct-STT stream construction fails', async () => {
+    installElectronApiMock();
+    setUserAgent('Mozilla/5.0 (Macintosh; Intel Mac OS X 15_5)');
+    installBrowserAudioMocks();
+    class ThrowingWebSocket {
+      constructor() {
+        throw new Error('invalid direct STT URL');
+      }
+    }
+    vi.stubGlobal('WebSocket', ThrowingWebSocket);
+    const onLiveStreamStatus = vi.fn();
+    const onLiveTranscriptError = vi.fn();
+
+    const recorder = await startRecording('meeting-1', 'desktop-1', {
+      liveSttStreamUrl: 'ws://127.0.0.1:18220/ws/stream',
+      onLiveStreamStatus,
+      onLiveTranscriptError,
+    });
+
+    expect(recorder.sessionId).toBe('SES-1');
+    expect(recorder.hasLoopback).toBe(false);
+    expect(window.electronAPI?.audio.start).toHaveBeenCalledWith('meeting-1', 'desktop-1');
+    expect(onLiveStreamStatus).toHaveBeenCalledWith({ status: 'connecting' });
+    expect(onLiveStreamStatus).toHaveBeenCalledWith({
+      status: 'error',
+      reason: 'invalid direct STT URL',
+    });
+    expect(onLiveTranscriptError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: 'Live STT stream kurulamadı: invalid direct STT URL',
+      }),
+    );
+
+    await recorder.stop();
+
+    expect(window.electronAPI?.audio.finish).toHaveBeenCalledWith('CAP-1');
+  });
+
+  it('falls back to direct-only capture when gateway start fails and Direct-STT is configured', async () => {
+    installElectronApiMock();
+    setUserAgent('Mozilla/5.0 (Macintosh; Intel Mac OS X 15_5)');
+    const { micTrack } = installBrowserAudioMocks();
+    vi.stubGlobal('WebSocket', FakeWebSocket);
+    vi.mocked(window.electronAPI!.audio.start).mockRejectedValueOnce(
+      new Error('Direct STT baglanti hatasi'),
+    );
+
+    const recorder = await startRecording('meeting-1', 'desktop-1', {
+      liveSttStreamUrl: 'ws://127.0.0.1:18220/ws/stream',
+    });
+    const captureNode = FakeAudioWorkletNode.lastInstance;
+    const ws = FakeWebSocket.instances[0];
+
+    expect(recorder.sessionId).toMatch(/^LOCAL-/);
+    expect(recorder.gatewayActive).toBe(false);
+    expect(recorder.gatewayError).toBe('Direct STT baglanti hatasi');
+    expect(window.electronAPI?.audio.start).toHaveBeenCalledWith('meeting-1', 'desktop-1');
+    expect(ws?.url).toBe('ws://127.0.0.1:18220/ws/stream');
+
+    ws?.open();
+    ws?.message({ type: 'ready' });
+    captureNode?.port.onmessage?.({
+      data: new Float32Array(48_000),
+    } as MessageEvent<Float32Array>);
+
+    expect(ws?.sent).toHaveLength(10);
+    expect(window.electronAPI?.audio.sendChunk).not.toHaveBeenCalled();
+
+    await recorder.stop();
+
+    expect(micTrack.stop).toHaveBeenCalled();
+    expect(window.electronAPI?.audio.finish).not.toHaveBeenCalled();
+    expect(window.electronAPI?.audio.abort).not.toHaveBeenCalled();
+  });
+
+  it('falls back to direct-only capture for Electron-wrapped Direct-STT startup failures', async () => {
+    installElectronApiMock();
+    setUserAgent('Mozilla/5.0 (Macintosh; Intel Mac OS X 15_5)');
+    const { micTrack } = installBrowserAudioMocks();
+    vi.stubGlobal('WebSocket', FakeWebSocket);
+    vi.mocked(window.electronAPI!.audio.start).mockRejectedValueOnce(
+      new Error(
+        "Error invoking remote method 'audio:start': Error: Direct STT bağlantı hatası. Kayıt başlatılmadı; mikrofon açılmadı.",
+      ),
+    );
+
+    const recorder = await startRecording('meeting-1', 'desktop-1', {
+      liveSttStreamUrl: 'ws://127.0.0.1:18220/ws/stream',
+    });
+    const ws = FakeWebSocket.instances[0];
+
+    expect(recorder.sessionId).toMatch(/^LOCAL-/);
+    expect(recorder.gatewayActive).toBe(false);
+    expect(recorder.gatewayError).toContain('Direct STT bağlantı hatası');
+    expect(window.electronAPI?.audio.start).toHaveBeenCalledWith('meeting-1', 'desktop-1');
+    expect(ws?.url).toBe('ws://127.0.0.1:18220/ws/stream');
+
+    await recorder.stop();
+
+    expect(micTrack.stop).toHaveBeenCalled();
+    expect(window.electronAPI?.audio.finish).not.toHaveBeenCalled();
+    expect(window.electronAPI?.audio.abort).not.toHaveBeenCalled();
+  });
+
+  it('falls back to direct-only capture when recorder preparation fails before microphone opens', async () => {
+    installElectronApiMock();
+    setUserAgent('Mozilla/5.0 (Macintosh; Intel Mac OS X 15_5)');
+    const { micTrack } = installBrowserAudioMocks();
+    vi.stubGlobal('WebSocket', FakeWebSocket);
+    vi.mocked(window.electronAPI!.audio.prepareCapture).mockRejectedValueOnce(
+      new Error('Direct STT bağlantı hatası. Kayıt başlatılmadı; mikrofon açılmadı.'),
+    );
+
+    const recorder = await startRecording('meeting-1', 'desktop-1', {
+      liveSttStreamUrl: 'ws://127.0.0.1:18220/ws/stream',
+    });
+    const captureNode = FakeAudioWorkletNode.lastInstance;
+    const ws = FakeWebSocket.instances[0];
+
+    expect(recorder.sessionId).toMatch(/^LOCAL-/);
+    expect(recorder.gatewayActive).toBe(false);
+    expect(recorder.gatewayError).toBe(
+      'Direct STT bağlantı hatası. Kayıt başlatılmadı; mikrofon açılmadı.',
+    );
+    expect(window.electronAPI?.audio.start).not.toHaveBeenCalled();
+    expect(ws?.url).toBe('ws://127.0.0.1:18220/ws/stream');
+
+    ws?.open();
+    ws?.message({ type: 'ready' });
+    captureNode?.port.onmessage?.({
+      data: new Float32Array(48_000),
+    } as MessageEvent<Float32Array>);
+
+    expect(ws?.sent).toHaveLength(10);
+    expect(window.electronAPI?.audio.sendChunk).not.toHaveBeenCalled();
+
+    await recorder.stop();
+
+    expect(micTrack.stop).toHaveBeenCalled();
+    expect(window.electronAPI?.audio.finish).not.toHaveBeenCalled();
+    expect(window.electronAPI?.audio.abort).not.toHaveBeenCalled();
+  });
+
+  it('does not use direct-only fallback for recorder contract errors', async () => {
+    installElectronApiMock();
+    setUserAgent('Mozilla/5.0 (Macintosh; Intel Mac OS X 15_5)');
+    const { micTrack } = installBrowserAudioMocks();
+    vi.stubGlobal('WebSocket', FakeWebSocket);
+    vi.mocked(window.electronAPI!.audio.start).mockRejectedValueOnce(
+      new Error('consent required before recording'),
+    );
+
+    await expect(
+      startRecording('meeting-1', 'desktop-1', {
+        liveSttStreamUrl: 'ws://127.0.0.1:18220/ws/stream',
+      }),
+    ).rejects.toThrow('consent required before recording');
+
+    expect(micTrack.stop).toHaveBeenCalled();
+    expect(FakeWebSocket.instances).toHaveLength(0);
+    expect(window.electronAPI?.audio.cancelCapture).toHaveBeenCalledTimes(1);
   });
 });
