@@ -43,6 +43,13 @@ describe('generic ERP CRM product scope', () => {
     });
   });
 
+  it('keeps the entire packaging manifest vendor-neutral (mac extendInfo, linux desktop entry, all build config)', () => {
+    // Dar alan taraması (description/appId/productName) mac extendInfo izin
+    // metinleri ve linux desktop entry gibi paketleme alanlarındaki marka
+    // sızıntısını kaçırır — ham dosya bütünüyle taranır.
+    expectVendorNeutral(readWorkspaceFile('package.json'));
+  });
+
   it('keeps the ERP CRM handoff adapter manifest vendor-neutral', () => {
     const manifest = JSON.parse(buildMeetingOutputAdapterManifestJson(1782741700000)) as {
       target_family: string;
