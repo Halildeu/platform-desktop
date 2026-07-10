@@ -23,6 +23,7 @@ import { registerAudioIpc } from './ipc/audio';
 import { registerAuthIpc } from './ipc/auth';
 import { registerMeetingIpc } from './ipc/meeting';
 import { isAutoLaunchEnabled, setAutoLaunchEnabled } from './services/auto-launch';
+import { initAutoUpdate } from './services/auto-update';
 import {
   canGrantDisplayMedia,
   shouldGrantDisplayMediaRequest,
@@ -158,6 +159,7 @@ void app.whenReady().then(() => {
   registerMeetingIpc(); // Faz 24 meeting-service contract create
   registerAudioIpc(); // #2 audio:start / audio:chunk / audio:finish
   createMainWindow();
+  initAutoUpdate(); // #11 — no-op outside a packaged build
 
   tray = new TrayManager({
     onShowWindow: () => {

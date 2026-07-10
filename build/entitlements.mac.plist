@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  #7 — macOS Hardened Runtime entitlements.
+
+  Referenced by package.json build.mac.entitlements /
+  entitlementsInherit. Required for:
+  - Hardened Runtime (package.json build.mac.hardenedRuntime: true) to run at
+    all under Gatekeeper without disabling protections.
+  - getUserMedia() microphone capture (electron/main.ts display-media/audio
+    capture flow) — without com.apple.security.device.audio-input, macOS
+    denies mic access outright regardless of the in-app TCC prompt.
+  - System-audio loopback capture (desktopCapturer + { audio: 'loopback' } in
+    main.ts) needs screen-recording entitlement; macOS gates system audio
+    capture behind the same TCC category as screen capture.
+  - JIT/unsigned-memory entitlements Electron's own renderer/V8 needs under
+    Hardened Runtime (electron-builder's own default set, kept explicit here
+    for auditability rather than relying on an implicit default).
+-->
+<plist version="1.0">
+  <dict>
+    <key>com.apple.security.cs.allow-jit</key>
+    <true/>
+    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+    <true/>
+    <key>com.apple.security.cs.allow-dyld-environment-variables</key>
+    <true/>
+    <key>com.apple.security.cs.disable-library-validation</key>
+    <true/>
+    <key>com.apple.security.device.audio-input</key>
+    <true/>
+    <key>com.apple.security.device.camera</key>
+    <false/>
+    <key>com.apple.security.screen-recording</key>
+    <true/>
+    <key>com.apple.security.network.client</key>
+    <true/>
+  </dict>
+</plist>

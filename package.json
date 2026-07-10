@@ -88,12 +88,17 @@
       "category": "public.app-category.business",
       "target": [
         "dmg",
+        "pkg",
         "zip"
       ],
       "hardenedRuntime": true,
       "gatekeeperAssess": false,
       "entitlements": "build/entitlements.mac.plist",
-      "entitlementsInherit": "build/entitlements.mac.plist"
+      "entitlementsInherit": "build/entitlements.mac.plist",
+      "extendInfo": {
+        "NSMicrophoneUsageDescription": "Workcube Meeting needs microphone access to record meeting audio for live transcription.",
+        "NSScreenCaptureUsageDescription": "Workcube Meeting needs screen recording permission to capture system audio for meeting transcription."
+      }
     },
     "win": {
       "target": [
@@ -104,9 +109,16 @@
     "linux": {
       "target": [
         "AppImage",
-        "deb"
+        "deb",
+        "rpm"
       ],
-      "category": "Office"
+      "category": "Office",
+      "desktop": {
+        "entry": {
+          "Name": "Workcube Meeting",
+          "Comment": "Meeting Intelligence — Faz 24"
+        }
+      }
     },
     "publish": {
       "provider": "github",

@@ -11,6 +11,9 @@ interface ElectronBuilderResource {
 interface PlatformDesktopPackage {
   build?: {
     extraResources?: ElectronBuilderResource[];
+    mac?: {
+      extendInfo?: Record<string, string>;
+    };
   };
 }
 
@@ -33,5 +36,12 @@ describe('packaged runtime resources', () => {
         }),
       ]),
     );
+  });
+
+  it('declares macOS privacy usage strings for audio and system-audio capture', () => {
+    const extendInfo = readPackageJson().build?.mac?.extendInfo;
+
+    expect(extendInfo?.NSMicrophoneUsageDescription).toContain('microphone');
+    expect(extendInfo?.NSScreenCaptureUsageDescription).toContain('system audio');
   });
 });
