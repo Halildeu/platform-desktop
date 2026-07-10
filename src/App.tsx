@@ -29,6 +29,7 @@ import {
   markIntelligenceWaiting,
   setMeetingIntelligenceResult,
 } from './intelligence/meeting-intelligence';
+import { meetingIntelligenceResultFromSnapshot } from './intelligence/meeting-analysis-result';
 import { TranscriptPanel } from './components/TranscriptPanel';
 import {
   failTranscriptSession,
@@ -367,6 +368,7 @@ function App() {
   const directStreamConfiguredRef = useRef(false);
   const transcriptSessionIdRef = useRef<string | null>(null);
   const pendingLiveTranscriptEventsRef = useRef<LiveSttTranscriptEvent[]>([]);
+  const hydratedAnalysisMeetingIdRef = useRef<string | null>(null);
 
   const enqueuePendingLiveTranscriptEvent = (event: LiveSttTranscriptEvent): void => {
     pendingLiveTranscriptEventsRef.current = [
@@ -458,6 +460,36 @@ function App() {
         );
       });
   }, []);
+
+  // #244 DT-1 — meeting-service read-path: if this meeting already has a
+  // canonical persisted analysis run (from a prior session), hydrate the
+  // panel from it instead of waiting for a fresh in-session /analyze call.
+  useEffect(() => {
+    const meetingId = meetingIntelligence.meetingId;
+    if (
+      !meetingId ||
+      meetingIntelligence.status !== 'idle' ||
+      meetingIntelligence.result ||
+      hydratedAnalysisMeetingIdRef.current === meetingId
+    ) {
+      return;
+    }
+    hydratedAnalysisMeetingIdRef.current = meetingId;
+    void window.electronAPI?.meeting
+      .getAnalysisResult(meetingId)
+      .then((snapshot) => {
+        const result = meetingIntelligenceResultFromSnapshot(snapshot);
+        if (!result) {
+          return;
+        }
+        setMeetingIntelligence((current) =>
+          current.meetingId === meetingId && current.status === 'idle' && !current.result
+            ? setMeetingIntelligenceResult(current, result)
+            : current,
+        );
+      })
+      .catch(() => undefined);
+  }, [meetingIntelligence.meetingId, meetingIntelligence.status, meetingIntelligence.result]);
 
   useEffect(() => {
     const offTranscriptEvent = window.electronAPI?.audio.onTranscriptEvent?.((event) => {

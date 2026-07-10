@@ -133,6 +133,35 @@ const electronAPI = {
         segments?: Array<{ text: string; start: number; end?: number }>;
       };
     }): Promise<unknown> => ipcRenderer.invoke('meeting:analyze', payload),
+    getAnalysisResult: (
+      meetingId: string,
+    ): Promise<{
+      result: {
+        meetingId: string;
+        analysisRunId: string;
+        status: string;
+        summary: string | null;
+        groundingStatus: string | null;
+        analyzerContractVersion: string | null;
+        modelVersion: string | null;
+        promptVersion: string | null;
+        generatedAt: string;
+      } | null;
+      decisions: Array<{
+        id: string;
+        title: string;
+        detail: string | null;
+        decidedBySubject: string | null;
+        decidedAt: string | null;
+      }>;
+      actions: Array<{
+        id: string;
+        description: string;
+        assigneeSubject: string | null;
+        status: string;
+        dueAt: string | null;
+      }>;
+    }> => ipcRenderer.invoke('meeting:get-analysis-result', { meetingId }),
   },
 };
 

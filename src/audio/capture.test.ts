@@ -147,6 +147,7 @@ function installElectronApiMock(): void {
     meeting: {
       createContract: vi.fn(),
       analyze: vi.fn(),
+      getAnalysisResult: vi.fn(),
     },
     audio: {
       recorderConfig: vi.fn(),

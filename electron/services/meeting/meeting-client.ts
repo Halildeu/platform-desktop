@@ -62,6 +62,41 @@ export type MeetingAiAnalyzeResponse = Record<string, unknown> & {
   summary_citations?: unknown[] | null;
 };
 
+/** GET .../summary read projection — #244 DT-1 (canonical, persisted analysis run). */
+export interface MeetingAnalysisResult {
+  meetingId: string;
+  analysisRunId: string;
+  status: string;
+  summary: string | null;
+  groundingStatus: string | null;
+  analyzerContractVersion: string | null;
+  modelVersion: string | null;
+  promptVersion: string | null;
+  generatedAt: string;
+}
+
+export interface MeetingDecisionRecord {
+  id: string;
+  title: string;
+  detail: string | null;
+  decidedBySubject: string | null;
+  decidedAt: string | null;
+}
+
+export interface MeetingActionRecord {
+  id: string;
+  description: string;
+  assigneeSubject: string | null;
+  status: string;
+  dueAt: string | null;
+}
+
+export interface MeetingAnalysisSnapshot {
+  result: MeetingAnalysisResult | null;
+  decisions: MeetingDecisionRecord[];
+  actions: MeetingActionRecord[];
+}
+
 function isLocalHttp(url: URL): boolean {
   return (
     url.protocol === 'http:' &&
@@ -101,6 +136,25 @@ export function meetingIntelligenceAnalyzeUrl(cfg: MeetingClientConfig, meetingI
     throw new Error('meetingId must be a canonical UUID');
   }
   return `${meetingsUrl(cfg)}/${meetingId}/intelligence/analyze`;
+}
+
+function requireCanonicalMeetingId(meetingId: string): string {
+  if (!MEETING_ID_PATTERN.test(meetingId)) {
+    throw new Error('meetingId must be a canonical UUID');
+  }
+  return meetingId;
+}
+
+export function meetingSummaryUrl(cfg: MeetingClientConfig, meetingId: string): string {
+  return `${meetingsUrl(cfg)}/${requireCanonicalMeetingId(meetingId)}/summary`;
+}
+
+export function meetingDecisionsUrl(cfg: MeetingClientConfig, meetingId: string): string {
+  return `${meetingsUrl(cfg)}/${requireCanonicalMeetingId(meetingId)}/decisions`;
+}
+
+export function meetingActionsUrl(cfg: MeetingClientConfig, meetingId: string): string {
+  return `${meetingsUrl(cfg)}/${requireCanonicalMeetingId(meetingId)}/actions`;
 }
 
 function delay(ms: number): Promise<void> {
@@ -236,6 +290,150 @@ function parseMeetingAiAnalyzeResponse(value: unknown): MeetingAiAnalyzeResponse
     throw new Error('meeting-ai response summary is not a string');
   }
   return record as MeetingAiAnalyzeResponse;
+}
+
+function parseMeetingAnalysisResult(value: unknown): MeetingAnalysisResult {
+  if (!value || typeof value !== 'object') {
+    throw new Error('meeting-service summary response is not an object');
+  }
+  const record = value as Record<string, unknown>;
+  if (typeof record.meetingId !== 'string' || typeof record.analysisRunId !== 'string') {
+    throw new Error('meeting-service summary response is missing meetingId/analysisRunId');
+  }
+  if (typeof record.status !== 'string' || typeof record.generatedAt !== 'string') {
+    throw new Error('meeting-service summary response is missing status/generatedAt');
+  }
+  const optionalString = (field: unknown): string | null =>
+    typeof field === 'string' ? field : null;
+  return {
+    meetingId: record.meetingId,
+    analysisRunId: record.analysisRunId,
+    status: record.status,
+    summary: optionalString(record.summary),
+    groundingStatus: optionalString(record.groundingStatus),
+    analyzerContractVersion: optionalString(record.analyzerContractVersion),
+    modelVersion: optionalString(record.modelVersion),
+    promptVersion: optionalString(record.promptVersion),
+    generatedAt: record.generatedAt,
+  };
+}
+
+function parseMeetingDecisionRecord(value: unknown): MeetingDecisionRecord | null {
+  if (!value || typeof value !== 'object') {
+    return null;
+  }
+  const record = value as Record<string, unknown>;
+  if (typeof record.id !== 'string' || typeof record.title !== 'string') {
+    return null;
+  }
+  return {
+    id: record.id,
+    title: record.title,
+    detail: typeof record.detail === 'string' ? record.detail : null,
+    decidedBySubject: typeof record.decidedBySubject === 'string' ? record.decidedBySubject : null,
+    decidedAt: typeof record.decidedAt === 'string' ? record.decidedAt : null,
+  };
+}
+
+function parseMeetingActionRecord(value: unknown): MeetingActionRecord | null {
+  if (!value || typeof value !== 'object') {
+    return null;
+  }
+  const record = value as Record<string, unknown>;
+  if (typeof record.id !== 'string' || typeof record.description !== 'string') {
+    return null;
+  }
+  return {
+    id: record.id,
+    description: record.description,
+    assigneeSubject: typeof record.assigneeSubject === 'string' ? record.assigneeSubject : null,
+    status: typeof record.status === 'string' ? record.status : 'OPEN',
+    dueAt: typeof record.dueAt === 'string' ? record.dueAt : null,
+  };
+}
+
+/** GET .../summary — canonical analysis run, or null if the meeting has none persisted yet. */
+export async function getMeetingAnalysisResult(
+  cfg: MeetingClientConfig,
+  jwt: string,
+  meetingId: string,
+): Promise<MeetingAnalysisResult | null> {
+  const res = await desktopFetch(meetingSummaryUrl(cfg, meetingId), {
+    method: 'GET',
+    headers: { Authorization: `Bearer ${jwt}` },
+  });
+  if (res.status === 404) {
+    return null;
+  }
+  if (!res.ok) {
+    throw new Error(await httpErrorMessage(res, 'getMeetingAnalysisResult'));
+  }
+  return parseMeetingAnalysisResult(await res.json());
+}
+
+/** GET .../decisions — all persisted decisions for the meeting. */
+export async function listMeetingDecisions(
+  cfg: MeetingClientConfig,
+  jwt: string,
+  meetingId: string,
+): Promise<MeetingDecisionRecord[]> {
+  const res = await desktopFetch(meetingDecisionsUrl(cfg, meetingId), {
+    method: 'GET',
+    headers: { Authorization: `Bearer ${jwt}` },
+  });
+  if (!res.ok) {
+    throw new Error(await httpErrorMessage(res, 'listMeetingDecisions'));
+  }
+  const body = await res.json();
+  if (!Array.isArray(body)) {
+    throw new Error('meeting-service decisions response is not an array');
+  }
+  return body
+    .map(parseMeetingDecisionRecord)
+    .filter((item): item is MeetingDecisionRecord => item !== null);
+}
+
+/** GET .../actions — all persisted action items for the meeting. */
+export async function listMeetingActions(
+  cfg: MeetingClientConfig,
+  jwt: string,
+  meetingId: string,
+): Promise<MeetingActionRecord[]> {
+  const res = await desktopFetch(meetingActionsUrl(cfg, meetingId), {
+    method: 'GET',
+    headers: { Authorization: `Bearer ${jwt}` },
+  });
+  if (!res.ok) {
+    throw new Error(await httpErrorMessage(res, 'listMeetingActions'));
+  }
+  const body = await res.json();
+  if (!Array.isArray(body)) {
+    throw new Error('meeting-service actions response is not an array');
+  }
+  return body
+    .map(parseMeetingActionRecord)
+    .filter((item): item is MeetingActionRecord => item !== null);
+}
+
+/**
+ * Combined read of the meeting-service system-of-record — #244 DT-1. If no
+ * canonical run has been persisted yet (fresh meeting, ingestion still
+ * pending), `result` is null and decisions/actions are not fetched.
+ */
+export async function readMeetingAnalysisSnapshot(
+  cfg: MeetingClientConfig,
+  jwt: string,
+  meetingId: string,
+): Promise<MeetingAnalysisSnapshot> {
+  const result = await getMeetingAnalysisResult(cfg, jwt, meetingId);
+  if (!result) {
+    return { result: null, decisions: [], actions: [] };
+  }
+  const [decisions, actions] = await Promise.all([
+    listMeetingDecisions(cfg, jwt, meetingId),
+    listMeetingActions(cfg, jwt, meetingId),
+  ]);
+  return { result, decisions, actions };
 }
 
 export async function createMeetingContract(

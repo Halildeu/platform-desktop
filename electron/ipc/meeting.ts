@@ -4,10 +4,12 @@ import {
   analyzeMeetingIntelligence,
   createMeetingContract,
   loadMeetingConfig,
+  readMeetingAnalysisSnapshot,
   type CreateMeetingContractArgs,
   type MeetingAiAnalyzeArgs,
   type MeetingAiAnalyzeRequest,
   type MeetingAiAnalyzeResponse,
+  type MeetingAnalysisSnapshot,
   type MeetingContract,
 } from '../services/meeting/meeting-client.js';
 import { getValidAccessToken } from './auth.js';
@@ -181,6 +183,22 @@ export function registerMeetingIpc(): void {
     async (_e, payload: unknown): Promise<MeetingAiAnalyzeResponse> => {
       const args = parseAnalyzeArgs(payload);
       return analyzeMeetingIntelligence(loadMeetingConfig(), await getValidAccessToken(), args);
+    },
+  );
+  ipcMain.handle(
+    'meeting:get-analysis-result',
+    async (_e, payload: unknown): Promise<MeetingAnalysisSnapshot> => {
+      const meetingId = requiredCanonicalMeetingId(
+        typeof payload === 'object' && payload !== null
+          ? (payload as Record<string, unknown>).meetingId
+          : payload,
+        'meetingId',
+      );
+      return readMeetingAnalysisSnapshot(
+        loadMeetingConfig(),
+        await getValidAccessToken(),
+        meetingId,
+      );
     },
   );
 }

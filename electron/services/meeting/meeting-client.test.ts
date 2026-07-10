@@ -3,9 +3,16 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   analyzeMeetingIntelligence,
   createMeetingContract,
+  getMeetingAnalysisResult,
+  listMeetingActions,
+  listMeetingDecisions,
   loadMeetingConfig,
+  meetingActionsUrl,
+  meetingDecisionsUrl,
   meetingIntelligenceAnalyzeUrl,
+  meetingSummaryUrl,
   meetingsUrl,
+  readMeetingAnalysisSnapshot,
 } from './meeting-client';
 
 afterEach(() => {
@@ -203,5 +210,174 @@ describe('meeting-client', () => {
     ).rejects.toThrow(
       'analyzeMeetingIntelligence failed: 403 code=MEETING_AI_FORBIDDEN correlationId=cid-123 retryable=false',
     );
+  });
+
+  describe('#244 DT-1 — meeting-service read-path', () => {
+    const MEETING_ID = '33333333-3333-4333-8333-333333333333';
+    const cfg = { baseUrl: 'https://testai.acik.com' };
+
+    it('builds summary/decisions/actions URLs', () => {
+      expect(meetingSummaryUrl(cfg, MEETING_ID)).toBe(
+        `https://testai.acik.com/api/v1/admin/meetings/${MEETING_ID}/summary`,
+      );
+      expect(meetingDecisionsUrl(cfg, MEETING_ID)).toBe(
+        `https://testai.acik.com/api/v1/admin/meetings/${MEETING_ID}/decisions`,
+      );
+      expect(meetingActionsUrl(cfg, MEETING_ID)).toBe(
+        `https://testai.acik.com/api/v1/admin/meetings/${MEETING_ID}/actions`,
+      );
+      expect(() => meetingSummaryUrl(cfg, 'MTG-1')).toThrow('canonical UUID');
+    });
+
+    it('returns null when the meeting has no canonical analysis run yet (404)', async () => {
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 404 }));
+
+      await expect(getMeetingAnalysisResult(cfg, 'JWT', MEETING_ID)).resolves.toBeNull();
+    });
+
+    it('parses a canonical analysis result', async () => {
+      const fetchMock = vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          meetingId: MEETING_ID,
+          analysisRunId: 'run-1',
+          status: 'CANONICAL',
+          summary: 'Bütçe onaylandı.',
+          groundingStatus: 'verified',
+          analyzerContractVersion: '5-adr0043',
+          modelVersion: 'llama3.1:8b',
+          promptVersion: 'ollama-v1',
+          generatedAt: '2026-07-10T10:00:00.000Z',
+        }),
+        headers: new Headers({ 'content-type': 'application/json' }),
+      });
+      vi.stubGlobal('fetch', fetchMock);
+
+      const result = await getMeetingAnalysisResult(cfg, 'JWT', MEETING_ID);
+
+      expect(result?.summary).toBe('Bütçe onaylandı.');
+      expect(fetchMock).toHaveBeenCalledWith(
+        `https://testai.acik.com/api/v1/admin/meetings/${MEETING_ID}/summary`,
+        expect.objectContaining({ method: 'GET', headers: { Authorization: 'Bearer JWT' } }),
+      );
+    });
+
+    it('throws on non-404 HTTP errors from the summary endpoint', async () => {
+      vi.stubGlobal(
+        'fetch',
+        vi.fn().mockResolvedValue({
+          ok: false,
+          status: 403,
+          text: async () => '',
+          headers: new Headers(),
+        }),
+      );
+
+      await expect(getMeetingAnalysisResult(cfg, 'JWT', MEETING_ID)).rejects.toThrow(
+        'getMeetingAnalysisResult failed: 403',
+      );
+    });
+
+    it('lists decisions and drops malformed entries', async () => {
+      vi.stubGlobal(
+        'fetch',
+        vi.fn().mockResolvedValue({
+          ok: true,
+          json: async () => [
+            { id: 'd-1', title: 'Bütçe onaylandı', decidedBySubject: 'zeynep' },
+            { id: 'd-2' },
+            'not-an-object',
+          ],
+          headers: new Headers({ 'content-type': 'application/json' }),
+        }),
+      );
+
+      const decisions = await listMeetingDecisions(cfg, 'JWT', MEETING_ID);
+      expect(decisions).toEqual([
+        {
+          id: 'd-1',
+          title: 'Bütçe onaylandı',
+          detail: null,
+          decidedBySubject: 'zeynep',
+          decidedAt: null,
+        },
+      ]);
+    });
+
+    it('lists actions and drops malformed entries', async () => {
+      vi.stubGlobal(
+        'fetch',
+        vi.fn().mockResolvedValue({
+          ok: true,
+          json: async () => [
+            {
+              id: 'a-1',
+              description: 'Kanıt eklenecek',
+              assigneeSubject: 'zeynep',
+              status: 'OPEN',
+              dueAt: '2026-07-15T00:00:00.000Z',
+            },
+            { id: 'a-2' },
+          ],
+          headers: new Headers({ 'content-type': 'application/json' }),
+        }),
+      );
+
+      const actions = await listMeetingActions(cfg, 'JWT', MEETING_ID);
+      expect(actions).toEqual([
+        {
+          id: 'a-1',
+          description: 'Kanıt eklenecek',
+          assigneeSubject: 'zeynep',
+          status: 'OPEN',
+          dueAt: '2026-07-15T00:00:00.000Z',
+        },
+      ]);
+    });
+
+    it('readMeetingAnalysisSnapshot skips decisions/actions calls when no canonical run exists', async () => {
+      const fetchMock = vi.fn().mockResolvedValue({ ok: false, status: 404 });
+      vi.stubGlobal('fetch', fetchMock);
+
+      const snapshot = await readMeetingAnalysisSnapshot(cfg, 'JWT', MEETING_ID);
+
+      expect(snapshot).toEqual({ result: null, decisions: [], actions: [] });
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    it('readMeetingAnalysisSnapshot fetches decisions/actions once a canonical run exists', async () => {
+      const fetchMock = vi.fn().mockImplementation((url: string) => {
+        if (url.endsWith('/summary')) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              meetingId: MEETING_ID,
+              analysisRunId: 'run-1',
+              status: 'CANONICAL',
+              summary: 'Özet',
+              groundingStatus: 'verified',
+              analyzerContractVersion: '5-adr0043',
+              modelVersion: 'llama3.1:8b',
+              promptVersion: 'ollama-v1',
+              generatedAt: '2026-07-10T10:00:00.000Z',
+            }),
+            headers: new Headers({ 'content-type': 'application/json' }),
+          });
+        }
+        return Promise.resolve({
+          ok: true,
+          json: async () => [],
+          headers: new Headers({ 'content-type': 'application/json' }),
+        });
+      });
+      vi.stubGlobal('fetch', fetchMock);
+
+      const snapshot = await readMeetingAnalysisSnapshot(cfg, 'JWT', MEETING_ID);
+
+      expect(snapshot.result?.analysisRunId).toBe('run-1');
+      expect(snapshot.decisions).toEqual([]);
+      expect(snapshot.actions).toEqual([]);
+      expect(fetchMock).toHaveBeenCalledTimes(3);
+    });
   });
 });

@@ -91,6 +91,7 @@ function installElectronApiMock(recorderConfig: {
         status: 'SCHEDULED',
       }),
       analyze: vi.fn(),
+      getAnalysisResult: vi.fn().mockResolvedValue({ result: null, decisions: [], actions: [] }),
     },
     audio: {
       recorderConfig: vi.fn().mockResolvedValue({
@@ -262,6 +263,48 @@ describe('App recorder readiness', () => {
     await waitFor(() => {
       expect(screen.getByRole('button', { name: 'Kaydet' })).toBeEnabled();
     });
+  });
+
+  it('#244 DT-1: meeting-service icin kayitli canonical sonuc varsa paneli oturum baslamadan doldurur', async () => {
+    installElectronApiMock({
+      meetingId: '22222222-2222-4222-8222-222222222222',
+      deviceId: 'desktop-1',
+      ready: true,
+      reason: null,
+    });
+    vi.mocked(window.electronAPI!.meeting.getAnalysisResult).mockResolvedValue({
+      result: {
+        meetingId: '22222222-2222-4222-8222-222222222222',
+        analysisRunId: 'run-1',
+        status: 'CANONICAL',
+        summary: 'Bütçe onaylandı.',
+        groundingStatus: 'verified',
+        analyzerContractVersion: '5-adr0043',
+        modelVersion: 'llama3.1:8b',
+        promptVersion: 'ollama-v1',
+        generatedAt: '2026-07-10T10:00:00.000Z',
+      },
+      decisions: [
+        {
+          id: 'd-1',
+          title: 'Kira sözleşmesi yenilendi',
+          detail: null,
+          decidedBySubject: 'zeynep',
+          decidedAt: null,
+        },
+      ],
+      actions: [],
+    });
+
+    render(<App />);
+
+    await waitFor(() => {
+      expect(window.electronAPI?.meeting.getAnalysisResult).toHaveBeenCalledWith(
+        '22222222-2222-4222-8222-222222222222',
+      );
+    });
+    expect(await screen.findByText('Bütçe onaylandı.')).toBeInTheDocument();
+    expect(screen.getByText('Kira sözleşmesi yenilendi')).toBeInTheDocument();
   });
 
   it('direct STT baglanti testini kayit oncesi calistirir', async () => {
