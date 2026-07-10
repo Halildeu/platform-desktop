@@ -67,6 +67,12 @@ function installElectronApiMock(recorderConfig: {
   window.electronAPI = {
     app: {
       getVersion: vi.fn().mockResolvedValue('0.1.0-test'),
+      getAutoLaunch: vi.fn().mockResolvedValue(false),
+      setAutoLaunch: vi.fn().mockResolvedValue(false),
+    },
+    tray: {
+      setRecordingActive: vi.fn(),
+      onStopRequested: vi.fn(() => vi.fn()),
     },
     auth: {
       login: vi.fn(),

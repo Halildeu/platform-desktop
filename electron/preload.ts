@@ -32,6 +32,22 @@ export interface TranscriptGatewayError {
 const electronAPI = {
   app: {
     getVersion: (): Promise<string> => ipcRenderer.invoke('app:version'),
+    getAutoLaunch: (): Promise<boolean> => ipcRenderer.invoke('app:get-auto-launch'),
+    setAutoLaunch: (enabled: boolean): Promise<boolean> =>
+      ipcRenderer.invoke('app:set-auto-launch', enabled),
+  },
+  tray: {
+    // Renderer, main process'e "kayıt aktif/pasif" durumunu bildirir — tray
+    // ikonu/menüsü buna göre güncellenir. Gerçek kayıt state machine'i
+    // renderer'da kalır (App.tsx); tray sadece yansıtır + kısayol sunar.
+    setRecordingActive: (active: boolean): void => {
+      ipcRenderer.send('tray:set-recording-active', active);
+    },
+    onStopRequested: (callback: () => void): (() => void) => {
+      const listener = (): void => callback();
+      ipcRenderer.on('tray:stop-requested', listener);
+      return () => ipcRenderer.removeListener('tray:stop-requested', listener);
+    },
   },
   audio: {
     recorderConfig: (): Promise<{

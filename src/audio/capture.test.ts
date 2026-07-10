@@ -132,6 +132,12 @@ function installElectronApiMock(): void {
   window.electronAPI = {
     app: {
       getVersion: vi.fn(),
+      getAutoLaunch: vi.fn(),
+      setAutoLaunch: vi.fn(),
+    },
+    tray: {
+      setRecordingActive: vi.fn(),
+      onStopRequested: vi.fn(() => vi.fn()),
     },
     auth: {
       login: vi.fn(),
