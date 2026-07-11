@@ -64,7 +64,7 @@ interface LiveSttServerError {
 
 type LiveSttServerEvent =
   | { type: 'loading'; stage?: string }
-  | { type: 'ready' }
+  | { type: 'ready'; partial_mode?: 'stable-v1' }
   | { type: 'debug' }
   | LiveSttServerPartial
   | LiveSttServerFinal
@@ -420,18 +420,9 @@ function isKnownShortArtifact(text: string): boolean {
   return normalized === 'neroba';
 }
 
-function isKnownCaptionArtifact(text: string): boolean {
-  const normalized = normalizedWords(splitWords(text)).join(' ');
-  return (
-    normalized === 'izlediğiniz için teşekkür ederim' ||
-    normalized === 'istediğiniz için teşekkür ederim'
-  );
-}
-
 function isUnstableFinalText(text: string): boolean {
   return (
     isKnownShortArtifact(text) ||
-    isKnownCaptionArtifact(text) ||
     isLowInformationRepetition(text) ||
     isShortRepeatedDecodeChain(text) ||
     isRepeatedDecodeChain(text) ||
@@ -780,6 +771,7 @@ export function connectLiveSttStream(
   let ready = false;
   let closedByClient = false;
   let reconnectAttempts = 0;
+  let stablePartialMode = false;
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   let closeReconnectReason: string | null = null;
   let lastUsableTranscriptAtMs: number | null = null;
@@ -877,6 +869,7 @@ export function connectLiveSttStream(
 
       if (event.type === 'ready') {
         ready = true;
+        stablePartialMode = event.partial_mode === 'stable-v1';
         reconnectAttempts = 0;
         lastUsableTranscriptAtMs = Date.now();
         emitStatus({ status: 'ready' });
@@ -1041,9 +1034,9 @@ export function connectLiveSttStream(
     clearPendingPartials(event.seq);
     const previousDisplayText = segmentDraftText.get(event.seq) ?? '';
     const previousKnownText = segmentKnownText.get(event.seq) ?? previousDisplayText;
-    const mergedText = mergeRollingPartial(previousKnownText, text);
-    segmentKnownText.set(event.seq, mergedText);
-    const steps = progressivePartialSteps(previousDisplayText, mergedText);
+    const nextKnownText = stablePartialMode ? text : mergeRollingPartial(previousKnownText, text);
+    segmentKnownText.set(event.seq, nextKnownText);
+    const steps = progressivePartialSteps(previousDisplayText, nextKnownText);
     if (steps.length === 0) {
       return;
     }
