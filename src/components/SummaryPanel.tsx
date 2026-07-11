@@ -35,7 +35,6 @@ import {
   setMeetingIntelligenceResult,
 } from '../intelligence/meeting-intelligence';
 import {
-  meetingAiResultFromAnalyzeResponse,
   type MeetingAiAnalyzeResponse,
   type MeetingAiSubmitPayload,
 } from '../intelligence/meeting-ai-submit';
@@ -60,13 +59,18 @@ export interface MeetingAiSubmitAdapter {
   analyze(payload: MeetingAiSubmitPayload): Promise<MeetingAiAnalyzeResponse>;
 }
 
+export type CanonicalResultLoadStatus = 'idle' | 'loading' | 'not_ready' | 'ready' | 'error';
+
 export interface SummaryPanelProps {
   intelligence: MeetingIntelligenceState;
   transcript?: TranscriptSessionState;
   exportAdapter?: ExportAdapter;
   meetingAiSubmitAdapter?: MeetingAiSubmitAdapter;
   autoSubmitMeetingAi?: boolean;
-  onMeetingAiResult?: (result: MeetingIntelligenceResult) => void;
+  canonicalResultStatus?: CanonicalResultLoadStatus;
+  canonicalResultError?: string | null;
+  onCanonicalResultRetry?: () => void;
+  onMeetingAiSubmitted?: () => void;
   onMeetingAiError?: (message: string) => void;
 }
 
@@ -559,15 +563,13 @@ export function SummaryPanel({
   exportAdapter = browserExportAdapter,
   meetingAiSubmitAdapter = electronMeetingAiSubmitAdapter,
   autoSubmitMeetingAi = false,
-  onMeetingAiResult,
+  canonicalResultStatus = 'idle',
+  canonicalResultError = null,
+  onCanonicalResultRetry,
+  onMeetingAiSubmitted,
   onMeetingAiError,
 }: SummaryPanelProps): ReactElement {
   const [message, setMessage] = useState<string | null>(null);
-  const [localSubmittedResult, setLocalSubmittedResult] = useState<{
-    meetingId: string | null;
-    sessionId: string | null;
-    result: MeetingIntelligenceResult;
-  } | null>(null);
   const [isSubmittingMeetingAi, setIsSubmittingMeetingAi] = useState(false);
   const [summaryEditMode, setSummaryEditMode] = useState(false);
   const [summaryDraft, setSummaryDraft] = useState('');
@@ -591,21 +593,13 @@ export function SummaryPanel({
     transcriptSourceSegments.length > 0
       ? transcriptSourceSegments[transcriptSourceSegments.length - 1]
       : null;
-  const visibleIntelligence = localSubmittedResult
-    ? setMeetingIntelligenceResult(
-        {
-          ...intelligence,
-          meetingId: localSubmittedResult.meetingId,
-          sessionId: localSubmittedResult.sessionId,
-        },
-        localSubmittedResult.result,
-      )
-    : intelligence;
+  const visibleIntelligence = intelligence;
   const result = visibleIntelligence.status === 'ready' ? visibleIntelligence.result : null;
   const resultKey = result
     ? [
         visibleIntelligence.meetingId ?? '',
         visibleIntelligence.sessionId ?? '',
+        result.analysisRunId ?? '',
         result.generatedAtMs,
         result.providerLabel,
       ].join('|')
@@ -829,21 +823,14 @@ export function SummaryPanel({
           bundle.package.gate.blocked_by.join(', ') || 'Meeting AI kapısı hazır değil',
         );
       }
-      const response = await meetingAiSubmitAdapter.analyze({
+      await meetingAiSubmitAdapter.analyze({
         meetingId: bundle.package.meeting_id,
         request: bundle.package.request,
       });
-      const submittedResult = meetingAiResultFromAnalyzeResponse(response);
-      setLocalSubmittedResult({
-        meetingId: bundle.package.meeting_id,
-        sessionId: bundle.package.session_id,
-        result: submittedResult,
-      });
       setSummaryEditMode(false);
       setSummaryOverride(null);
-      setSummaryDraft(submittedResult.summaryMarkdown);
-      onMeetingAiResult?.(submittedResult);
-      setMessage('Meeting AI sonucu alındı.');
+      onMeetingAiSubmitted?.();
+      setMessage('Analiz tetiklendi; kalıcı sonuç hazırlanıyor.');
     } catch (error) {
       const text = error instanceof Error ? error.message : String(error);
       onMeetingAiError?.(text);
@@ -851,7 +838,7 @@ export function SummaryPanel({
     } finally {
       setIsSubmittingMeetingAi(false);
     }
-  }, [meetingAiSubmitAdapter, onMeetingAiError, onMeetingAiResult, transcript]);
+  }, [meetingAiSubmitAdapter, onMeetingAiError, onMeetingAiSubmitted, transcript]);
 
   useEffect(() => {
     if (
@@ -969,13 +956,35 @@ export function SummaryPanel({
               : 'Meeting seçilmedi'}
           </p>
         </div>
-        <span className={`state-pill state-${visibleIntelligence.status}`}>
-          {intelligenceStatusLabel(visibleIntelligence.status)}
+        <span
+          className={`state-pill ${canonicalResultStateClass(canonicalResultStatus, visibleIntelligence.status)}`}
+        >
+          {canonicalResultStatusLabel(canonicalResultStatus, visibleIntelligence.status)}
         </span>
       </div>
 
       {visibleIntelligence.error ? (
         <p className="inline-error">{visibleIntelligence.error}</p>
+      ) : null}
+      {canonicalResultStatus === 'error' && canonicalResultError ? (
+        <div className="canonical-result-error" role="alert">
+          <p className="inline-error">{canonicalResultError}</p>
+          {onCanonicalResultRetry ? (
+            <button className="secondary-action" type="button" onClick={onCanonicalResultRetry}>
+              Tekrar dene
+            </button>
+          ) : null}
+        </div>
+      ) : null}
+      {canonicalResultStatus === 'not_ready' ? (
+        <div className="canonical-result-pending" role="status">
+          <p>Kalıcı sonuç henüz hazır değil. Önceki snapshot varsa ekranda tutulur.</p>
+          {onCanonicalResultRetry ? (
+            <button className="secondary-action" type="button" onClick={onCanonicalResultRetry}>
+              Sonucu yenile
+            </button>
+          ) : null}
+        </div>
       ) : null}
 
       {result ? (
@@ -1129,6 +1138,12 @@ export function SummaryPanel({
                 <span>Üretim</span>
                 <strong>{formatClock(displayResult.generatedAtMs)}</strong>
               </div>
+              {displayResult.storageMode === 'canonical' ? (
+                <div title={displayResult.analysisRunId}>
+                  <span>Sonuç kaydı</span>
+                  <strong>Kalıcı snapshot</strong>
+                </div>
+              ) : null}
               <div>
                 <span>İnsan kontrolü</span>
                 <strong>{hasUserReviewChanges ? 'Revizyonlu' : 'Kontrol bekliyor'}</strong>
@@ -1694,9 +1709,9 @@ export function SummaryPanel({
           </div>
         </>
       ) : (
-        <div className="summary-empty">
-          <strong>Toplantı çıktısı bekleniyor</strong>
-          <span>{emptyStateText(visibleIntelligence.status)}</span>
+        <div className="summary-empty" aria-live="polite">
+          <strong>{canonicalResultEmptyTitle(canonicalResultStatus)}</strong>
+          <span>{emptyStateText(visibleIntelligence.status, canonicalResultStatus)}</span>
         </div>
       )}
     </section>
@@ -1722,7 +1737,67 @@ function formatCitations(citations: IntelligenceCitation[]): string {
   return citations.map(formatCitationTime).join(', ');
 }
 
-function emptyStateText(status: MeetingIntelligenceState['status']): string {
+function canonicalResultStatusLabel(
+  canonicalStatus: CanonicalResultLoadStatus,
+  intelligenceStatus: MeetingIntelligenceState['status'],
+): string {
+  if (canonicalStatus === 'loading') {
+    return 'Yükleniyor';
+  }
+  if (canonicalStatus === 'not_ready') {
+    return 'Hazırlanıyor';
+  }
+  if (canonicalStatus === 'error') {
+    return 'Bağlantı hatası';
+  }
+  if (canonicalStatus === 'ready') {
+    return 'Kalıcı sonuç';
+  }
+  return intelligenceStatusLabel(intelligenceStatus);
+}
+
+function canonicalResultStateClass(
+  canonicalStatus: CanonicalResultLoadStatus,
+  intelligenceStatus: MeetingIntelligenceState['status'],
+): string {
+  if (canonicalStatus === 'error') {
+    return 'state-error';
+  }
+  if (canonicalStatus === 'ready') {
+    return 'state-ready';
+  }
+  if (canonicalStatus === 'loading' || canonicalStatus === 'not_ready') {
+    return 'state-waiting';
+  }
+  return `state-${intelligenceStatus}`;
+}
+
+function canonicalResultEmptyTitle(status: CanonicalResultLoadStatus): string {
+  if (status === 'loading') {
+    return 'Kalıcı toplantı çıktısı yükleniyor';
+  }
+  if (status === 'not_ready') {
+    return 'Analiz sonucu hazırlanıyor';
+  }
+  if (status === 'error') {
+    return 'Kalıcı sonuç alınamadı';
+  }
+  return 'Toplantı çıktısı bekleniyor';
+}
+
+function emptyStateText(
+  status: MeetingIntelligenceState['status'],
+  canonicalStatus: CanonicalResultLoadStatus,
+): string {
+  if (canonicalStatus === 'loading') {
+    return 'Meeting-service üzerindeki canonical snapshot kontrol ediliyor.';
+  }
+  if (canonicalStatus === 'not_ready') {
+    return 'Kalıcı sonuç henüz hazır değil; durumu yeniden kontrol edebilirsiniz.';
+  }
+  if (canonicalStatus === 'error') {
+    return 'Bağlantıyı kontrol edip tekrar deneyin; oturum içi preview sonuç olarak gösterilmez.';
+  }
   if (status === 'recording') {
     return 'Kayıt sürüyor.';
   }

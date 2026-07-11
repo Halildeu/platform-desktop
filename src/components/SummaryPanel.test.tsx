@@ -241,6 +241,83 @@ describe('SummaryPanel', () => {
     expect(screen.queryByRole('button', { name: 'Markdown' })).not.toBeInTheDocument();
   });
 
+  it('renders explicit canonical loading and not-ready states', async () => {
+    const intelligence = {
+      ...initialMeetingIntelligence(),
+      meetingId: '22222222-2222-4222-8222-222222222222',
+    };
+    const { rerender } = render(
+      <SummaryPanel intelligence={intelligence} canonicalResultStatus="loading" />,
+    );
+
+    expect(screen.getByText('Yükleniyor')).toBeInTheDocument();
+    expect(screen.getByText('Kalıcı toplantı çıktısı yükleniyor')).toBeInTheDocument();
+    expect(
+      screen.getByText('Meeting-service üzerindeki canonical snapshot kontrol ediliyor.'),
+    ).toBeInTheDocument();
+
+    const onRetry = vi.fn();
+    rerender(
+      <SummaryPanel
+        intelligence={intelligence}
+        canonicalResultStatus="not_ready"
+        onCanonicalResultRetry={onRetry}
+      />,
+    );
+
+    expect(screen.getByText('Hazırlanıyor')).toBeInTheDocument();
+    expect(screen.getByText('Analiz sonucu hazırlanıyor')).toBeInTheDocument();
+    expect(
+      screen.getByText('Kalıcı sonuç henüz hazır değil; durumu yeniden kontrol edebilirsiniz.'),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText('Kalıcı sonuç henüz hazır değil. Önceki snapshot varsa ekranda tutulur.'),
+    ).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'Sonucu yenile' }));
+    expect(onRetry).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps transient canonical read errors visible and retryable', async () => {
+    const onRetry = vi.fn();
+    render(
+      <SummaryPanel
+        intelligence={{
+          ...initialMeetingIntelligence(),
+          meetingId: '22222222-2222-4222-8222-222222222222',
+        }}
+        canonicalResultStatus="error"
+        canonicalResultError="Kalıcı toplantı çıktısı alınamadı: bağlantı kesildi"
+        onCanonicalResultRetry={onRetry}
+      />,
+    );
+
+    expect(screen.getByText('Bağlantı hatası')).toBeInTheDocument();
+    expect(screen.getByRole('alert')).toHaveTextContent('bağlantı kesildi');
+    await userEvent.click(screen.getByRole('button', { name: 'Tekrar dene' }));
+    expect(onRetry).toHaveBeenCalledTimes(1);
+  });
+
+  it('labels a canonical persisted result without changing review semantics', () => {
+    const state = readyState();
+    if (!state.result) {
+      throw new Error('readyState fixture must include a result');
+    }
+    render(
+      <SummaryPanel
+        intelligence={setMeetingIntelligenceResult(state, {
+          ...state.result,
+          analysisRunId: '55555555-5555-4555-8555-555555555555',
+          storageMode: 'canonical',
+        })}
+        canonicalResultStatus="ready"
+      />,
+    );
+
+    expect(screen.getByText('Kalıcı sonuç')).toBeInTheDocument();
+    expect(screen.getByText('Kalıcı snapshot')).toBeInTheDocument();
+    expect(screen.getByText('Kontrol bekliyor')).toBeInTheDocument();
+  });
+
   it('renders summary, decisions, actions and citation timestamps', () => {
     render(<SummaryPanel intelligence={readyState()} />);
 
@@ -345,6 +422,7 @@ describe('SummaryPanel', () => {
       }),
     };
     const transcript = reportReadyTranscriptState();
+    const onMeetingAiSubmitted = vi.fn();
     const base = readyState();
     if (!base.result) {
       throw new Error('readyState fixture must include a result');
@@ -366,6 +444,7 @@ describe('SummaryPanel', () => {
         transcript={transcript}
         exportAdapter={adapter}
         meetingAiSubmitAdapter={submitAdapter}
+        onMeetingAiSubmitted={onMeetingAiSubmitted}
       />,
     );
 
@@ -453,9 +532,12 @@ describe('SummaryPanel', () => {
       });
     });
     expect(
-      await screen.findByText('Yenilenmiş çıktı son transkript kaynağına göre üretildi.'),
+      await screen.findByText('Analiz tetiklendi; kalıcı sonuç hazırlanıyor.'),
     ).toBeInTheDocument();
-    expect(screen.getByText('Meeting AI sonucu alındı.')).toBeInTheDocument();
+    expect(onMeetingAiSubmitted).toHaveBeenCalledTimes(1);
+    expect(
+      screen.queryByText('Yenilenmiş çıktı son transkript kaynağına göre üretildi.'),
+    ).not.toBeInTheDocument();
   });
 
   it('surfaces ERP CRM handoff review blockers before adapter export', async () => {
@@ -1191,7 +1273,9 @@ describe('SummaryPanel', () => {
         }),
       });
     });
-    expect(await screen.findByText('Meeting AI sonucu alındı.')).toBeInTheDocument();
+    expect(
+      await screen.findByText('Analiz tetiklendi; kalıcı sonuç hazırlanıyor.'),
+    ).toBeInTheDocument();
   });
 
   it('submits the ready transcript to Meeting AI via the backend gateway adapter', async () => {
@@ -1229,14 +1313,14 @@ describe('SummaryPanel', () => {
         storageMode: 'preview',
       }),
     };
-    const onMeetingAiResult = vi.fn();
+    const onMeetingAiSubmitted = vi.fn();
 
     render(
       <SummaryPanel
         intelligence={{ ...initialMeetingIntelligence(), status: 'waiting' }}
         transcript={reportReadyTranscriptState()}
         meetingAiSubmitAdapter={adapter}
-        onMeetingAiResult={onMeetingAiResult}
+        onMeetingAiSubmitted={onMeetingAiSubmitted}
       />,
     );
 
@@ -1253,23 +1337,15 @@ describe('SummaryPanel', () => {
         }),
       });
     });
-    expect(await screen.findByText('Meeting AI sonucu alındı.')).toBeInTheDocument();
     expect(
-      screen.getByText(
+      await screen.findByText('Analiz tetiklendi; kalıcı sonuç hazırlanıyor.'),
+    ).toBeInTheDocument();
+    expect(onMeetingAiSubmitted).toHaveBeenCalledTimes(1);
+    expect(
+      screen.queryByText(
         'Transkript kaynağı doğrulandı; toplantı çıktısı gateway üzerinden üretildi.',
       ),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByText('Meeting AI gönderimi backend gateway üzerinden yapılacak'),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByText('Kaynak kalitesi ve KVKK sınırı PR kanıtına eklenecek'),
-    ).toBeInTheDocument();
-    expect(onMeetingAiResult).toHaveBeenCalledWith(
-      expect.objectContaining({
-        providerLabel: 'mock-meeting-ai / unit-test / 5-adr0043',
-      }),
-    );
+    ).not.toBeInTheDocument();
   });
 
   it('automatically submits a finished waiting transcript once when enabled', async () => {
@@ -1291,7 +1367,7 @@ describe('SummaryPanel', () => {
         model: 'unit-test',
       }),
     };
-    const onMeetingAiResult = vi.fn();
+    const onMeetingAiSubmitted = vi.fn();
     const intelligence = { ...initialMeetingIntelligence(), status: 'waiting' as const };
     const transcript = reportReadyTranscriptState();
 
@@ -1301,17 +1377,19 @@ describe('SummaryPanel', () => {
         transcript={transcript}
         meetingAiSubmitAdapter={adapter}
         autoSubmitMeetingAi
-        onMeetingAiResult={onMeetingAiResult}
+        onMeetingAiSubmitted={onMeetingAiSubmitted}
       />,
     );
 
     await waitFor(() => {
       expect(adapter.analyze).toHaveBeenCalledTimes(1);
     });
-    expect(await screen.findByText('Meeting AI sonucu alındı.')).toBeInTheDocument();
     expect(
-      screen.getByText('Otomatik toplantı çıktısı kayıt bitince üretildi.'),
+      await screen.findByText('Analiz tetiklendi; kalıcı sonuç hazırlanıyor.'),
     ).toBeInTheDocument();
+    expect(
+      screen.queryByText('Otomatik toplantı çıktısı kayıt bitince üretildi.'),
+    ).not.toBeInTheDocument();
 
     rerender(
       <SummaryPanel
@@ -1319,11 +1397,11 @@ describe('SummaryPanel', () => {
         transcript={transcript}
         meetingAiSubmitAdapter={adapter}
         autoSubmitMeetingAi
-        onMeetingAiResult={onMeetingAiResult}
+        onMeetingAiSubmitted={onMeetingAiSubmitted}
       />,
     );
 
     expect(adapter.analyze).toHaveBeenCalledTimes(1);
-    expect(onMeetingAiResult).toHaveBeenCalledTimes(1);
+    expect(onMeetingAiSubmitted).toHaveBeenCalledTimes(1);
   });
 });

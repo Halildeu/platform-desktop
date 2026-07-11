@@ -20,7 +20,7 @@ import {
   CONSENT_TEXT_HASH,
   CONSENT_LOCALE,
 } from './components/ConsentDialog';
-import { SummaryPanel } from './components/SummaryPanel';
+import { SummaryPanel, type CanonicalResultLoadStatus } from './components/SummaryPanel';
 import {
   bindMeetingIntelligenceTarget,
   failMeetingIntelligence,
@@ -29,6 +29,11 @@ import {
   markIntelligenceWaiting,
   setMeetingIntelligenceResult,
 } from './intelligence/meeting-intelligence';
+import {
+  canonicalAnalysisRunBaseline,
+  isNewCanonicalAnalysisRun,
+  meetingIntelligenceResultFromCanonicalResponse,
+} from './intelligence/meeting-result-read';
 import { TranscriptPanel } from './components/TranscriptPanel';
 import {
   failTranscriptSession,
@@ -53,6 +58,7 @@ const MAX_PENDING_LIVE_TRANSCRIPT_EVENTS = 50;
 const ACTIVE_AUDIO_RMS = 0.0008;
 const LIVE_STT_PREFLIGHT_MAX_ATTEMPTS = 3;
 const LIVE_STT_PREFLIGHT_RETRY_DELAY_MS = 180;
+const CANONICAL_RESULT_POLL_DELAYS_MS = [0, 500, 1_000, 2_000, 4_000, 8_000, 15_000] as const;
 
 interface RecorderRuntimeConfig {
   meetingId: string | null;
@@ -347,6 +353,9 @@ function App() {
   const [recorderConfig, setRecorderConfig] = useState<RecorderRuntimeConfig | null>(null);
   const [transcriptSession, setTranscriptSession] = useState(initialTranscriptSession);
   const [meetingIntelligence, setMeetingIntelligence] = useState(initialMeetingIntelligence);
+  const [canonicalResultStatus, setCanonicalResultStatus] =
+    useState<CanonicalResultLoadStatus>('idle');
+  const [canonicalResultError, setCanonicalResultError] = useState<string | null>(null);
   const [status, setStatus] = useState('');
   const [error, setError] = useState('');
   const [liveStreamActive, setLiveStreamActive] = useState(false);
@@ -367,6 +376,86 @@ function App() {
   const directStreamConfiguredRef = useRef(false);
   const transcriptSessionIdRef = useRef<string | null>(null);
   const pendingLiveTranscriptEventsRef = useRef<LiveSttTranscriptEvent[]>([]);
+  const canonicalResultReadSequenceRef = useRef(0);
+  const canonicalResultMeetingIdRef = useRef<string | null>(meetingIntelligence.meetingId);
+  const meetingIntelligenceStatusRef = useRef(meetingIntelligence.status);
+  const canonicalRunBeforeRecordingRef = useRef<string | null>(null);
+  canonicalResultMeetingIdRef.current = meetingIntelligence.meetingId;
+  meetingIntelligenceStatusRef.current = meetingIntelligence.status;
+
+  const loadCanonicalMeetingResult = useCallback(
+    async (
+      meetingId: string,
+      pollUntilReady = false,
+      previousAnalysisRunId: string | null = null,
+    ): Promise<void> => {
+      const readSequence = canonicalResultReadSequenceRef.current + 1;
+      canonicalResultReadSequenceRef.current = readSequence;
+      setCanonicalResultStatus('loading');
+      setCanonicalResultError(null);
+
+      const delays = pollUntilReady ? CANONICAL_RESULT_POLL_DELAYS_MS : ([0] as const);
+      try {
+        for (const delayMs of delays) {
+          if (delayMs > 0) {
+            await new Promise<void>((resolve) => {
+              window.setTimeout(resolve, delayMs);
+            });
+          }
+          if (canonicalResultReadSequenceRef.current !== readSequence) {
+            return;
+          }
+
+          const outcome = await window.electronAPI?.meeting.getIntelligenceResult({ meetingId });
+          if (!outcome) {
+            throw new Error('Electron meeting result bridge yanıt vermedi');
+          }
+          if (outcome.status === 'ready') {
+            if (!isNewCanonicalAnalysisRun(outcome.result, previousAnalysisRunId)) {
+              continue;
+            }
+            const result = meetingIntelligenceResultFromCanonicalResponse(outcome.result);
+            if (
+              canonicalResultReadSequenceRef.current !== readSequence ||
+              canonicalResultMeetingIdRef.current !== meetingId
+            ) {
+              return;
+            }
+            setMeetingIntelligence((current) => {
+              if (current.meetingId !== meetingId) {
+                return current;
+              }
+              return setMeetingIntelligenceResult(
+                { ...current, sessionId: outcome.result.sessionId },
+                result,
+              );
+            });
+            canonicalRunBeforeRecordingRef.current = null;
+            setCanonicalResultStatus('ready');
+            return;
+          }
+        }
+
+        if (
+          canonicalResultReadSequenceRef.current === readSequence &&
+          canonicalResultMeetingIdRef.current === meetingId
+        ) {
+          setCanonicalResultStatus('not_ready');
+        }
+      } catch (readError) {
+        if (
+          canonicalResultReadSequenceRef.current !== readSequence ||
+          canonicalResultMeetingIdRef.current !== meetingId
+        ) {
+          return;
+        }
+        const message = readError instanceof Error ? readError.message : String(readError);
+        setCanonicalResultStatus('error');
+        setCanonicalResultError(`Kalıcı toplantı çıktısı alınamadı: ${message}`);
+      }
+    },
+    [],
+  );
 
   const enqueuePendingLiveTranscriptEvent = (event: LiveSttTranscriptEvent): void => {
     pendingLiveTranscriptEventsRef.current = [
@@ -378,6 +467,33 @@ function App() {
   useEffect(() => {
     transcriptSessionIdRef.current = transcriptSession.sessionId;
   }, [transcriptSession.sessionId]);
+
+  useEffect(() => {
+    if (
+      !loggedIn ||
+      !meetingIntelligence.meetingId ||
+      recording ||
+      meetingIntelligenceStatusRef.current === 'recording' ||
+      meetingIntelligenceStatusRef.current === 'waiting'
+    ) {
+      canonicalResultReadSequenceRef.current += 1;
+      setCanonicalResultStatus('idle');
+      setCanonicalResultError(null);
+      return;
+    }
+    void loadCanonicalMeetingResult(meetingIntelligence.meetingId);
+  }, [loadCanonicalMeetingResult, loggedIn, meetingIntelligence.meetingId, recording]);
+
+  useEffect(() => {
+    canonicalRunBeforeRecordingRef.current = null;
+  }, [meetingIntelligence.meetingId]);
+
+  useEffect(
+    () => () => {
+      canonicalResultReadSequenceRef.current += 1;
+    },
+    [],
+  );
 
   useEffect(() => {
     directStreamConfiguredRef.current = Boolean(recorderConfig?.liveSttStreamUrl);
@@ -584,6 +700,10 @@ function App() {
       setLastAudioAtMs(null);
       setTranscriptSession(initialTranscriptSession());
       setMeetingIntelligence(initialMeetingIntelligence());
+      canonicalRunBeforeRecordingRef.current = null;
+      canonicalResultReadSequenceRef.current += 1;
+      setCanonicalResultStatus('idle');
+      setCanonicalResultError(null);
       setStatus('Çıkış yapıldı; Keycloak logout/revoke isteği gönderildi.');
     } catch (e) {
       setError(`Çıkış başarısız: ${(e as Error).message}`);
@@ -735,6 +855,7 @@ function App() {
           }),
         ),
       );
+      canonicalRunBeforeRecordingRef.current = meetingIntelligence.result?.analysisRunId ?? null;
       setMeetingIntelligence((current) =>
         markIntelligenceRecording(current, { meetingId, sessionId: rec.sessionId }),
       );
@@ -1070,9 +1191,33 @@ function App() {
               intelligence={meetingIntelligence}
               transcript={transcriptSession}
               autoSubmitMeetingAi={meetingIntelligence.status === 'waiting'}
-              onMeetingAiResult={(result) =>
-                setMeetingIntelligence((current) => setMeetingIntelligenceResult(current, result))
+              canonicalResultStatus={canonicalResultStatus}
+              canonicalResultError={canonicalResultError}
+              onCanonicalResultRetry={
+                meetingIntelligence.meetingId
+                  ? () =>
+                      void loadCanonicalMeetingResult(
+                        meetingIntelligence.meetingId!,
+                        true,
+                        canonicalAnalysisRunBaseline(
+                          meetingIntelligence.result?.analysisRunId ?? null,
+                          canonicalRunBeforeRecordingRef.current,
+                        ),
+                      )
+                  : undefined
               }
+              onMeetingAiSubmitted={() => {
+                if (meetingIntelligence.meetingId) {
+                  void loadCanonicalMeetingResult(
+                    meetingIntelligence.meetingId,
+                    true,
+                    canonicalAnalysisRunBaseline(
+                      meetingIntelligence.result?.analysisRunId ?? null,
+                      canonicalRunBeforeRecordingRef.current,
+                    ),
+                  );
+                }
+              }}
               onMeetingAiError={(message) =>
                 setMeetingIntelligence((current) => failMeetingIntelligence(current, message))
               }

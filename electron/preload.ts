@@ -8,6 +8,7 @@
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron';
 
 import type { AuthStatus } from './ipc/auth.js';
+import type { MeetingIntelligenceReadOutcome } from './services/meeting/meeting-client.js';
 
 export interface TranscriptGatewayEvent {
   eventId: string;
@@ -133,6 +134,10 @@ const electronAPI = {
         segments?: Array<{ text: string; start: number; end?: number }>;
       };
     }): Promise<unknown> => ipcRenderer.invoke('meeting:analyze', payload),
+    getIntelligenceResult: (payload: {
+      meetingId: string;
+    }): Promise<MeetingIntelligenceReadOutcome> =>
+      ipcRenderer.invoke('meeting:get-intelligence-result', payload),
   },
 };
 

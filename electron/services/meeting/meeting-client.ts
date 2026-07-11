@@ -62,6 +62,42 @@ export type MeetingAiAnalyzeResponse = Record<string, unknown> & {
   summary_citations?: unknown[] | null;
 };
 
+export interface MeetingIntelligenceCitationResponse {
+  claim: string;
+  source_index: number;
+  start_sec: number | null;
+  source_hash: string;
+  quote_hash: string;
+}
+
+export interface MeetingIntelligenceActionItemResponse {
+  text: string;
+  owner: string | null;
+  due_date: string | null;
+}
+
+export interface MeetingIntelligenceCanonicalResponse {
+  analysisRunId: string;
+  meetingId: string;
+  sessionId: string;
+  schema_version: string;
+  model: string | null;
+  backend: string | null;
+  summary: string;
+  summaryGroundingStatus: string | null;
+  summary_citations: MeetingIntelligenceCitationResponse[];
+  decisions: string[];
+  action_items: MeetingIntelligenceActionItemResponse[];
+  citations: MeetingIntelligenceCitationResponse[];
+  generatedAt: string;
+  persisted: true;
+  storageMode: 'canonical';
+}
+
+export type MeetingIntelligenceReadOutcome =
+  | { status: 'ready'; result: MeetingIntelligenceCanonicalResponse }
+  | { status: 'not_ready' };
+
 function isLocalHttp(url: URL): boolean {
   return (
     url.protocol === 'http:' &&
@@ -103,6 +139,13 @@ export function meetingIntelligenceAnalyzeUrl(cfg: MeetingClientConfig, meetingI
   return `${meetingsUrl(cfg)}/${meetingId}/intelligence/analyze`;
 }
 
+export function meetingIntelligenceResultUrl(cfg: MeetingClientConfig, meetingId: string): string {
+  if (!MEETING_ID_PATTERN.test(meetingId)) {
+    throw new Error('meetingId must be a canonical UUID');
+  }
+  return `${meetingsUrl(cfg)}/${meetingId}/intelligence/result`;
+}
+
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => {
     setTimeout(resolve, ms);
@@ -140,7 +183,20 @@ async function retryDelay(attempt: number): Promise<void> {
   await delay(CREATE_CONTRACT_RETRY_DELAY_MS * attempt);
 }
 
-async function httpErrorMessage(res: Response, operation: string): Promise<string> {
+async function discardResponseBody(res: Response): Promise<void> {
+  try {
+    await res.body?.cancel();
+  } catch {
+    // Retry remains authoritative; a best-effort body close must not mask it.
+  }
+}
+
+interface SafeHttpErrorMetadata {
+  code: string | null;
+  suffix: string;
+}
+
+async function safeHttpErrorMetadata(res: Response): Promise<SafeHttpErrorMetadata> {
   const contentType = res.headers?.get('content-type') ?? '';
   let body = '';
   try {
@@ -150,21 +206,27 @@ async function httpErrorMessage(res: Response, operation: string): Promise<strin
   }
 
   const fields: string[] = [];
+  let code: string | null = null;
   if (contentType.toLowerCase().includes('application/json') && body.trim()) {
     try {
       const parsed = JSON.parse(body) as {
         code?: unknown;
+        error?: unknown;
         correlationId?: unknown;
+        traceId?: unknown;
         retryable?: unknown;
       };
-      if (typeof parsed.code === 'string' && /^[A-Z_]{1,64}$/.test(parsed.code)) {
-        fields.push(`code=${parsed.code}`);
+      const parsedCode = parsed.code ?? parsed.error;
+      if (typeof parsedCode === 'string' && /^[A-Z_]{1,64}$/.test(parsedCode)) {
+        code = parsedCode;
+        fields.push(`code=${parsedCode}`);
       }
+      const parsedCorrelationId = parsed.correlationId ?? parsed.traceId;
       if (
-        typeof parsed.correlationId === 'string' &&
-        /^[A-Za-z0-9._:-]{1,128}$/.test(parsed.correlationId)
+        typeof parsedCorrelationId === 'string' &&
+        /^[A-Za-z0-9._:-]{1,128}$/.test(parsedCorrelationId)
       ) {
-        fields.push(`correlationId=${parsed.correlationId}`);
+        fields.push(`correlationId=${parsedCorrelationId}`);
       }
       if (typeof parsed.retryable === 'boolean') {
         fields.push(`retryable=${String(parsed.retryable)}`);
@@ -176,8 +238,15 @@ async function httpErrorMessage(res: Response, operation: string): Promise<strin
     fields.push(`contentType=${contentType}`);
   }
 
-  const suffix = fields.length > 0 ? ` ${fields.join(' ')}` : '';
-  return `${operation} failed: ${res.status}${suffix}`;
+  return {
+    code,
+    suffix: fields.length > 0 ? ` ${fields.join(' ')}` : '',
+  };
+}
+
+async function httpErrorMessage(res: Response, operation: string): Promise<string> {
+  const metadata = await safeHttpErrorMetadata(res);
+  return `${operation} failed: ${res.status}${metadata.suffix}`;
 }
 
 function normalizeTitle(title: string | undefined): string {
@@ -238,6 +307,202 @@ function parseMeetingAiAnalyzeResponse(value: unknown): MeetingAiAnalyzeResponse
   return record as MeetingAiAnalyzeResponse;
 }
 
+function requiredRecord(value: unknown, label: string): Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error(`${label} is not an object`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function requiredString(value: unknown, label: string): string {
+  if (typeof value !== 'string' || !value.trim()) {
+    throw new Error(`${label} is missing`);
+  }
+  return value;
+}
+
+function requiredText(value: unknown, label: string): string {
+  if (typeof value !== 'string') {
+    throw new Error(`${label} is not a string`);
+  }
+  return value;
+}
+
+function nullableString(value: unknown, label: string): string | null {
+  if (value === undefined || value === null) {
+    return null;
+  }
+  if (typeof value !== 'string') {
+    throw new Error(`${label} is not a string`);
+  }
+  return value;
+}
+
+function requiredCanonicalUuid(value: unknown, label: string): string {
+  const text = requiredString(value, label);
+  if (!MEETING_ID_PATTERN.test(text)) {
+    throw new Error(`${label} is not a canonical UUID`);
+  }
+  return text;
+}
+
+function requiredNonNegativeInteger(value: unknown, label: string): number {
+  if (!Number.isInteger(value) || (value as number) < 0) {
+    throw new Error(`${label} is not a non-negative integer`);
+  }
+  return value as number;
+}
+
+function requiredUnitNumber(value: unknown, label: string): number {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0 || value > 1) {
+    throw new Error(`${label} is not between 0 and 1`);
+  }
+  return value;
+}
+
+function parseCanonicalCitation(
+  value: unknown,
+  label: string,
+): MeetingIntelligenceCitationResponse {
+  const record = requiredRecord(value, label);
+  const sourceCharStart = requiredNonNegativeInteger(
+    record.source_char_start,
+    `${label}.source_char_start`,
+  );
+  const sourceCharEnd = requiredNonNegativeInteger(
+    record.source_char_end,
+    `${label}.source_char_end`,
+  );
+  if (sourceCharEnd <= sourceCharStart) {
+    throw new Error(`${label}.source_char_end must be greater than source_char_start`);
+  }
+  const sourceHash = requiredString(record.source_hash, `${label}.source_hash`);
+  const quoteHash = requiredString(record.quote_hash, `${label}.quote_hash`);
+  if (!/^[0-9a-fA-F]{64}$/.test(sourceHash) || !/^[0-9a-fA-F]{64}$/.test(quoteHash)) {
+    throw new Error(`${label} hashes are not SHA-256 hex`);
+  }
+  const startSec = record.start_sec;
+  if (
+    startSec !== undefined &&
+    startSec !== null &&
+    (typeof startSec !== 'number' || !Number.isFinite(startSec) || startSec < 0)
+  ) {
+    throw new Error(`${label}.start_sec is invalid`);
+  }
+  if (record.grounded !== true || record.status !== 'PASSED') {
+    throw new Error(`${label} is not grounded evidence`);
+  }
+
+  return {
+    claim: requiredString(record.claim, `${label}.claim`),
+    source_index: requiredNonNegativeInteger(record.source_index, `${label}.source_index`),
+    start_sec: typeof startSec === 'number' ? startSec : null,
+    source_hash: sourceHash,
+    quote_hash: quoteHash,
+  };
+}
+
+function parseCanonicalCitations(
+  value: unknown,
+  label: string,
+): MeetingIntelligenceCitationResponse[] {
+  if (!Array.isArray(value)) {
+    throw new Error(`${label} is not an array`);
+  }
+  return value.map((item, index) => parseCanonicalCitation(item, `${label}[${index}]`));
+}
+
+function validateCanonicalRejectedClaims(value: unknown): void {
+  if (!Array.isArray(value)) {
+    throw new Error('meeting intelligence result rejected_claims is not an array');
+  }
+  value.forEach((item, index) => {
+    const label = `meeting intelligence result rejected_claims[${index}]`;
+    const record = requiredRecord(item, label);
+    requiredString(record.claim, `${label}.claim`);
+    requiredString(record.kind, `${label}.kind`);
+    requiredString(record.status, `${label}.status`);
+    requiredString(record.reason, `${label}.reason`);
+    requiredUnitNumber(record.similarity, `${label}.similarity`);
+  });
+}
+
+function parseCanonicalDecisions(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    throw new Error('meeting intelligence result decisions is not an array');
+  }
+  return value.map((item, index) => requiredString(item, `decisions[${index}]`));
+}
+
+function parseCanonicalActions(value: unknown): MeetingIntelligenceActionItemResponse[] {
+  if (!Array.isArray(value)) {
+    throw new Error('meeting intelligence result action_items is not an array');
+  }
+  return value.map((item, index) => {
+    const label = `meeting intelligence result action_items[${index}]`;
+    const record = requiredRecord(item, label);
+    return {
+      text: requiredString(record.text, `${label}.text`),
+      owner: nullableString(record.owner, `${label}.owner`),
+      due_date: nullableString(record.due_date, `${label}.due_date`),
+    };
+  });
+}
+
+export function parseMeetingIntelligenceCanonicalResponse(
+  value: unknown,
+  expectedMeetingId: string,
+): MeetingIntelligenceCanonicalResponse {
+  const label = 'meeting intelligence result';
+  const record = requiredRecord(value, label);
+  const meetingId = requiredCanonicalUuid(record.meetingId, `${label}.meetingId`);
+  if (meetingId !== expectedMeetingId) {
+    throw new Error('meeting intelligence result meetingId does not match request');
+  }
+  const generatedAt = requiredString(record.generatedAt, `${label}.generatedAt`);
+  if (!Number.isFinite(Date.parse(generatedAt))) {
+    throw new Error('meeting intelligence result generatedAt is invalid');
+  }
+  if (record.persisted !== true || record.storageMode !== 'canonical') {
+    throw new Error('meeting intelligence result is not a canonical persisted snapshot');
+  }
+  if (typeof record.redacted !== 'boolean') {
+    throw new Error('meeting intelligence result redacted is not a boolean');
+  }
+  requiredNonNegativeInteger(record.ungrounded_count, `${label}.ungrounded_count`);
+  requiredNonNegativeInteger(record.redaction_count, `${label}.redaction_count`);
+  validateCanonicalRejectedClaims(record.rejected_claims);
+  nullableString(record.promptVersion, `${label}.promptVersion`);
+  const summaryGroundingStatus = nullableString(
+    record.summary_grounding_status,
+    `${label}.summary_grounding_status`,
+  );
+  if (record.supersedesAnalysisRunId !== undefined && record.supersedesAnalysisRunId !== null) {
+    requiredCanonicalUuid(record.supersedesAnalysisRunId, `${label}.supersedesAnalysisRunId`);
+  }
+
+  return {
+    analysisRunId: requiredCanonicalUuid(record.analysisRunId, `${label}.analysisRunId`),
+    meetingId,
+    sessionId: requiredString(record.sessionId, `${label}.sessionId`),
+    schema_version: requiredString(record.schema_version, `${label}.schema_version`),
+    model: nullableString(record.model, `${label}.model`),
+    backend: nullableString(record.backend, `${label}.backend`),
+    summary: requiredText(record.summary, `${label}.summary`),
+    summaryGroundingStatus,
+    summary_citations: parseCanonicalCitations(
+      record.summary_citations,
+      `${label}.summary_citations`,
+    ),
+    decisions: parseCanonicalDecisions(record.decisions),
+    action_items: parseCanonicalActions(record.action_items),
+    citations: parseCanonicalCitations(record.citations, `${label}.citations`),
+    generatedAt: new Date(generatedAt).toISOString(),
+    persisted: true,
+    storageMode: 'canonical',
+  };
+}
+
 export async function createMeetingContract(
   cfg: MeetingClientConfig,
   jwt: string,
@@ -280,6 +545,7 @@ export async function createMeetingContract(
 
     if (!res.ok) {
       if (attempt < CREATE_CONTRACT_MAX_ATTEMPTS && RETRYABLE_HTTP_STATUS.has(res.status)) {
+        await discardResponseBody(res);
         await retryDelay(attempt);
         continue;
       }
@@ -331,6 +597,7 @@ export async function analyzeMeetingIntelligence(
 
     if (!res.ok) {
       if (attempt < CREATE_CONTRACT_MAX_ATTEMPTS && RETRYABLE_HTTP_STATUS.has(res.status)) {
+        await discardResponseBody(res);
         await retryDelay(attempt);
         continue;
       }
@@ -341,4 +608,62 @@ export async function analyzeMeetingIntelligence(
   }
 
   throw new Error('analyzeMeetingIntelligence failed: retry loop exhausted');
+}
+
+export async function readMeetingIntelligenceResult(
+  cfg: MeetingClientConfig,
+  jwt: string,
+  meetingId: string,
+): Promise<MeetingIntelligenceReadOutcome> {
+  const requestInit = {
+    method: 'GET',
+    headers: {
+      Authorization: `Bearer ${jwt}`,
+      Accept: 'application/json',
+      'Cache-Control': 'no-store',
+    },
+  };
+
+  for (let attempt = 1; attempt <= CREATE_CONTRACT_MAX_ATTEMPTS; attempt += 1) {
+    let res: Response;
+    try {
+      res = await desktopFetch(meetingIntelligenceResultUrl(cfg, meetingId), requestInit);
+    } catch (error) {
+      if (attempt < CREATE_CONTRACT_MAX_ATTEMPTS && isRetryableNetworkError(error)) {
+        await retryDelay(attempt);
+        continue;
+      }
+      if (isRetryableNetworkError(error)) {
+        throw new Error(
+          `readMeetingIntelligenceResult failed before response after ${attempt} attempts: network=${retryableNetworkLabel(
+            error,
+          )}`,
+        );
+      }
+      throw error instanceof Error ? error : new Error(String(error));
+    }
+
+    if (res.status === 404) {
+      const metadata = await safeHttpErrorMetadata(res);
+      if (metadata.code === 'ANALYSIS_RESULT_NOT_FOUND') {
+        return { status: 'not_ready' };
+      }
+      throw new Error(`readMeetingIntelligenceResult failed: 404${metadata.suffix}`);
+    }
+    if (!res.ok) {
+      if (attempt < CREATE_CONTRACT_MAX_ATTEMPTS && RETRYABLE_HTTP_STATUS.has(res.status)) {
+        await discardResponseBody(res);
+        await retryDelay(attempt);
+        continue;
+      }
+      throw new Error(await httpErrorMessage(res, 'readMeetingIntelligenceResult'));
+    }
+
+    return {
+      status: 'ready',
+      result: parseMeetingIntelligenceCanonicalResponse(await res.json(), meetingId),
+    };
+  }
+
+  throw new Error('readMeetingIntelligenceResult failed: retry loop exhausted');
 }
