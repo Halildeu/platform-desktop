@@ -392,7 +392,7 @@ describe('connectLiveSttStream', () => {
     stream.close();
   });
 
-  it('keeps a stable draft when a same-opener partial jumps to a new phrase', () => {
+  it('trusts stable-v1 partial corrections without fabricating a same-opener sentence', () => {
     vi.useFakeTimers();
     vi.stubGlobal('WebSocket', FakeWebSocket);
     const events: LiveSttTranscriptEvent[] = [];
@@ -403,7 +403,7 @@ describe('connectLiveSttStream', () => {
     const ws = FakeWebSocket.instances[0];
 
     ws?.open();
-    ws?.message({ type: 'ready' });
+    ws?.message({ type: 'ready', partial_mode: 'stable-v1' });
     ws?.message({
       type: 'partial',
       seq: 0,
@@ -417,15 +417,15 @@ describe('connectLiveSttStream', () => {
     ws?.message({
       type: 'partial',
       seq: 0,
-      confirmed: '',
-      tentative: 'Merhaba burada hava çok',
+      confirmed: 'Merhaba',
+      tentative: 'burada hava çok',
       elapsed_ms: 240,
       rms: 0.04,
       source: 'medium',
     });
     vi.advanceTimersByTime(210);
 
-    expect(events.at(-1)?.text).toBe('Merhaba sesim geliyor mu beni duyuyor musun burada hava çok');
+    expect(events.at(-1)?.text).toBe('Merhaba burada hava çok');
 
     stream.close();
   });
@@ -655,7 +655,7 @@ describe('connectLiveSttStream', () => {
     stream.close();
   });
 
-  it('drops a known caption-style final artifact when no stable draft exists', () => {
+  it('keeps a legitimate common final phrase when no stable draft exists', () => {
     vi.stubGlobal('WebSocket', FakeWebSocket);
     const events: LiveSttTranscriptEvent[] = [];
 
@@ -674,7 +674,13 @@ describe('connectLiveSttStream', () => {
       rms: 0.04,
     });
 
-    expect(events).toEqual([]);
+    expect(events).toEqual([
+      expect.objectContaining({
+        id: 'stream:0',
+        status: 'final',
+        text: 'İstediğiniz için teşekkür ederim.',
+      }),
+    ]);
 
     stream.close();
   });
@@ -929,7 +935,7 @@ describe('connectLiveSttStream', () => {
     stream.close();
   });
 
-  it('finalizes the stable draft when the final payload is a caption-style artifact', () => {
+  it('falls back to the stable draft when the final payload is a known short artifact', () => {
     vi.useFakeTimers();
     vi.stubGlobal('WebSocket', FakeWebSocket);
     const events: LiveSttTranscriptEvent[] = [];
@@ -954,7 +960,7 @@ describe('connectLiveSttStream', () => {
     ws?.message({
       type: 'final',
       seq: 0,
-      text: 'İstediğiniz için teşekkür ederim.',
+      text: 'Neroba',
       elapsed_ms: 760,
       rms: 0.04,
     });
