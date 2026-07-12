@@ -3,6 +3,8 @@ import { desktopFetch } from '../net/desktop-fetch.js';
 const API = '/api/v1/admin/meetings';
 const CREATE_CONTRACT_MAX_ATTEMPTS = 3;
 const CREATE_CONTRACT_RETRY_DELAY_MS = 250;
+const RECENT_MEETINGS_DEFAULT_SIZE = 20;
+const RECENT_MEETINGS_MAX_SIZE = 50;
 const RETRYABLE_HTTP_STATUS = new Set([502, 503, 504]);
 const RETRYABLE_NETWORK_CODES = new Set([
   'UND_ERR_SOCKET',
@@ -27,6 +29,26 @@ export interface MeetingContract {
   status: string;
   scheduledStart?: string | null;
   scheduledEnd?: string | null;
+  createdAt?: string | null;
+  updatedAt?: string | null;
+}
+
+export interface RecentMeetingSummary {
+  id: string;
+  title: string;
+  status: string;
+  scheduledStart: string | null;
+  scheduledEnd: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface RecentMeetingsPage {
+  meetings: RecentMeetingSummary[];
+  page: number;
+  size: number;
+  totalElements: number;
+  totalPages: number;
 }
 
 export interface CreateMeetingContractArgs {
@@ -130,6 +152,15 @@ export function loadMeetingConfig(env: NodeJS.ProcessEnv = process.env): Meeting
 
 export function meetingsUrl(cfg: MeetingClientConfig): string {
   return `${cfg.baseUrl}${API}`;
+}
+
+export function recentMeetingsUrl(
+  cfg: MeetingClientConfig,
+  size = RECENT_MEETINGS_DEFAULT_SIZE,
+): string {
+  const normalizedSize = Number.isFinite(size) ? Math.trunc(size) : RECENT_MEETINGS_DEFAULT_SIZE;
+  const boundedSize = Math.min(RECENT_MEETINGS_MAX_SIZE, Math.max(1, normalizedSize));
+  return `${meetingsUrl(cfg)}?page=0&size=${boundedSize}`;
 }
 
 export function meetingIntelligenceAnalyzeUrl(cfg: MeetingClientConfig, meetingId: string): string {
@@ -257,26 +288,118 @@ function normalizeTitle(title: string | undefined): string {
   return `Desktop recorder ${new Date().toISOString()}`;
 }
 
-function parseMeetingContract(value: unknown): MeetingContract {
-  if (!value || typeof value !== 'object') {
-    throw new Error('meeting-service response is not an object');
+function boundedString(value: unknown, label: string, maxLength: number): string {
+  if (typeof value !== 'string') {
+    throw new Error(`${label} is not a string`);
   }
-  const record = value as Record<string, unknown>;
-  if (typeof record.id !== 'string' || !MEETING_ID_PATTERN.test(record.id)) {
+  const trimmed = value.trim();
+  if (!trimmed || trimmed.length > maxLength) {
+    throw new Error(`${label} is invalid`);
+  }
+  return trimmed;
+}
+
+function canonicalIsoInstant(value: unknown, label: string): string {
+  const instant = boundedString(value, label, 64);
+  const epoch = Date.parse(instant);
+  if (!Number.isFinite(epoch)) {
+    throw new Error(`${label} is not an ISO instant`);
+  }
+  return new Date(epoch).toISOString();
+}
+
+function optionalCanonicalIsoInstant(value: unknown, label: string): string | null {
+  if (value === undefined || value === null) {
+    return null;
+  }
+  return canonicalIsoInstant(value, label);
+}
+
+function boundedInteger(value: unknown, label: string, minimum: number): number {
+  if (!Number.isInteger(value) || (value as number) < minimum) {
+    throw new Error(`${label} is invalid`);
+  }
+  return value as number;
+}
+
+function parseMeetingContract(value: unknown): MeetingContract {
+  const record = requiredRecord(value, 'meeting-service response');
+  const id = boundedString(record.id, 'meeting-service response id', 36);
+  if (!MEETING_ID_PATTERN.test(id)) {
     throw new Error('meeting-service response id is not a canonical UUID');
   }
-  if (typeof record.title !== 'string' || !record.title.trim()) {
-    throw new Error('meeting-service response title is missing');
-  }
-  if (typeof record.status !== 'string' || !record.status.trim()) {
-    throw new Error('meeting-service response status is missing');
+  return {
+    id,
+    title: boundedString(record.title, 'meeting-service response title', 512),
+    status: boundedString(record.status, 'meeting-service response status', 64),
+    scheduledStart: optionalCanonicalIsoInstant(
+      record.scheduledStart,
+      'meeting-service response scheduledStart',
+    ),
+    scheduledEnd: optionalCanonicalIsoInstant(
+      record.scheduledEnd,
+      'meeting-service response scheduledEnd',
+    ),
+    createdAt: optionalCanonicalIsoInstant(record.createdAt, 'meeting-service response createdAt'),
+    updatedAt: optionalCanonicalIsoInstant(record.updatedAt, 'meeting-service response updatedAt'),
+  };
+}
+
+function parseRecentMeetingSummary(value: unknown, index: number): RecentMeetingSummary {
+  const record = requiredRecord(value, `meeting list content[${index}]`);
+  const id = boundedString(record.id, `meeting list content[${index}].id`, 36);
+  if (!MEETING_ID_PATTERN.test(id)) {
+    throw new Error(`meeting list content[${index}].id is not a canonical UUID`);
   }
   return {
-    id: record.id,
-    title: record.title,
-    status: record.status,
-    scheduledStart: typeof record.scheduledStart === 'string' ? record.scheduledStart : null,
-    scheduledEnd: typeof record.scheduledEnd === 'string' ? record.scheduledEnd : null,
+    id,
+    title: boundedString(record.title, `meeting list content[${index}].title`, 512),
+    status: boundedString(record.status, `meeting list content[${index}].status`, 64),
+    scheduledStart: optionalCanonicalIsoInstant(
+      record.scheduledStart,
+      `meeting list content[${index}].scheduledStart`,
+    ),
+    scheduledEnd: optionalCanonicalIsoInstant(
+      record.scheduledEnd,
+      `meeting list content[${index}].scheduledEnd`,
+    ),
+    createdAt: canonicalIsoInstant(record.createdAt, `meeting list content[${index}].createdAt`),
+    updatedAt: canonicalIsoInstant(record.updatedAt, `meeting list content[${index}].updatedAt`),
+  };
+}
+
+export function parseRecentMeetingsPage(value: unknown): RecentMeetingsPage {
+  const record = requiredRecord(value, 'meeting list response');
+  if (!Array.isArray(record.content)) {
+    throw new Error('meeting list response content is not an array');
+  }
+  if (record.content.length > RECENT_MEETINGS_MAX_SIZE) {
+    throw new Error('meeting list response content exceeds the client limit');
+  }
+
+  const page = boundedInteger(record.page, 'meeting list response page', 0);
+  const size = boundedInteger(record.size, 'meeting list response size', 1);
+  const totalElements = boundedInteger(
+    record.totalElements,
+    'meeting list response totalElements',
+    0,
+  );
+  const totalPages = boundedInteger(record.totalPages, 'meeting list response totalPages', 0);
+  if (page !== 0 || size > RECENT_MEETINGS_MAX_SIZE || record.content.length > size) {
+    throw new Error('meeting list response pagination metadata is invalid');
+  }
+
+  const meetings = record.content.map(parseRecentMeetingSummary);
+  if (new Set(meetings.map((meeting) => meeting.id)).size !== meetings.length) {
+    throw new Error('meeting list response contains duplicate meeting ids');
+  }
+
+  return {
+    meetings,
+    page,
+    size,
+    totalElements,
+    totalPages,
   };
 }
 
@@ -555,6 +678,54 @@ export async function createMeetingContract(
   }
 
   throw new Error('createMeetingContract failed: retry loop exhausted');
+}
+
+export async function listRecentMeetings(
+  cfg: MeetingClientConfig,
+  jwt: string,
+  size = RECENT_MEETINGS_DEFAULT_SIZE,
+): Promise<RecentMeetingsPage> {
+  const requestInit = {
+    method: 'GET',
+    headers: {
+      Authorization: `Bearer ${jwt}`,
+      Accept: 'application/json',
+      'Cache-Control': 'no-store',
+    },
+  };
+
+  for (let attempt = 1; attempt <= CREATE_CONTRACT_MAX_ATTEMPTS; attempt += 1) {
+    let res: Response;
+    try {
+      res = await desktopFetch(recentMeetingsUrl(cfg, size), requestInit);
+    } catch (error) {
+      if (attempt < CREATE_CONTRACT_MAX_ATTEMPTS && isRetryableNetworkError(error)) {
+        await retryDelay(attempt);
+        continue;
+      }
+      if (isRetryableNetworkError(error)) {
+        throw new Error(
+          `listRecentMeetings failed before response after ${attempt} attempts: network=${retryableNetworkLabel(
+            error,
+          )}`,
+        );
+      }
+      throw error instanceof Error ? error : new Error(String(error));
+    }
+
+    if (!res.ok) {
+      if (attempt < CREATE_CONTRACT_MAX_ATTEMPTS && RETRYABLE_HTTP_STATUS.has(res.status)) {
+        await discardResponseBody(res);
+        await retryDelay(attempt);
+        continue;
+      }
+      throw new Error(await httpErrorMessage(res, 'listRecentMeetings'));
+    }
+
+    return parseRecentMeetingsPage(await res.json());
+  }
+
+  throw new Error('listRecentMeetings failed: retry loop exhausted');
 }
 
 export async function analyzeMeetingIntelligence(

@@ -3,6 +3,7 @@ import { ipcMain } from 'electron';
 import {
   analyzeMeetingIntelligence,
   createMeetingContract,
+  listRecentMeetings,
   loadMeetingConfig,
   readMeetingIntelligenceResult,
   type CreateMeetingContractArgs,
@@ -11,6 +12,7 @@ import {
   type MeetingAiAnalyzeResponse,
   type MeetingContract,
   type MeetingIntelligenceReadOutcome,
+  type RecentMeetingsPage,
 } from '../services/meeting/meeting-client.js';
 import { getValidAccessToken } from './auth.js';
 
@@ -186,6 +188,9 @@ export function registerMeetingIpc(): void {
       return createMeetingContract(loadMeetingConfig(), await getValidAccessToken(), args);
     },
   );
+  ipcMain.handle('meeting:list-recent', async (): Promise<RecentMeetingsPage> => {
+    return listRecentMeetings(loadMeetingConfig(), await getValidAccessToken());
+  });
   ipcMain.handle(
     'meeting:analyze',
     async (_e, payload: unknown): Promise<MeetingAiAnalyzeResponse> => {

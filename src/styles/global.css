@@ -193,6 +193,107 @@ button:disabled {
   border-radius: 6px;
 }
 
+.meeting-result-picker {
+  margin-top: 18px;
+  padding-top: 16px;
+  border-top: 1px solid #e2e8f0;
+}
+
+.meeting-result-picker-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.meeting-result-picker-header h2 {
+  margin: 0;
+  color: #17202a;
+  font-size: 13px;
+}
+
+.meeting-result-picker-header p {
+  margin: 4px 0 0;
+  color: #64748b;
+  font-size: 12px;
+}
+
+.meeting-result-picker-error {
+  margin: 10px 0 0;
+  padding: 8px 10px;
+  border: 1px solid #fecaca;
+  border-radius: 6px;
+  background: #fef2f2;
+  color: #991b1b;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.meeting-result-picker-field {
+  display: grid;
+  gap: 6px;
+  margin-top: 12px;
+}
+
+.meeting-result-picker-field > span {
+  color: #475569;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.meeting-result-picker-field select {
+  width: 100%;
+  min-width: 0;
+  height: 38px;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  background: #ffffff;
+  color: #17202a;
+  font: inherit;
+  padding: 0 10px;
+}
+
+.meeting-result-picker-field select:focus {
+  border-color: #0f766e;
+  box-shadow: 0 0 0 3px rgba(15, 118, 110, 0.12);
+  outline: none;
+}
+
+.meeting-targets {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin: 10px 0 0;
+}
+
+.meeting-targets div {
+  min-width: 0;
+  padding: 8px 9px;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  background: #f8fafc;
+}
+
+.meeting-targets dt {
+  color: #64748b;
+  font-size: 11px;
+}
+
+.meeting-targets dd {
+  margin: 3px 0 0;
+  color: #17202a;
+  font-size: 12px;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.meeting-target-note {
+  margin: 8px 0 0;
+  color: #9a3412;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
 .claims {
   margin-top: 18px;
   padding-top: 16px;
@@ -1650,6 +1751,15 @@ button:disabled {
   .canonical-result-pending {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .meeting-result-picker-header {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .meeting-targets {
+    grid-template-columns: 1fr;
   }
 
   .session-strip,

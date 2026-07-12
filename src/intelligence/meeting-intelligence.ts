@@ -198,7 +198,7 @@ export function bindMeetingIntelligenceTarget(
     };
   }
 
-  if (state.meetingId && state.meetingId !== args.meetingId) {
+  if (state.meetingId !== args.meetingId) {
     return {
       status: 'idle',
       meetingId: args.meetingId,

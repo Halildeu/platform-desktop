@@ -8,7 +8,10 @@
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron';
 
 import type { AuthStatus } from './ipc/auth.js';
-import type { MeetingIntelligenceReadOutcome } from './services/meeting/meeting-client.js';
+import type {
+  MeetingIntelligenceReadOutcome,
+  RecentMeetingsPage,
+} from './services/meeting/meeting-client.js';
 
 export interface TranscriptGatewayEvent {
   eventId: string;
@@ -113,6 +116,7 @@ const electronAPI = {
     logout: (): Promise<AuthStatus> => ipcRenderer.invoke('auth:logout'),
   },
   meeting: {
+    listRecent: (): Promise<RecentMeetingsPage> => ipcRenderer.invoke('meeting:list-recent'),
     createContract: (payload?: {
       title?: string;
       description?: string;
