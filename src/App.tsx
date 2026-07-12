@@ -20,7 +20,9 @@ import {
   CONSENT_TEXT_HASH,
   CONSENT_LOCALE,
 } from './components/ConsentDialog';
+import { MeetingResultPicker, type RecentMeetingsStatus } from './components/MeetingResultPicker';
 import { SummaryPanel, type CanonicalResultLoadStatus } from './components/SummaryPanel';
+import type { RecentMeetingSummary } from '../electron/services/meeting/meeting-client';
 import {
   bindMeetingIntelligenceTarget,
   failMeetingIntelligence,
@@ -73,6 +75,10 @@ interface MeetingContract {
   id: string;
   title: string;
   status: string;
+  scheduledStart?: string | null;
+  scheduledEnd?: string | null;
+  createdAt?: string | null;
+  updatedAt?: string | null;
 }
 
 interface StartupPreflightOutcome {
@@ -353,6 +359,10 @@ function App() {
   const [recorderConfig, setRecorderConfig] = useState<RecorderRuntimeConfig | null>(null);
   const [transcriptSession, setTranscriptSession] = useState(initialTranscriptSession);
   const [meetingIntelligence, setMeetingIntelligence] = useState(initialMeetingIntelligence);
+  const [recentMeetings, setRecentMeetings] = useState<RecentMeetingSummary[]>([]);
+  const [recentMeetingsStatus, setRecentMeetingsStatus] = useState<RecentMeetingsStatus>('idle');
+  const [recentMeetingsError, setRecentMeetingsError] = useState<string | null>(null);
+  const [recentMeetingsTotal, setRecentMeetingsTotal] = useState(0);
   const [canonicalResultStatus, setCanonicalResultStatus] =
     useState<CanonicalResultLoadStatus>('idle');
   const [canonicalResultError, setCanonicalResultError] = useState<string | null>(null);
@@ -376,6 +386,7 @@ function App() {
   const directStreamConfiguredRef = useRef(false);
   const transcriptSessionIdRef = useRef<string | null>(null);
   const pendingLiveTranscriptEventsRef = useRef<LiveSttTranscriptEvent[]>([]);
+  const recentMeetingsReadSequenceRef = useRef(0);
   const canonicalResultReadSequenceRef = useRef(0);
   const canonicalResultMeetingIdRef = useRef<string | null>(meetingIntelligence.meetingId);
   const meetingIntelligenceStatusRef = useRef(meetingIntelligence.status);
@@ -452,6 +463,39 @@ function App() {
         const message = readError instanceof Error ? readError.message : String(readError);
         setCanonicalResultStatus('error');
         setCanonicalResultError(`Kalıcı toplantı çıktısı alınamadı: ${message}`);
+      }
+    },
+    [],
+  );
+
+  const loadRecentMeetings = useCallback(
+    async (preserveMeeting: RecentMeetingSummary | null = null): Promise<void> => {
+      const readSequence = recentMeetingsReadSequenceRef.current + 1;
+      recentMeetingsReadSequenceRef.current = readSequence;
+      setRecentMeetingsStatus('loading');
+      setRecentMeetingsError(null);
+      try {
+        const page = await window.electronAPI?.meeting.listRecent();
+        if (!page) {
+          throw new Error('Electron meeting list bridge yanıt vermedi');
+        }
+        if (recentMeetingsReadSequenceRef.current !== readSequence) {
+          return;
+        }
+        const meetings =
+          preserveMeeting && !page.meetings.some((meeting) => meeting.id === preserveMeeting.id)
+            ? [preserveMeeting, ...page.meetings].slice(0, page.size)
+            : page.meetings;
+        setRecentMeetings(meetings);
+        setRecentMeetingsTotal(Math.max(page.totalElements, meetings.length));
+        setRecentMeetingsStatus('ready');
+      } catch (listError) {
+        if (recentMeetingsReadSequenceRef.current !== readSequence) {
+          return;
+        }
+        const message = listError instanceof Error ? listError.message : String(listError);
+        setRecentMeetingsStatus('error');
+        setRecentMeetingsError(`Toplantılar alınamadı: ${message}`);
       }
     },
     [],
@@ -576,6 +620,18 @@ function App() {
   }, []);
 
   useEffect(() => {
+    if (!loggedIn) {
+      recentMeetingsReadSequenceRef.current += 1;
+      setRecentMeetings([]);
+      setRecentMeetingsTotal(0);
+      setRecentMeetingsStatus('idle');
+      setRecentMeetingsError(null);
+      return;
+    }
+    void loadRecentMeetings();
+  }, [loadRecentMeetings, loggedIn]);
+
+  useEffect(() => {
     const offTranscriptEvent = window.electronAPI?.audio.onTranscriptEvent?.((event) => {
       setTranscriptSession((current) => {
         if (!current.sessionId || event.sessionId !== current.sessionId) {
@@ -651,7 +707,32 @@ function App() {
     setMeetingIntelligence((current) =>
       bindMeetingIntelligenceTarget(current, { meetingId: contract.id }),
     );
+    const createdAt = contract.createdAt ?? contract.scheduledStart ?? new Date().toISOString();
+    const updatedAt = contract.updatedAt ?? createdAt;
+    const recentMeeting: RecentMeetingSummary = {
+      id: contract.id,
+      title: contract.title,
+      status: contract.status,
+      scheduledStart: contract.scheduledStart ?? null,
+      scheduledEnd: contract.scheduledEnd ?? null,
+      createdAt,
+      updatedAt,
+    };
+    setRecentMeetings((current) => [
+      recentMeeting,
+      ...current.filter((meeting) => meeting.id !== contract.id),
+    ]);
+    setRecentMeetingsStatus('ready');
+    setRecentMeetingsError(null);
+    setRecentMeetingsTotal((current) => Math.max(current + 1, 1));
+    void loadRecentMeetings(recentMeeting);
     setStatus(`Meeting contract hazır: ${contract.id}`);
+  };
+
+  const handleMeetingResultSelect = (meetingId: string): void => {
+    canonicalRunBeforeRecordingRef.current = null;
+    setCanonicalResultError(null);
+    setMeetingIntelligence((current) => bindMeetingIntelligenceTarget(current, { meetingId }));
   };
 
   const handleCreateMeetingContract = async (): Promise<void> => {
@@ -700,6 +781,11 @@ function App() {
       setLastAudioAtMs(null);
       setTranscriptSession(initialTranscriptSession());
       setMeetingIntelligence(initialMeetingIntelligence());
+      recentMeetingsReadSequenceRef.current += 1;
+      setRecentMeetings([]);
+      setRecentMeetingsTotal(0);
+      setRecentMeetingsStatus('idle');
+      setRecentMeetingsError(null);
       canonicalRunBeforeRecordingRef.current = null;
       canonicalResultReadSequenceRef.current += 1;
       setCanonicalResultStatus('idle');
@@ -1148,6 +1234,21 @@ function App() {
             )}
             {status ? <p className="status">{status}</p> : null}
             {error ? <p className="error">{error}</p> : null}
+            {loggedIn ? (
+              <MeetingResultPicker
+                meetings={recentMeetings}
+                status={recentMeetingsStatus}
+                error={recentMeetingsError}
+                totalElements={recentMeetingsTotal}
+                selectedMeetingId={meetingIntelligence.meetingId}
+                recordingMeetingId={recorderConfig?.meetingId ?? null}
+                selectionLocked={
+                  startPending || recording || stopping || meetingIntelligence.status === 'waiting'
+                }
+                onSelect={handleMeetingResultSelect}
+                onRefresh={() => void loadRecentMeetings()}
+              />
+            ) : null}
             {claims ? (
               <section className="claims">
                 <h2>JWT claim özeti</h2>

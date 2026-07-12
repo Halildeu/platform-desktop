@@ -145,6 +145,13 @@ function installElectronApiMock(): void {
       status: vi.fn(),
     },
     meeting: {
+      listRecent: vi.fn().mockResolvedValue({
+        meetings: [],
+        page: 0,
+        size: 20,
+        totalElements: 0,
+        totalPages: 0,
+      }),
       createContract: vi.fn(),
       analyze: vi.fn(),
       getIntelligenceResult: vi.fn(),

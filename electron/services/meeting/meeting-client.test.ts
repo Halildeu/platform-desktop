@@ -3,11 +3,14 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   analyzeMeetingIntelligence,
   createMeetingContract,
+  listRecentMeetings,
   loadMeetingConfig,
   meetingIntelligenceAnalyzeUrl,
   meetingIntelligenceResultUrl,
   meetingsUrl,
   parseMeetingIntelligenceCanonicalResponse,
+  parseRecentMeetingsPage,
+  recentMeetingsUrl,
   readMeetingIntelligenceResult,
 } from './meeting-client';
 
@@ -98,6 +101,131 @@ describe('meeting-client', () => {
   it('builds the admin meetings URL', () => {
     const cfg = loadMeetingConfig({ MEETING_BASE_URL: 'https://testai.acik.com' });
     expect(meetingsUrl(cfg)).toBe('https://testai.acik.com/api/v1/admin/meetings');
+  });
+
+  it('builds a bounded first-page recent meetings URL', () => {
+    const cfg = loadMeetingConfig({ MEETING_BASE_URL: 'https://testai.acik.com' });
+    expect(recentMeetingsUrl(cfg)).toBe(
+      'https://testai.acik.com/api/v1/admin/meetings?page=0&size=20',
+    );
+    expect(recentMeetingsUrl(cfg, 500)).toBe(
+      'https://testai.acik.com/api/v1/admin/meetings?page=0&size=50',
+    );
+    expect(recentMeetingsUrl(cfg, 0)).toBe(
+      'https://testai.acik.com/api/v1/admin/meetings?page=0&size=1',
+    );
+    expect(recentMeetingsUrl(cfg, Number.NaN)).toBe(
+      'https://testai.acik.com/api/v1/admin/meetings?page=0&size=20',
+    );
+    expect(recentMeetingsUrl(cfg, Number.POSITIVE_INFINITY)).toBe(
+      'https://testai.acik.com/api/v1/admin/meetings?page=0&size=20',
+    );
+  });
+
+  it('lists allowlisted recent meeting metadata with bearer auth and no-store', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        content: [
+          {
+            id: MEETING_ID,
+            title: 'Haftalık ürün toplantısı',
+            status: 'COMPLETED',
+            scheduledStart: '2026-07-11T12:00:00Z',
+            scheduledEnd: null,
+            createdAt: '2026-07-11T11:55:00Z',
+            updatedAt: '2026-07-11T13:05:00Z',
+            orgId: 'must-not-cross-preload',
+            organizerSubject: 'must-not-cross-preload',
+            description: 'must-not-cross-preload',
+          },
+        ],
+        page: 0,
+        size: 20,
+        totalElements: 1,
+        totalPages: 1,
+      }),
+      headers: new Headers({ 'content-type': 'application/json' }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const page = await listRecentMeetings({ baseUrl: 'https://testai.acik.com' }, 'JWT');
+
+    expect(page).toEqual({
+      meetings: [
+        {
+          id: MEETING_ID,
+          title: 'Haftalık ürün toplantısı',
+          status: 'COMPLETED',
+          scheduledStart: '2026-07-11T12:00:00.000Z',
+          scheduledEnd: null,
+          createdAt: '2026-07-11T11:55:00.000Z',
+          updatedAt: '2026-07-11T13:05:00.000Z',
+        },
+      ],
+      page: 0,
+      size: 20,
+      totalElements: 1,
+      totalPages: 1,
+    });
+    expect(JSON.stringify(page)).not.toContain('orgId');
+    expect(JSON.stringify(page)).not.toContain('organizerSubject');
+    expect(JSON.stringify(page)).not.toContain('description');
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://testai.acik.com/api/v1/admin/meetings?page=0&size=20',
+      expect.objectContaining({
+        method: 'GET',
+        headers: {
+          Authorization: 'Bearer JWT',
+          Accept: 'application/json',
+          'Cache-Control': 'no-store',
+        },
+      }),
+    );
+  });
+
+  it('fails closed on malformed or oversized meeting list metadata', () => {
+    const fixture = {
+      content: [
+        {
+          id: MEETING_ID,
+          title: 'Toplantı',
+          status: 'COMPLETED',
+          scheduledStart: null,
+          scheduledEnd: null,
+          createdAt: '2026-07-11T11:55:00Z',
+          updatedAt: '2026-07-11T13:05:00Z',
+        },
+      ],
+      page: 0,
+      size: 20,
+      totalElements: 1,
+      totalPages: 1,
+    };
+
+    expect(() => parseRecentMeetingsPage({ ...fixture, page: 1 })).toThrow(
+      'pagination metadata is invalid',
+    );
+    expect(() =>
+      parseRecentMeetingsPage({
+        ...fixture,
+        content: [{ ...fixture.content[0], updatedAt: 'not-an-instant' }],
+      }),
+    ).toThrow('updatedAt is not an ISO instant');
+    expect(() =>
+      parseRecentMeetingsPage({
+        ...fixture,
+        content: Array.from({ length: 51 }, () => fixture.content[0]),
+      }),
+    ).toThrow('exceeds the client limit');
+    expect(() =>
+      parseRecentMeetingsPage({
+        ...fixture,
+        content: [fixture.content[0], fixture.content[0]],
+        totalElements: 2,
+      }),
+    ).toThrow('contains duplicate meeting ids');
   });
 
   it('builds the Meeting AI analyze URL behind the admin meeting route', () => {
@@ -199,6 +327,26 @@ describe('meeting-client', () => {
     await expect(
       createMeetingContract({ baseUrl: 'https://testai.acik.com' }, 'JWT'),
     ).rejects.toThrow('canonical UUID');
+  });
+
+  it('fails closed when a created meeting contract contains invalid bounded metadata', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          id: MEETING_ID,
+          title: 'Desktop contract',
+          status: 'SCHEDULED',
+          createdAt: 'not-an-instant',
+        }),
+        headers: new Headers({ 'content-type': 'application/json' }),
+      }),
+    );
+
+    await expect(
+      createMeetingContract({ baseUrl: 'https://testai.acik.com' }, 'JWT'),
+    ).rejects.toThrow('createdAt is not an ISO instant');
   });
 
   it('submits Meeting AI analyze requests through the backend gateway with bearer auth', async () => {

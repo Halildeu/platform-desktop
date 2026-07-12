@@ -5,6 +5,13 @@ const mocks = vi.hoisted(() => ({
   getValidAccessToken: vi.fn(async () => 'JWT'),
   loadMeetingConfig: vi.fn(() => ({ baseUrl: 'https://testai.acik.com' })),
   createMeetingContract: vi.fn(),
+  listRecentMeetings: vi.fn(async () => ({
+    meetings: [],
+    page: 0,
+    size: 20,
+    totalElements: 0,
+    totalPages: 0,
+  })),
   analyzeMeetingIntelligence: vi.fn(),
   readMeetingIntelligenceResult: vi.fn(async () => ({ status: 'not_ready' as const })),
 }));
@@ -20,6 +27,7 @@ vi.mock('electron', () => ({
 vi.mock('../services/meeting/meeting-client', () => ({
   analyzeMeetingIntelligence: mocks.analyzeMeetingIntelligence,
   createMeetingContract: mocks.createMeetingContract,
+  listRecentMeetings: mocks.listRecentMeetings,
   loadMeetingConfig: mocks.loadMeetingConfig,
   readMeetingIntelligenceResult: mocks.readMeetingIntelligenceResult,
 }));
@@ -32,6 +40,7 @@ async function registerFreshMeetingIpc(): Promise<void> {
   vi.resetModules();
   mocks.handlers.clear();
   mocks.getValidAccessToken.mockClear();
+  mocks.listRecentMeetings.mockClear();
   mocks.readMeetingIntelligenceResult.mockClear();
   const { registerMeetingIpc } = await import('./meeting');
   registerMeetingIpc();
@@ -62,6 +71,17 @@ describe('meeting result IPC boundary', () => {
       { baseUrl: 'https://testai.acik.com' },
       'JWT',
       meetingId,
+    );
+  });
+
+  it('lists recent meeting metadata with a main-process token and no renderer input', async () => {
+    const handler = mocks.handlers.get('meeting:list-recent');
+
+    await expect(handler?.({})).resolves.toMatchObject({ meetings: [], totalElements: 0 });
+    expect(mocks.getValidAccessToken).toHaveBeenCalledTimes(1);
+    expect(mocks.listRecentMeetings).toHaveBeenCalledWith(
+      { baseUrl: 'https://testai.acik.com' },
+      'JWT',
     );
   });
 });

@@ -112,6 +112,42 @@ describe('meeting intelligence state and exports', () => {
     });
   });
 
+  it('resets a null error state when the first canonical meeting target arrives', () => {
+    const failedWithoutTarget = failMeetingIntelligence(
+      initialMeetingIntelligence(),
+      'temporary list failure',
+    );
+
+    expect(
+      bindMeetingIntelligenceTarget(failedWithoutTarget, {
+        meetingId: '33333333-3333-4333-8333-333333333333',
+      }),
+    ).toEqual({
+      status: 'idle',
+      meetingId: '33333333-3333-4333-8333-333333333333',
+      sessionId: null,
+      error: null,
+      result: null,
+    });
+  });
+
+  it('preserves an existing result when the same canonical target is rebound', () => {
+    const ready = setMeetingIntelligenceResult(
+      {
+        ...initialMeetingIntelligence(),
+        meetingId: '33333333-3333-4333-8333-333333333333',
+        sessionId: 'SES-CURRENT',
+      },
+      RESULT,
+    );
+
+    expect(
+      bindMeetingIntelligenceTarget(ready, {
+        meetingId: '33333333-3333-4333-8333-333333333333',
+      }),
+    ).toEqual(ready);
+  });
+
   it('clears a ready snapshot when the canonical meeting target changes', () => {
     const first = setMeetingIntelligenceResult(
       {

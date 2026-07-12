@@ -94,6 +94,18 @@ function canonicalMeetingResult() {
   };
 }
 
+function recentMeeting(id: string, title: string, updatedAt = '2026-07-11T20:00:00.000Z') {
+  return {
+    id,
+    title,
+    status: 'COMPLETED',
+    scheduledStart: '2026-07-11T19:00:00.000Z',
+    scheduledEnd: '2026-07-11T20:00:00.000Z',
+    createdAt: '2026-07-11T18:55:00.000Z',
+    updatedAt,
+  };
+}
+
 function installElectronApiMock(recorderConfig: {
   meetingId: string | null;
   deviceId: string;
@@ -123,6 +135,13 @@ function installElectronApiMock(recorderConfig: {
       status: vi.fn().mockResolvedValue({ loggedIn: true, claims: null }),
     },
     meeting: {
+      listRecent: vi.fn().mockResolvedValue({
+        meetings: [],
+        page: 0,
+        size: 20,
+        totalElements: 0,
+        totalPages: 0,
+      }),
       createContract: vi.fn().mockResolvedValue({
         id: '33333333-3333-4333-8333-333333333333',
         title: 'Faz 24 desktop recording',
@@ -1158,5 +1177,112 @@ describe('App canonical Meeting Intelligence read', () => {
     ).toBeInTheDocument();
     expect(window.electronAPI?.meeting.getIntelligenceResult).toHaveBeenCalledTimes(3);
     expect(screen.queryByText('Kalıcı toplantı özeti yüklendi.')).not.toBeInTheDocument();
+  });
+});
+
+describe('App recent meeting result navigation', () => {
+  const RECORDER_MEETING_ID = '22222222-2222-4222-8222-222222222222';
+
+  it('opens a persisted historical result without changing the recorder target', async () => {
+    installElectronApiMock({
+      meetingId: RECORDER_MEETING_ID,
+      deviceId: 'desktop-1',
+      ready: true,
+      reason: null,
+    });
+    vi.mocked(window.electronAPI!.meeting.listRecent).mockResolvedValue({
+      meetings: [
+        recentMeeting(CANONICAL_MEETING_ID, 'Kalıcı ürün değerlendirmesi'),
+        recentMeeting(RECORDER_MEETING_ID, 'Aktif kayıt toplantısı'),
+      ],
+      page: 0,
+      size: 20,
+      totalElements: 2,
+      totalPages: 1,
+    });
+    vi.mocked(window.electronAPI!.meeting.getIntelligenceResult).mockImplementation(
+      async ({ meetingId }) =>
+        meetingId === CANONICAL_MEETING_ID
+          ? { status: 'ready', result: canonicalMeetingResult() }
+          : { status: 'not_ready' },
+    );
+    vi.mocked(startRecording).mockResolvedValue({
+      sessionId: 'SES-RECORDER-TARGET',
+      hasLoopback: false,
+      stop: vi.fn(),
+      onError: vi.fn(),
+    });
+
+    render(<App />);
+
+    const picker = await screen.findByRole('combobox', { name: 'Görüntülenecek toplantı' });
+    await screen.findByRole('option', { name: /Kalıcı ürün değerlendirmesi/ });
+    await userEvent.selectOptions(picker, CANONICAL_MEETING_ID);
+
+    expect(await screen.findByText('Kalıcı toplantı özeti yüklendi.')).toBeInTheDocument();
+    expect(
+      screen.getByText('Geçmiş çıktı açık; aktif kayıt hedefi değişmedi.'),
+    ).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Kaydet' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Onaylıyorum — Kaydı Başlat' }));
+
+    await waitFor(() => {
+      expect(startRecording).toHaveBeenCalledWith(
+        RECORDER_MEETING_ID,
+        'desktop-1',
+        expect.any(Object),
+      );
+    });
+    expect(picker).toBeDisabled();
+    expect(
+      screen.getByText('Kayıt veya sonuç hazırlama sürerken çıktı seçimi kilitli.'),
+    ).toBeInTheDocument();
+  });
+
+  it('does not let a late refresh response overwrite the user viewer selection', async () => {
+    installElectronApiMock({
+      meetingId: RECORDER_MEETING_ID,
+      deviceId: 'desktop-1',
+      ready: true,
+      reason: null,
+    });
+    let resolveRefresh: (
+      page: Awaited<ReturnType<NonNullable<Window['electronAPI']>['meeting']['listRecent']>>,
+    ) => void = () => undefined;
+    const pendingRefresh = new Promise<
+      Awaited<ReturnType<NonNullable<Window['electronAPI']>['meeting']['listRecent']>>
+    >((resolve) => {
+      resolveRefresh = resolve;
+    });
+    vi.mocked(window.electronAPI!.meeting.listRecent)
+      .mockResolvedValueOnce({
+        meetings: [recentMeeting(CANONICAL_MEETING_ID, 'Seçilen toplantı')],
+        page: 0,
+        size: 20,
+        totalElements: 1,
+        totalPages: 1,
+      })
+      .mockReturnValueOnce(pendingRefresh);
+
+    render(<App />);
+
+    const picker = await screen.findByRole('combobox', { name: 'Görüntülenecek toplantı' });
+    await screen.findByRole('option', { name: /Seçilen toplantı/ });
+    await userEvent.selectOptions(picker, CANONICAL_MEETING_ID);
+    await userEvent.click(screen.getByRole('button', { name: 'Toplantıları yenile' }));
+    resolveRefresh({
+      meetings: [recentMeeting(RECORDER_MEETING_ID, 'Başka toplantı')],
+      page: 0,
+      size: 20,
+      totalElements: 1,
+      totalPages: 1,
+    });
+
+    await waitFor(() => {
+      expect(
+        screen.getByRole<HTMLSelectElement>('combobox', { name: 'Görüntülenecek toplantı' }).value,
+      ).toBe(CANONICAL_MEETING_ID);
+    });
   });
 });
