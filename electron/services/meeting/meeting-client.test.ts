@@ -5,8 +5,70 @@ import {
   createMeetingContract,
   loadMeetingConfig,
   meetingIntelligenceAnalyzeUrl,
+  meetingIntelligenceResultUrl,
   meetingsUrl,
+  parseMeetingIntelligenceCanonicalResponse,
+  readMeetingIntelligenceResult,
 } from './meeting-client';
+
+const MEETING_ID = '33333333-3333-4333-8333-333333333333';
+const RUN_ID = '55555555-5555-4555-8555-555555555555';
+
+function canonicalResultFixture(): Record<string, unknown> {
+  return {
+    analysisRunId: RUN_ID,
+    meetingId: MEETING_ID,
+    sessionId: 'SES-1',
+    schema_version: '5-adr0043',
+    model: 'qwen',
+    backend: 'ollama',
+    promptVersion: 'ollama-v1',
+    summary: 'Canonical özet.',
+    summary_grounding_status: 'verified',
+    summary_citations: [
+      {
+        claim: 'Canonical özet.',
+        source_index: 0,
+        source_text: 'Canonical kaynak.',
+        similarity: 0.97,
+        grounded: true,
+        status: 'PASSED',
+        reason: 'verified',
+        start_sec: 2.5,
+        source_char_start: 0,
+        source_char_end: 18,
+        source_hash: 'A'.repeat(64),
+        quote_hash: 'b'.repeat(64),
+      },
+    ],
+    decisions: ['Canonical karar'],
+    action_items: [{ text: 'Canonical aksiyon', owner: 'user-42', due_date: null }],
+    citations: [
+      {
+        claim: 'Canonical karar',
+        source_index: 1,
+        source_text: 'Karar kaynağı.',
+        similarity: 0.92,
+        grounded: true,
+        status: 'PASSED',
+        reason: 'verified',
+        start_sec: null,
+        source_char_start: 19,
+        source_char_end: 33,
+        source_hash: 'c'.repeat(64),
+        quote_hash: 'D'.repeat(64),
+      },
+    ],
+    rejected_claims: [],
+    ungrounded_count: 0,
+    redacted: true,
+    redaction_count: 1,
+    generatedAt: '2026-07-11T20:00:00Z',
+    supersedesAnalysisRunId: null,
+    persisted: true,
+    storageMode: 'canonical',
+  };
+}
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -44,6 +106,14 @@ describe('meeting-client', () => {
       'https://testai.acik.com/api/v1/admin/meetings/33333333-3333-4333-8333-333333333333/intelligence/analyze',
     );
     expect(() => meetingIntelligenceAnalyzeUrl(cfg, 'MTG-1')).toThrow('canonical UUID');
+  });
+
+  it('builds the canonical Meeting Intelligence result URL', () => {
+    const cfg = loadMeetingConfig({ MEETING_BASE_URL: 'https://testai.acik.com' });
+    expect(meetingIntelligenceResultUrl(cfg, MEETING_ID)).toBe(
+      `https://testai.acik.com/api/v1/admin/meetings/${MEETING_ID}/intelligence/result`,
+    );
+    expect(() => meetingIntelligenceResultUrl(cfg, 'MTG-1')).toThrow('canonical UUID');
   });
 
   it('creates a meeting contract with the bearer token in main process', async () => {
@@ -202,6 +272,126 @@ describe('meeting-client', () => {
       }),
     ).rejects.toThrow(
       'analyzeMeetingIntelligence failed: 403 code=MEETING_AI_FORBIDDEN correlationId=cid-123 retryable=false',
+    );
+  });
+
+  it('reads one allowlisted canonical snapshot with bearer auth and no-store', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        ...canonicalResultFixture(),
+        transcriptSha256: 'must-not-cross-the-preload-bridge',
+        tenantId: 'must-not-cross-the-preload-bridge',
+      }),
+      headers: new Headers({ 'content-type': 'application/json' }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const outcome = await readMeetingIntelligenceResult(
+      { baseUrl: 'https://testai.acik.com' },
+      'JWT',
+      MEETING_ID,
+    );
+
+    expect(outcome).toMatchObject({
+      status: 'ready',
+      result: {
+        analysisRunId: RUN_ID,
+        meetingId: MEETING_ID,
+        summaryGroundingStatus: 'verified',
+        generatedAt: '2026-07-11T20:00:00.000Z',
+        persisted: true,
+        storageMode: 'canonical',
+      },
+    });
+    expect(JSON.stringify(outcome)).not.toContain('transcriptSha256');
+    expect(JSON.stringify(outcome)).not.toContain('tenantId');
+    expect(JSON.stringify(outcome)).not.toContain('Canonical kaynak.');
+    expect(JSON.stringify(outcome)).not.toContain('Karar kaynağı.');
+    expect(fetchMock).toHaveBeenCalledWith(
+      `https://testai.acik.com/api/v1/admin/meetings/${MEETING_ID}/intelligence/result`,
+      expect.objectContaining({
+        method: 'GET',
+        headers: {
+          Authorization: 'Bearer JWT',
+          Accept: 'application/json',
+          'Cache-Control': 'no-store',
+        },
+      }),
+    );
+  });
+
+  it('maps only ANALYSIS_RESULT_NOT_FOUND to the not-ready product state', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: false,
+        status: 404,
+        text: async () =>
+          JSON.stringify({ error: 'ANALYSIS_RESULT_NOT_FOUND', traceId: 'trace-123' }),
+        headers: new Headers({ 'content-type': 'application/json' }),
+      }),
+    );
+
+    await expect(
+      readMeetingIntelligenceResult({ baseUrl: 'https://testai.acik.com' }, 'JWT', MEETING_ID),
+    ).resolves.toEqual({ status: 'not_ready' });
+  });
+
+  it('does not hide a foreign or unknown meeting behind the not-ready state', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: false,
+        status: 404,
+        text: async () => JSON.stringify({ error: 'MEETING_NOT_FOUND', traceId: 'trace-456' }),
+        headers: new Headers({ 'content-type': 'application/json' }),
+      }),
+    );
+
+    await expect(
+      readMeetingIntelligenceResult({ baseUrl: 'https://testai.acik.com' }, 'JWT', MEETING_ID),
+    ).rejects.toThrow(
+      'readMeetingIntelligenceResult failed: 404 code=MEETING_NOT_FOUND correlationId=trace-456',
+    );
+  });
+
+  it('surfaces authorization failures instead of treating them as not-ready', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: false,
+        status: 403,
+        text: async () => JSON.stringify({ error: 'MEETING_FORBIDDEN', traceId: 'trace-403' }),
+        headers: new Headers({ 'content-type': 'application/json' }),
+      }),
+    );
+
+    await expect(
+      readMeetingIntelligenceResult({ baseUrl: 'https://testai.acik.com' }, 'JWT', MEETING_ID),
+    ).rejects.toThrow(
+      'readMeetingIntelligenceResult failed: 403 code=MEETING_FORBIDDEN correlationId=trace-403',
+    );
+  });
+
+  it('fails closed on a mismatched meeting or non-grounded persisted evidence', () => {
+    expect(() =>
+      parseMeetingIntelligenceCanonicalResponse(
+        { ...canonicalResultFixture(), meetingId: '66666666-6666-4666-8666-666666666666' },
+        MEETING_ID,
+      ),
+    ).toThrow('meetingId does not match request');
+
+    const invalid = canonicalResultFixture();
+    invalid.citations = [
+      {
+        ...((invalid.citations as Array<Record<string, unknown>>)[0] ?? {}),
+        grounded: false,
+      },
+    ];
+    expect(() => parseMeetingIntelligenceCanonicalResponse(invalid, MEETING_ID)).toThrow(
+      'is not grounded evidence',
     );
   });
 });

@@ -4,11 +4,13 @@ import {
   analyzeMeetingIntelligence,
   createMeetingContract,
   loadMeetingConfig,
+  readMeetingIntelligenceResult,
   type CreateMeetingContractArgs,
   type MeetingAiAnalyzeArgs,
   type MeetingAiAnalyzeRequest,
   type MeetingAiAnalyzeResponse,
   type MeetingContract,
+  type MeetingIntelligenceReadOutcome,
 } from '../services/meeting/meeting-client.js';
 import { getValidAccessToken } from './auth.js';
 
@@ -168,6 +170,14 @@ function parseAnalyzeArgs(value: unknown): MeetingAiAnalyzeArgs {
   };
 }
 
+function parseResultReadArgs(value: unknown): string {
+  if (!value || typeof value !== 'object') {
+    throw new Error('meeting intelligence result payload must be an object');
+  }
+  const record = value as Record<string, unknown>;
+  return requiredCanonicalMeetingId(record.meetingId, 'meetingId');
+}
+
 export function registerMeetingIpc(): void {
   ipcMain.handle(
     'meeting:create-contract',
@@ -181,6 +191,17 @@ export function registerMeetingIpc(): void {
     async (_e, payload: unknown): Promise<MeetingAiAnalyzeResponse> => {
       const args = parseAnalyzeArgs(payload);
       return analyzeMeetingIntelligence(loadMeetingConfig(), await getValidAccessToken(), args);
+    },
+  );
+  ipcMain.handle(
+    'meeting:get-intelligence-result',
+    async (_e, payload: unknown): Promise<MeetingIntelligenceReadOutcome> => {
+      const meetingId = parseResultReadArgs(payload);
+      return readMeetingIntelligenceResult(
+        loadMeetingConfig(),
+        await getValidAccessToken(),
+        meetingId,
+      );
     },
   );
 }

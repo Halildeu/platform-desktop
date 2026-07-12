@@ -148,6 +148,45 @@ button:disabled {
   border: 1px solid #fecaca;
 }
 
+.canonical-result-error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin: 14px 18px 0;
+}
+
+.canonical-result-error .inline-error {
+  flex: 1 1 auto;
+  margin: 0;
+}
+
+.canonical-result-error .secondary-action {
+  flex: 0 0 auto;
+}
+
+.canonical-result-pending {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin: 14px 18px 0;
+  padding: 9px 12px;
+  border: 1px solid #fcd34d;
+  border-radius: 6px;
+  background: #fffbeb;
+  color: #92400e;
+}
+
+.canonical-result-pending p {
+  margin: 0;
+  line-height: 1.45;
+}
+
+.canonical-result-pending .secondary-action {
+  flex: 0 0 auto;
+}
+
 .inline-error {
   margin: 14px 18px 0;
   padding: 9px 12px;
@@ -1601,6 +1640,16 @@ button:disabled {
 
   .state-pill {
     min-width: 0;
+  }
+
+  .canonical-result-error {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .canonical-result-pending {
+    align-items: stretch;
+    flex-direction: column;
   }
 
   .session-strip,

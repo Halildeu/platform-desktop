@@ -112,6 +112,29 @@ describe('meeting intelligence state and exports', () => {
     });
   });
 
+  it('clears a ready snapshot when the canonical meeting target changes', () => {
+    const first = setMeetingIntelligenceResult(
+      {
+        ...initialMeetingIntelligence(),
+        meetingId: '22222222-2222-4222-8222-222222222222',
+        sessionId: 'SES-OLD',
+      },
+      RESULT,
+    );
+
+    const rebound = bindMeetingIntelligenceTarget(first, {
+      meetingId: '33333333-3333-4333-8333-333333333333',
+    });
+
+    expect(rebound).toEqual({
+      status: 'idle',
+      meetingId: '33333333-3333-4333-8333-333333333333',
+      sessionId: null,
+      error: null,
+      result: null,
+    });
+  });
+
   it('builds markdown and CSV exports from approved intelligence output', () => {
     const ready = setMeetingIntelligenceResult(
       {
@@ -313,6 +336,38 @@ describe('meeting intelligence state and exports', () => {
     expect(bundle.integrationJson).toContain('"status_label": "Karar"');
     expect(bundle.integrationJson).not.toContain('"transcript"');
     expect(bundle.integrationJson).not.toContain('"raw_audio":');
+  });
+
+  it('uses the persisted analysis run as the canonical integration idempotency boundary', () => {
+    const analysisRunId = '55555555-5555-4555-8555-555555555555';
+    const ready = setMeetingIntelligenceResult(
+      {
+        ...initialMeetingIntelligence(),
+        meetingId: '22222222-2222-4222-8222-222222222222',
+        sessionId: 'SES-1',
+      },
+      {
+        ...RESULT,
+        analysisRunId,
+        storageMode: 'canonical' as const,
+      },
+    );
+
+    const integrationPackage = JSON.parse(
+      buildIntelligenceExport(ready, 1782741700000).integrationJson,
+    ) as {
+      analysis_run_id: string;
+      storage_mode: string;
+      adapter_contract: { idempotency_key: string };
+    };
+
+    expect(integrationPackage).toMatchObject({
+      analysis_run_id: analysisRunId,
+      storage_mode: 'canonical',
+    });
+    expect(integrationPackage.adapter_contract.idempotency_key).toMatch(
+      new RegExp(`^meeting-output:22222222-2222-4222-8222-222222222222:SES-1:${analysisRunId}:`),
+    );
   });
 
   it('keeps the ERP CRM handoff contract vendor neutral', () => {

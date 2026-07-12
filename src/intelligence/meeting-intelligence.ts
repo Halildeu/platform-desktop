@@ -16,7 +16,7 @@ export type DecisionStatus = 'proposed' | 'accepted' | 'revised';
 
 export interface IntelligenceCitation {
   segmentId: string;
-  startedAtMs: number;
+  startedAtMs: number | null;
   endedAtMs?: number;
 }
 
@@ -45,6 +45,8 @@ export interface MeetingIntelligenceResult {
   generatedAtMs: number;
   providerLabel?: string;
   citationCoverage: number;
+  analysisRunId?: string;
+  storageMode?: 'canonical';
 }
 
 export type MeetingOutputHandoffReadinessStatus = 'ready' | 'needs_review';
@@ -196,6 +198,16 @@ export function bindMeetingIntelligenceTarget(
     };
   }
 
+  if (state.meetingId && state.meetingId !== args.meetingId) {
+    return {
+      status: 'idle',
+      meetingId: args.meetingId,
+      sessionId: args.sessionId ?? null,
+      error: null,
+      result: null,
+    };
+  }
+
   const wasBlockedOnlyByMissingMeetingId =
     state.status === 'blocked' && state.error === MISSING_MEETING_ID_ERROR;
 
@@ -266,6 +278,10 @@ export function decisionStatusLabel(status: DecisionStatus): string {
 }
 
 export function formatCitationTime(citation: IntelligenceCitation): string {
+  if (citation.startedAtMs === null) {
+    const sourceIndex = citation.segmentId.match(/:(\d+)$/)?.[1];
+    return sourceIndex ? `Kaynak #${Number(sourceIndex) + 1}` : 'Kaynak referansı';
+  }
   const start = formatDuration(citation.startedAtMs);
   if (citation.endedAtMs === undefined) {
     return start;
@@ -617,7 +633,7 @@ function buildIntegrationJson(
     'meeting-output',
     state.meetingId ?? 'meeting',
     state.sessionId ?? 'session',
-    new Date(result.generatedAtMs).toISOString(),
+    result.analysisRunId ?? new Date(result.generatedAtMs).toISOString(),
     contentFingerprint,
   ].join(':');
   const displayTitle = `Meeting Intelligence · ${state.meetingId ?? state.sessionId ?? 'meeting'}`;
@@ -662,6 +678,8 @@ function buildIntegrationJson(
       session_id: state.sessionId,
       exported_at: new Date(nowMs).toISOString(),
       generated_at: new Date(result.generatedAtMs).toISOString(),
+      analysis_run_id: result.analysisRunId ?? null,
+      storage_mode: result.storageMode ?? null,
       provider: result.providerLabel ?? null,
       citation_coverage: result.citationCoverage,
       import_targets: ['meeting.summary', 'meeting.decisions', 'meeting.actions'],
@@ -916,7 +934,7 @@ function fnv1a64(value: string): string {
 
 function integrationCitation(citation: IntelligenceCitation): {
   segment_id: string;
-  started_at_ms: number;
+  started_at_ms: number | null;
   ended_at_ms: number | null;
   label: string;
 } {
