@@ -143,6 +143,11 @@ ipcMain.on(
   },
 );
 
+// #37: renderer-owned pause state reflected on the tray.
+ipcMain.on('tray:set-paused', (_event, paused: boolean) => {
+  tray?.setPaused(paused);
+});
+
 void app.whenReady().then(() => {
   session.defaultSession.setDisplayMediaRequestHandler(async (req, callback) => {
     const allowed = shouldGrantDisplayMediaRequest({
@@ -187,6 +192,12 @@ void app.whenReady().then(() => {
     },
     onStopRecording: () => {
       mainWindow?.webContents.send('tray:stop-requested');
+    },
+    onPauseRecording: () => {
+      mainWindow?.webContents.send('tray:pause-requested');
+    },
+    onResumeRecording: () => {
+      mainWindow?.webContents.send('tray:resume-requested');
     },
     onQuit: () => {
       isQuitting = true;
