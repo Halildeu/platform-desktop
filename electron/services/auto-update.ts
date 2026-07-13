@@ -15,7 +15,13 @@
  */
 
 import { app } from 'electron';
-import { autoUpdater } from 'electron-updater';
+// electron-updater is CommonJS; under Electron 42 / Node ESM ("type":"module")
+// a named import (`import { autoUpdater }`) fails at runtime with
+// "does not provide an export named 'autoUpdater'". The CJS module.exports is
+// only reachable via the default import, so destructure autoUpdater from it (#44).
+import electronUpdater from 'electron-updater';
+
+const { autoUpdater } = electronUpdater;
 
 let initialized = false;
 
