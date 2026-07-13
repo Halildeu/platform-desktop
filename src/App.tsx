@@ -352,6 +352,7 @@ function App() {
   const [claims, setClaims] = useState<SafeJwtClaims | null>(null);
   const [busy, setBusy] = useState(false);
   const [recording, setRecording] = useState(false);
+  const [paused, setPaused] = useState(false);
   const [stopping, setStopping] = useState(false);
   const [startPending, setStartPending] = useState(false);
   const [contractPending, setContractPending] = useState(false);
@@ -917,6 +918,7 @@ function App() {
         setAudioRms(null);
         setLastAudioAtMs(null);
         setRecording(false);
+        setPaused(false);
         const message = `Kayıt hatası (ses kaybı): ${err.message}`;
         window.electronAPI?.tray.setRecordingActive(false, 'error', message);
         setError(message);
@@ -926,6 +928,7 @@ function App() {
       });
       recorderRef.current = rec;
       setRecording(true);
+      setPaused(false);
       window.electronAPI?.tray.setRecordingActive(true);
       const pendingLiveTranscriptEvents = pendingLiveTranscriptEventsRef.current;
       pendingLiveTranscriptEventsRef.current = [];
@@ -1120,6 +1123,7 @@ function App() {
     } finally {
       recorderRef.current = null;
       setRecording(false);
+      setPaused(false);
       setLiveStreamActive(false);
       setLiveStreamReady(false);
       setLiveStreamStatus(null);
@@ -1129,6 +1133,28 @@ function App() {
       stopInFlightRef.current = false;
       setStopping(false);
     }
+  }, []);
+
+  const handlePause = useCallback((): void => {
+    const rec = recorderRef.current;
+    if (!rec || rec.isPaused()) {
+      return;
+    }
+    rec.pause();
+    setPaused(true);
+    window.electronAPI?.tray.setPaused(true);
+    setStatus('Kayıt duraklatıldı.');
+  }, []);
+
+  const handleResume = useCallback((): void => {
+    const rec = recorderRef.current;
+    if (!rec || !rec.isPaused()) {
+      return;
+    }
+    rec.resume();
+    setPaused(false);
+    window.electronAPI?.tray.setPaused(false);
+    setStatus('Kayıt sürüyor.');
   }, []);
 
   useEffect(() => {
@@ -1141,6 +1167,17 @@ function App() {
     });
     return () => offStopRequested?.();
   }, [handleStop]);
+
+  useEffect(() => {
+    // Tray "Kaydı Duraklat/Sürdür" — #37. Menu item yalnız aktif kayıtta
+    // görünür (tray-manager.ts); handler'lar da recorder yoksa no-op.
+    const offPause = window.electronAPI?.tray.onPauseRequested(() => handlePause());
+    const offResume = window.electronAPI?.tray.onResumeRequested(() => handleResume());
+    return () => {
+      offPause?.();
+      offResume?.();
+    };
+  }, [handlePause, handleResume]);
 
   const handleTranscriptSegmentTextChange = (segmentId: string, text: string): void => {
     setTranscriptSession((current) =>
@@ -1184,7 +1221,15 @@ function App() {
               </>
             ) : recording ? (
               <>
-                <p className="control-copy">Kayıt sürüyor.</p>
+                <p className="control-copy">{paused ? 'Kayıt duraklatıldı.' : 'Kayıt sürüyor.'}</p>
+                <button
+                  className="secondary-action"
+                  type="button"
+                  disabled={stopping}
+                  onClick={() => (paused ? handleResume() : handlePause())}
+                >
+                  {paused ? 'Sürdür' : 'Duraklat'}
+                </button>
                 <button
                   className="danger-action"
                   type="button"

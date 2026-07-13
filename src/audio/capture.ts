@@ -104,6 +104,12 @@ export interface Recorder {
   gatewayActive?: boolean;
   gatewayError?: string | null;
   stop: () => Promise<void>;
+  /** #37: drop captured frames while paused — no gateway chunk is sent and the
+   * live-STT stream is silent, so the gateway sequence tracker never advances
+   * during a pause and no fabricated gap audio is emitted on resume. */
+  pause: () => void;
+  resume: () => void;
+  isPaused: () => boolean;
   onError: (handler: (err: Error) => void) => void;
 }
 
@@ -441,6 +447,12 @@ export async function startRecording(
   };
 
   captureNode.port.onmessage = (ev: MessageEvent<Float32Array>): void => {
+    // #37: while paused, drop the frame entirely — no activity event, no live
+    // frame, no gateway chunk, and nothing is buffered, so resuming does not
+    // flush pause-gap audio and the chunk sequence stays contiguous.
+    if (paused) {
+      return;
+    }
     const capturedAtMs = Date.now();
     if (
       options.onAudioActivity &&
@@ -464,12 +476,26 @@ export async function startRecording(
   };
 
   let stopped = false;
+  let paused = false;
 
   return {
     sessionId,
     hasLoopback: loopback !== null,
     gatewayActive: captureId !== null,
     gatewayError: recorderStartupError,
+    pause: (): void => {
+      if (stopped) {
+        return;
+      }
+      paused = true;
+    },
+    resume: (): void => {
+      if (stopped) {
+        return;
+      }
+      paused = false;
+    },
+    isPaused: (): boolean => paused,
     onError: (handler: (err: Error) => void): void => {
       errorHandler = handler;
     },

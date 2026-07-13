@@ -51,10 +51,25 @@ const electronAPI = {
     ): void => {
       ipcRenderer.send('tray:set-recording-active', active, outcome, errorMessage);
     },
+    // #37: renderer reflects pause state to the tray (menu/tooltip); the pause
+    // state machine itself stays in the renderer (App.tsx + capture pipeline).
+    setPaused: (paused: boolean): void => {
+      ipcRenderer.send('tray:set-paused', paused);
+    },
     onStopRequested: (callback: () => void): (() => void) => {
       const listener = (): void => callback();
       ipcRenderer.on('tray:stop-requested', listener);
       return () => ipcRenderer.removeListener('tray:stop-requested', listener);
+    },
+    onPauseRequested: (callback: () => void): (() => void) => {
+      const listener = (): void => callback();
+      ipcRenderer.on('tray:pause-requested', listener);
+      return () => ipcRenderer.removeListener('tray:pause-requested', listener);
+    },
+    onResumeRequested: (callback: () => void): (() => void) => {
+      const listener = (): void => callback();
+      ipcRenderer.on('tray:resume-requested', listener);
+      return () => ipcRenderer.removeListener('tray:resume-requested', listener);
     },
   },
   audio: {

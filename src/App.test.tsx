@@ -55,6 +55,8 @@ interface TestTranscriptGatewayError {
 
 let transcriptEventHandler: ((event: TestTranscriptGatewayEvent) => void) | null = null;
 let trayStopHandler: (() => void) | null = null;
+let trayPauseHandler: (() => void) | null = null;
+let trayResumeHandler: (() => void) | null = null;
 
 const CANONICAL_MEETING_ID = '33333333-3333-4333-8333-333333333333';
 
@@ -116,6 +118,8 @@ function installElectronApiMock(recorderConfig: {
 }): void {
   transcriptEventHandler = null;
   trayStopHandler = null;
+  trayPauseHandler = null;
+  trayResumeHandler = null;
   window.electronAPI = {
     app: {
       getVersion: vi.fn().mockResolvedValue('0.1.0-test'),
@@ -124,8 +128,17 @@ function installElectronApiMock(recorderConfig: {
     },
     tray: {
       setRecordingActive: vi.fn(),
+      setPaused: vi.fn(),
       onStopRequested: vi.fn((callback: () => void) => {
         trayStopHandler = callback;
+        return vi.fn();
+      }),
+      onPauseRequested: vi.fn((callback: () => void) => {
+        trayPauseHandler = callback;
+        return vi.fn();
+      }),
+      onResumeRequested: vi.fn((callback: () => void) => {
+        trayResumeHandler = callback;
         return vi.fn();
       }),
     },
@@ -370,6 +383,9 @@ describe('App recorder readiness', () => {
       hasLoopback: false,
       stop: vi.fn(),
       onError: vi.fn(),
+      pause: vi.fn(),
+      resume: vi.fn(),
+      isPaused: vi.fn(() => false),
     });
 
     render(<App />);
@@ -425,6 +441,9 @@ describe('App recorder readiness', () => {
       hasLoopback: false,
       stop: vi.fn(),
       onError: vi.fn(),
+      pause: vi.fn(),
+      resume: vi.fn(),
+      isPaused: vi.fn(() => false),
     });
 
     render(<App />);
@@ -515,6 +534,9 @@ describe('App recorder readiness', () => {
       hasLoopback: false,
       stop: stopMock,
       onError: vi.fn(),
+      pause: vi.fn(),
+      resume: vi.fn(),
+      isPaused: vi.fn(() => false),
     });
 
     render(<App />);
@@ -543,6 +565,55 @@ describe('App recorder readiness', () => {
     expect(deactivations[0]).toEqual([false, 'finished', undefined]);
   });
 
+  it('tray duraklat/sürdür kaydı pause/resume eder ve durumu yansıtır (#37)', async () => {
+    installElectronApiMock({
+      meetingId: '22222222-2222-4222-8222-222222222222',
+      deviceId: 'desktop-1',
+      ready: true,
+      reason: null,
+    });
+    mockReadyCaptureWorklet();
+    let pausedFlag = false;
+    const pauseMock = vi.fn(() => {
+      pausedFlag = true;
+    });
+    const resumeMock = vi.fn(() => {
+      pausedFlag = false;
+    });
+    vi.mocked(startRecording).mockResolvedValue({
+      sessionId: 'SES-PAUSE-1',
+      hasLoopback: false,
+      stop: vi.fn().mockResolvedValue(undefined),
+      onError: vi.fn(),
+      pause: pauseMock,
+      resume: resumeMock,
+      isPaused: vi.fn(() => pausedFlag),
+    });
+
+    render(<App />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Kaydet' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Onaylıyorum — Kaydı Başlat' }));
+    expect(
+      await screen.findByText('Kayıt başladı (yalnız mikrofon, oturum SES-PAUSE-1)'),
+    ).toBeInTheDocument();
+
+    const trayPausedMock = vi.mocked(window.electronAPI!.tray.setPaused);
+
+    // Tray "Kaydı Duraklat" — benzersiz "Sürdür" butonu paused durumu gösterir.
+    act(() => trayPauseHandler?.());
+    expect(pauseMock).toHaveBeenCalledTimes(1);
+    expect(trayPausedMock).toHaveBeenLastCalledWith(true);
+    expect(await screen.findByRole('button', { name: 'Sürdür' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Duraklat' })).not.toBeInTheDocument();
+
+    // Tray "Kaydı Sürdür" — "Duraklat" butonu geri döner.
+    act(() => trayResumeHandler?.());
+    expect(resumeMock).toHaveBeenCalledTimes(1);
+    expect(trayPausedMock).toHaveBeenLastCalledWith(false);
+    expect(await screen.findByRole('button', { name: 'Duraklat' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Sürdür' })).not.toBeInTheDocument();
+  });
+
   it('stop hatasi tray outcome olarak error tasir — sahte tamamlandi bildirimi yok', async () => {
     installElectronApiMock({
       meetingId: '22222222-2222-4222-8222-222222222222',
@@ -556,6 +627,9 @@ describe('App recorder readiness', () => {
       hasLoopback: false,
       stop: vi.fn().mockRejectedValue(new Error('upload finish patladi')),
       onError: vi.fn(),
+      pause: vi.fn(),
+      resume: vi.fn(),
+      isPaused: vi.fn(() => false),
     });
 
     render(<App />);
@@ -629,6 +703,9 @@ describe('App recorder readiness', () => {
       hasLoopback: false,
       stop: vi.fn(),
       onError: vi.fn(),
+      pause: vi.fn(),
+      resume: vi.fn(),
+      isPaused: vi.fn(() => false),
     });
     mockReadyCaptureWorklet();
     mockReadyLiveSttStream();
@@ -672,6 +749,9 @@ describe('App recorder readiness', () => {
       hasLoopback: false,
       stop: vi.fn(),
       onError: vi.fn(),
+      pause: vi.fn(),
+      resume: vi.fn(),
+      isPaused: vi.fn(() => false),
     });
 
     render(<App />);
@@ -741,6 +821,9 @@ describe('App recorder readiness', () => {
       hasLoopback: false,
       stop: vi.fn(),
       onError: vi.fn(),
+      pause: vi.fn(),
+      resume: vi.fn(),
+      isPaused: vi.fn(() => false),
     });
 
     render(<App />);
@@ -846,6 +929,9 @@ describe('App recorder readiness', () => {
       hasLoopback: false,
       stop: vi.fn(),
       onError: vi.fn(),
+      pause: vi.fn(),
+      resume: vi.fn(),
+      isPaused: vi.fn(() => false),
     });
 
     render(<App />);
@@ -956,6 +1042,9 @@ describe('App recorder readiness', () => {
         hasLoopback: false,
         stop: vi.fn(),
         onError: vi.fn(),
+        pause: vi.fn(),
+        resume: vi.fn(),
+        isPaused: vi.fn(() => false),
       };
     });
     mockReadyCaptureWorklet();
@@ -989,6 +1078,9 @@ describe('App recorder readiness', () => {
       gatewayError: 'Direct STT baglanti hatasi',
       stop: vi.fn(),
       onError: vi.fn(),
+      pause: vi.fn(),
+      resume: vi.fn(),
+      isPaused: vi.fn(() => false),
     });
 
     render(<App />);
@@ -1014,6 +1106,9 @@ describe('App recorder readiness', () => {
       hasLoopback: false,
       stop: vi.fn(),
       onError: vi.fn(),
+      pause: vi.fn(),
+      resume: vi.fn(),
+      isPaused: vi.fn(() => false),
     });
 
     render(<App />);
@@ -1130,6 +1225,9 @@ describe('App canonical Meeting Intelligence read', () => {
       hasLoopback: false,
       stop: vi.fn().mockResolvedValue(undefined),
       onError: vi.fn(),
+      pause: vi.fn(),
+      resume: vi.fn(),
+      isPaused: vi.fn(() => false),
     });
 
     render(<App />);
@@ -1211,6 +1309,9 @@ describe('App recent meeting result navigation', () => {
       hasLoopback: false,
       stop: vi.fn(),
       onError: vi.fn(),
+      pause: vi.fn(),
+      resume: vi.fn(),
+      isPaused: vi.fn(() => false),
     });
 
     render(<App />);

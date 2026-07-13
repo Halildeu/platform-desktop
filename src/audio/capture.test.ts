@@ -137,7 +137,10 @@ function installElectronApiMock(): void {
     },
     tray: {
       setRecordingActive: vi.fn(),
+      setPaused: vi.fn(),
       onStopRequested: vi.fn(() => vi.fn()),
+      onPauseRequested: vi.fn(() => vi.fn()),
+      onResumeRequested: vi.fn(() => vi.fn()),
     },
     auth: {
       login: vi.fn(),
@@ -283,6 +286,54 @@ describe('startRecording', () => {
       bytes: expect.objectContaining({ byteLength: 64_000 }),
       startedAtMs: expect.any(Number),
     });
+  });
+
+  it('sends no gateway chunk while paused and resumes a contiguous sequence (#37)', async () => {
+    installElectronApiMock();
+    setUserAgent('Mozilla/5.0 (Macintosh; Intel Mac OS X 15_5)');
+    installBrowserAudioMocks();
+
+    const recorder = await startRecording('meeting-1', 'desktop-1');
+    const captureNode = FakeAudioWorkletNode.lastInstance;
+    const feedOneChunk = (): void => {
+      captureNode?.port.onmessage?.({
+        data: new Float32Array(96_000),
+      } as MessageEvent<Float32Array>);
+    };
+
+    // Paused: a full 2s window is dropped — no chunk reaches the gateway, so
+    // the sequence tracker never advances during the pause.
+    recorder.pause();
+    expect(recorder.isPaused()).toBe(true);
+    feedOneChunk();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(window.electronAPI?.audio.sendChunk).not.toHaveBeenCalled();
+
+    // Resumed: chunks flow again, and this is the FIRST send — the pause did
+    // not leave a buffered pause-gap chunk queued ahead of it.
+    recorder.resume();
+    expect(recorder.isPaused()).toBe(false);
+    feedOneChunk();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(window.electronAPI?.audio.sendChunk).toHaveBeenCalledTimes(1);
+
+    await recorder.stop();
+  });
+
+  it('pause/resume are no-ops after the recorder has stopped (#37)', async () => {
+    installElectronApiMock();
+    setUserAgent('Mozilla/5.0 (Macintosh; Intel Mac OS X 15_5)');
+    installBrowserAudioMocks();
+
+    const recorder = await startRecording('meeting-1', 'desktop-1');
+    await recorder.stop();
+
+    recorder.pause();
+    expect(recorder.isPaused()).toBe(false);
+    recorder.resume();
+    expect(recorder.isPaused()).toBe(false);
   });
 
   it('streams 100ms Float32 frames to Direct-STT while keeping REST chunks at two seconds', async () => {
