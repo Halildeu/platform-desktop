@@ -22,7 +22,16 @@ const ICON_DIR = (): string =>
     : path.join(app.getAppPath(), 'public', 'icons');
 
 function iconPath(active: boolean): string {
-  const name = active ? 'tray-active-32.png' : 'tray-32.png';
+  // macOS menubar expects monochrome template images (dark/light adaptive).
+  // Electron auto-detects the "Template" filename suffix and the @2x variant.
+  const name =
+    process.platform === 'darwin'
+      ? active
+        ? 'tray-activeTemplate.png'
+        : 'trayTemplate.png'
+      : active
+        ? 'tray-active-32.png'
+        : 'tray-32.png';
   return path.join(ICON_DIR(), name);
 }
 

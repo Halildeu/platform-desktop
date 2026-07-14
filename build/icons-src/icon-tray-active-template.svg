@@ -1,0 +1,7 @@
+<svg width="32" height="32" viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg">
+  <!-- macOS template image (recording): triangle + dot, monochrome black. -->
+  <g transform="translate(4,4) scale(0.28)">
+    <polygon points="50,6 12,86 92,86" fill="#000000"/>
+  </g>
+  <circle cx="25.5" cy="6.5" r="4.5" fill="#000000"/>
+</svg>
