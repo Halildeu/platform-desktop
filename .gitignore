@@ -144,3 +144,6 @@ dist-electron/
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
 .vite/
+
+# electron-builder output
+release/
