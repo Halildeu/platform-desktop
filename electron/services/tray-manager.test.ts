@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 interface MenuItem {
   label?: string;
@@ -9,6 +9,7 @@ interface MenuItem {
 
 const mocks = vi.hoisted(() => ({
   builtTemplate: [] as MenuItem[],
+  createdWithIcon: '' as string,
   setContextMenu: vi.fn(),
   setImage: vi.fn(),
   setToolTip: vi.fn(),
@@ -25,6 +26,9 @@ vi.mock('electron', () => ({
     }),
   },
   Tray: class {
+    constructor(iconPath: string) {
+      mocks.createdWithIcon = iconPath;
+    }
     setToolTip = mocks.setToolTip;
     setImage = mocks.setImage;
     setContextMenu = mocks.setContextMenu;
@@ -67,6 +71,40 @@ beforeEach(() => {
   mocks.builtTemplate = [];
   mocks.setContextMenu.mockClear();
   mocks.setToolTip.mockClear();
+});
+
+describe('TrayManager icon selection (#38)', () => {
+  const realPlatform = process.platform;
+
+  function setPlatform(platform: string): void {
+    Object.defineProperty(process, 'platform', { value: platform });
+  }
+
+  afterEach(() => {
+    setPlatform(realPlatform);
+  });
+
+  it('uses macOS template images on darwin (idle + recording)', () => {
+    setPlatform('darwin');
+    const tray = new TrayManager(makeCallbacks());
+    tray.create();
+    expect(mocks.createdWithIcon.endsWith('trayTemplate.png')).toBe(true);
+
+    tray.setRecordingActive(true);
+    expect(mocks.setImage).toHaveBeenLastCalledWith(
+      expect.stringContaining('tray-activeTemplate.png'),
+    );
+  });
+
+  it('uses colored PNGs on non-darwin platforms', () => {
+    setPlatform('win32');
+    const tray = new TrayManager(makeCallbacks());
+    tray.create();
+    expect(mocks.createdWithIcon.endsWith('tray-32.png')).toBe(true);
+
+    tray.setRecordingActive(true);
+    expect(mocks.setImage).toHaveBeenLastCalledWith(expect.stringContaining('tray-active-32.png'));
+  });
 });
 
 describe('TrayManager pause/resume (#37)', () => {
