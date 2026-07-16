@@ -2,7 +2,12 @@
   "name": "platform-desktop",
   "version": "0.1.0",
   "description": "Meeting Intelligence Desktop Client — Electron + React + TypeScript",
-  "author": "Platform Team",
+  "author": {
+    "name": "Acik Platform Team",
+    "email": "ai@acik.com"
+  },
+  "homepage": "https://github.com/Halildeu/platform-desktop",
+  "desktopName": "meeting-intelligence.desktop",
   "main": "dist-electron/main.js",
   "private": true,
   "type": "module",
@@ -17,7 +22,9 @@
     "package": "npm run build && electron-builder",
     "package:mac": "npm run build && electron-builder --mac",
     "package:win": "npm run build && electron-builder --win",
-    "package:linux": "npm run build && electron-builder --linux",
+    "package:linux": "npm run package:linux:x64",
+    "package:linux:x64": "npm run build && electron-builder --linux --x64 --publish never --config.directories.output=release/linux-x64",
+    "package:linux:arm64": "npm run build && electron-builder --linux --arm64 --publish never --config.directories.output=release/linux-arm64",
     "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.electron.json",
     "lint": "eslint . --max-warnings 0",
     "format": "prettier --write .",
@@ -109,7 +116,10 @@
       ]
     },
     "linux": {
+      "artifactName": "Meeting-Intelligence-${version}-${arch}.${ext}",
       "icon": "build/icon.png",
+      "maintainer": "Acik Platform Team <ai@acik.com>",
+      "syncDesktopName": true,
       "target": [
         "AppImage",
         "deb",
@@ -119,7 +129,8 @@
       "desktop": {
         "entry": {
           "Name": "Meeting Intelligence",
-          "Comment": "Meeting Intelligence — Faz 24"
+          "Comment": "Meeting Intelligence — Faz 24",
+          "MimeType": "x-scheme-handler/meeting-intelligence;"
         }
       }
     },

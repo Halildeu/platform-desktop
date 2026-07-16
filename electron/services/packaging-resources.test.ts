@@ -9,8 +9,23 @@ interface ElectronBuilderResource {
 }
 
 interface PlatformDesktopPackage {
+  author?: {
+    email?: string;
+  };
+  desktopName?: string;
+  homepage?: string;
+  scripts?: Record<string, string>;
   build?: {
     extraResources?: ElectronBuilderResource[];
+    linux?: {
+      artifactName?: string;
+      desktop?: {
+        entry?: Record<string, string>;
+      };
+      maintainer?: string;
+      syncDesktopName?: boolean;
+      target?: string[];
+    };
     mac?: {
       extendInfo?: Record<string, string>;
     };
@@ -43,5 +58,26 @@ describe('packaged runtime resources', () => {
 
     expect(extendInfo?.NSMicrophoneUsageDescription).toContain('microphone');
     expect(extendInfo?.NSScreenCaptureUsageDescription).toContain('system audio');
+  });
+
+  it('keeps Linux package metadata complete for AppImage, deb and rpm output', () => {
+    const packageJson = readPackageJson();
+
+    expect(packageJson.author?.email).toBe('ai@acik.com');
+    expect(packageJson.homepage).toBe('https://github.com/Halildeu/platform-desktop');
+    expect(packageJson.desktopName).toBe('meeting-intelligence.desktop');
+    expect(packageJson.scripts?.['package:linux:x64']).toContain('--publish never');
+    expect(packageJson.scripts?.['package:linux:arm64']).toContain('--publish never');
+    expect(packageJson.build?.linux).toMatchObject({
+      artifactName: 'Meeting-Intelligence-${version}-${arch}.${ext}',
+      desktop: {
+        entry: {
+          MimeType: 'x-scheme-handler/meeting-intelligence;',
+        },
+      },
+      maintainer: 'Acik Platform Team <ai@acik.com>',
+      syncDesktopName: true,
+      target: ['AppImage', 'deb', 'rpm'],
+    });
   });
 });
