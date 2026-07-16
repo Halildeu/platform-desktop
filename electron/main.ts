@@ -47,6 +47,32 @@ const windowStateStore = new WindowStateStore();
 let isQuitting = false;
 
 const DEFAULT_BOUNDS: WindowBounds = { x: 0, y: 0, width: 1280, height: 800 };
+const APP_PROTOCOL = 'meeting-intelligence';
+
+function showMainWindow(): void {
+  if (!mainWindow) {
+    createMainWindow();
+    return;
+  }
+  if (mainWindow.isMinimized()) {
+    mainWindow.restore();
+  }
+  mainWindow.show();
+  mainWindow.focus();
+}
+
+const hasSingleInstanceLock = app.requestSingleInstanceLock();
+if (!hasSingleInstanceLock) {
+  app.quit();
+} else {
+  app.on('second-instance', () => {
+    showMainWindow();
+  });
+  app.on('open-url', (event) => {
+    event.preventDefault();
+    showMainWindow();
+  });
+}
 
 function saveCurrentBounds(): void {
   if (!mainWindow || mainWindow.isDestroyed() || mainWindow.isMinimized()) {
@@ -149,6 +175,10 @@ ipcMain.on('tray:set-paused', (_event, paused: boolean) => {
 });
 
 void app.whenReady().then(() => {
+  if (app.isPackaged) {
+    app.setAsDefaultProtocolClient(APP_PROTOCOL);
+  }
+
   session.defaultSession.setDisplayMediaRequestHandler(async (req, callback) => {
     const allowed = shouldGrantDisplayMediaRequest({
       canGrantLease: canGrantDisplayMedia(),
@@ -179,17 +209,7 @@ void app.whenReady().then(() => {
   initAutoUpdate(); // #11 — no-op outside a packaged build
 
   tray = new TrayManager({
-    onShowWindow: () => {
-      if (!mainWindow) {
-        createMainWindow();
-        return;
-      }
-      if (mainWindow.isMinimized()) {
-        mainWindow.restore();
-      }
-      mainWindow.show();
-      mainWindow.focus();
-    },
+    onShowWindow: showMainWindow,
     onStopRecording: () => {
       mainWindow?.webContents.send('tray:stop-requested');
     },

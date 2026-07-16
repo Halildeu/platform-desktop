@@ -1,0 +1,114 @@
+name: Linux package evidence
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+jobs:
+  package-linux-x64:
+    runs-on: [self-hosted, platform-desktop-ci]
+    timeout-minutes: 30
+    env:
+      PACKAGE_DIR: release/linux-x64-${{ github.sha }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Verify Linux package tools
+        run: |
+          command -v rpmbuild
+          command -v sha256sum
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Read package version
+        run: echo "PACKAGE_VERSION=$(node -p "require('./package.json').version")" >> "$GITHUB_ENV"
+
+      - name: Build x64 AppImage, deb and rpm
+        run: |
+          npm run build
+          npx electron-builder \
+            --linux \
+            --x64 \
+            --publish never \
+            --config.directories.output="$PACKAGE_DIR"
+
+      - name: Verify tag matches the packaged version
+        if: github.ref_type == 'tag'
+        run: test "${GITHUB_REF_NAME#v}" = "$PACKAGE_VERSION"
+
+      - name: Record immutable artifact hashes
+        run: |
+          cd "$PACKAGE_DIR"
+          shopt -s nullglob
+          artifacts=(
+            Meeting-Intelligence-*-x86_64.AppImage
+            Meeting-Intelligence-*-amd64.deb
+            Meeting-Intelligence-*-x86_64.rpm
+            latest-linux.yml
+          )
+          test "${#artifacts[@]}" -eq 4
+          printf '%s\0' "${artifacts[@]}" \
+            | sort -z \
+            | xargs -0 sha256sum \
+            > SHA256SUMS-linux-x64.txt
+
+      - name: Upload Linux package evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: meeting-intelligence-linux-x64-${{ github.sha }}
+          if-no-files-found: error
+          retention-days: 90
+          path: |
+            ${{ env.PACKAGE_DIR }}/Meeting-Intelligence-*-x86_64.AppImage
+            ${{ env.PACKAGE_DIR }}/Meeting-Intelligence-*-amd64.deb
+            ${{ env.PACKAGE_DIR }}/Meeting-Intelligence-*-x86_64.rpm
+            ${{ env.PACKAGE_DIR }}/latest-linux.yml
+            ${{ env.PACKAGE_DIR }}/SHA256SUMS-linux-x64.txt
+
+  publish-release:
+    if: github.ref_type == 'tag'
+    needs: package-linux-x64
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download immutable Linux package evidence
+        uses: actions/download-artifact@v4
+        with:
+          name: meeting-intelligence-linux-x64-${{ github.sha }}
+          path: release
+
+      - name: Publish Linux packages and updater metadata
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          shopt -s nullglob
+          assets=(
+            release/Meeting-Intelligence-*-x86_64.AppImage
+            release/Meeting-Intelligence-*-amd64.deb
+            release/Meeting-Intelligence-*-x86_64.rpm
+            release/latest-linux.yml
+            release/SHA256SUMS-linux-x64.txt
+          )
+          test "${#assets[@]}" -eq 5
+          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release $GITHUB_REF_NAME already exists; refusing to replace immutable assets."
+            exit 1
+          fi
+          gh release create "$GITHUB_REF_NAME" \
+            "${assets[@]}" \
+            --repo "$GITHUB_REPOSITORY" \
+            --verify-tag \
+            --generate-notes \
+            --title "Meeting Intelligence $GITHUB_REF_NAME"
