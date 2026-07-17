@@ -131,14 +131,24 @@ describe('packaged runtime resources', () => {
     expect(electronMain).toContain("webContents.once('did-finish-load'");
     expect(electronMain).toContain("document.getElementById('root')?.childElementCount > 0");
     expect(workflow).not.toContain('--no-sandbox');
+    expect(workflow).toContain('appimage_path=$(realpath "${appimages[0]}")');
+    expect(workflow).toContain('appimage_extract_dir=$(mktemp -d)');
+    expect(workflow).toContain('"$appimage_path" --appimage-extract >/dev/null');
+    expect(workflow).toContain('test -x "$appimage_root/AppRun"');
     expect(workflow).toMatch(
-      /assert_renderer_ready appimage "\$\{appimages\[0\]\}" \\\n\s+--appimage-extract-and-run/,
+      /assert_renderer_ready appimage env \\\n\s+APPIMAGE="\$appimage_path" \\\n\s+APPDIR="\$appimage_root" \\\n\s+"\$appimage_root\/AppRun"/,
     );
+    expect(workflow).toContain('rm -rf -- "$appimage_extract_dir"');
     expect(workflow).not.toContain('APPIMAGE_EXTRACT_AND_RUN=1');
+    expect(workflow).not.toContain('--appimage-extract-and-run');
     expect(workflow).toContain(
       "assert_renderer_ready rpm '/opt/Meeting Intelligence/platform-desktop'",
     );
     expect(workflow).toContain('application exited during renderer stability check');
+    expect(workflow).toContain('kill -TERM -- "-$process_group"');
+    expect(workflow).toContain('kill -KILL -- "-$process_group"');
+    expect(workflow).toContain('kill -0 -- "-$process_group"');
+    expect(workflow).toContain('application process group survived TERM and KILL');
     expect(workflow).not.toContain('immutable-releases');
     expect(workflow).toContain('-F draft=true');
     expect(workflow).toContain('draft_release_name');

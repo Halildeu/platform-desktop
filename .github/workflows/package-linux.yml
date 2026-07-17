@@ -170,12 +170,43 @@ jobs:
       - name: Launch deb, AppImage and rpm applications
         run: |
           cleanup_launch() {
-            if test -n "${launch_pid:-}"; then
-              kill -TERM -- "-$launch_pid" 2>/dev/null || true
-              wait "$launch_pid" 2>/dev/null || true
+            local process_group=${launch_pid:-}
+            if test -z "$process_group"; then
+              return
+            fi
+
+            kill -TERM -- "-$process_group" 2>/dev/null || true
+            for _ in $(seq 1 20); do
+              if ! kill -0 -- "-$process_group" 2>/dev/null; then
+                break
+              fi
+              sleep 0.1
+            done
+
+            if kill -0 -- "-$process_group" 2>/dev/null; then
+              kill -KILL -- "-$process_group" 2>/dev/null || true
+              for _ in $(seq 1 20); do
+                if ! kill -0 -- "-$process_group" 2>/dev/null; then
+                  break
+                fi
+                sleep 0.1
+              done
+            fi
+
+            wait "$process_group" 2>/dev/null || true
+            if kill -0 -- "-$process_group" 2>/dev/null; then
+              echo "::error::application process group survived TERM and KILL"
+              return 1
+            fi
+            launch_pid=
+          }
+          cleanup_smoke() {
+            cleanup_launch || true
+            if test -n "${appimage_extract_dir:-}"; then
+              rm -rf -- "$appimage_extract_dir"
             fi
           }
-          trap cleanup_launch EXIT
+          trap cleanup_smoke EXIT
 
           if ! unshare --user true; then
             sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
@@ -223,7 +254,6 @@ jobs:
             fi
 
             cleanup_launch
-            launch_pid=
             cat "$log_file"
           }
 
@@ -235,8 +265,20 @@ jobs:
           test "${#appimages[@]}" -eq 1
           test "${#rpms[@]}" -eq 1
           chmod +x "${appimages[0]}"
-          assert_renderer_ready appimage "${appimages[0]}" \
-            --appimage-extract-and-run
+          appimage_path=$(realpath "${appimages[0]}")
+          appimage_extract_dir=$(mktemp -d)
+          (
+            cd "$appimage_extract_dir"
+            "$appimage_path" --appimage-extract >/dev/null
+          )
+          appimage_root="$appimage_extract_dir/squashfs-root"
+          test -x "$appimage_root/AppRun"
+          assert_renderer_ready appimage env \
+            APPIMAGE="$appimage_path" \
+            APPDIR="$appimage_root" \
+            "$appimage_root/AppRun"
+          rm -rf -- "$appimage_extract_dir"
+          appimage_extract_dir=
 
           sudo dpkg --remove platform-desktop
           test ! -e '/opt/Meeting Intelligence/platform-desktop'
