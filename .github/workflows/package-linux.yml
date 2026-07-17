@@ -235,8 +235,8 @@ jobs:
           test "${#appimages[@]}" -eq 1
           test "${#rpms[@]}" -eq 1
           chmod +x "${appimages[0]}"
-          assert_renderer_ready appimage \
-            env APPIMAGE_EXTRACT_AND_RUN=1 "${appimages[0]}"
+          assert_renderer_ready appimage "${appimages[0]}" \
+            --appimage-extract-and-run
 
           sudo dpkg --remove platform-desktop
           test ! -e '/opt/Meeting Intelligence/platform-desktop'

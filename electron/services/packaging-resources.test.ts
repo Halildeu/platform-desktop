@@ -132,8 +132,9 @@ describe('packaged runtime resources', () => {
     expect(electronMain).toContain("document.getElementById('root')?.childElementCount > 0");
     expect(workflow).not.toContain('--no-sandbox');
     expect(workflow).toMatch(
-      /assert_renderer_ready appimage \\\n\s+env APPIMAGE_EXTRACT_AND_RUN=1 "\$\{appimages\[0\]\}"/,
+      /assert_renderer_ready appimage "\$\{appimages\[0\]\}" \\\n\s+--appimage-extract-and-run/,
     );
+    expect(workflow).not.toContain('APPIMAGE_EXTRACT_AND_RUN=1');
     expect(workflow).toContain(
       "assert_renderer_ready rpm '/opt/Meeting Intelligence/platform-desktop'",
     );
