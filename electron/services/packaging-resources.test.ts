@@ -12,7 +12,9 @@ interface PlatformDesktopPackage {
   author?: {
     email?: string;
   };
+  dependencies?: Record<string, string>;
   desktopName?: string;
+  devDependencies?: Record<string, string>;
   homepage?: string;
   scripts?: Record<string, string>;
   build?: {
@@ -90,6 +92,8 @@ describe('packaged runtime resources', () => {
       syncDesktopName: true,
       target: ['AppImage', 'deb', 'rpm'],
     });
+    expect(packageJson.dependencies?.['electron-updater']).toBe('^6.8.9');
+    expect(packageJson.devDependencies?.['electron-updater']).toBeUndefined();
   });
 
   it('gates Linux releases on package installation and application startup', () => {
@@ -104,6 +108,8 @@ describe('packaged runtime resources', () => {
     expect(workflow).toContain('cosign verify-blob');
     expect(workflow).toContain('--certificate-github-workflow-sha "$GITHUB_SHA"');
     expect(workflow).toContain('smoke-linux-x64:');
+    expect(workflow).toContain('Verify packaged runtime dependencies');
+    expect(workflow).toContain("grep -Fx '/node_modules/electron-updater/package.json'");
     expect(workflow).toContain('desktop-file-utils xvfb rpm "./${packages[0]}"');
     expect(workflow).not.toContain('desktop-file-utils xvfb rpm "${packages[0]}"');
     expect(workflow).toContain('Exec="/opt/Meeting Intelligence/platform-desktop" %U');

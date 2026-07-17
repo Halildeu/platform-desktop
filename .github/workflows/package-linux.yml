@@ -59,6 +59,13 @@ jobs:
             --publish never \
             --config.directories.output="$PACKAGE_DIR"
 
+      - name: Verify packaged runtime dependencies
+        run: |
+          app_asar="$PACKAGE_DIR/linux-unpacked/resources/app.asar"
+          test -f "$app_asar"
+          ./node_modules/.bin/asar list "$app_asar" \
+            | grep -Fx '/node_modules/electron-updater/package.json'
+
       - name: Verify tag matches the packaged version
         if: github.ref_type == 'tag'
         run: |
