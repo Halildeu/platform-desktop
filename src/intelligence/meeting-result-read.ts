@@ -114,8 +114,12 @@ export function meetingIntelligenceResultFromCanonicalResponse(
 export function isNewCanonicalAnalysisRun(
   response: CanonicalMeetingIntelligenceResponse,
   previousAnalysisRunId: string | null,
+  generatedNotBeforeMs: number | null = null,
 ): boolean {
-  return previousAnalysisRunId === null || response.analysisRunId !== previousAnalysisRunId;
+  if (previousAnalysisRunId !== null && response.analysisRunId === previousAnalysisRunId) {
+    return false;
+  }
+  return generatedNotBeforeMs === null || Date.parse(response.generatedAt) >= generatedNotBeforeMs;
 }
 
 export function canonicalAnalysisRunBaseline(

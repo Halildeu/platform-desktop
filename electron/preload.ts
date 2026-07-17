@@ -81,7 +81,7 @@ const electronAPI = {
       liveSttStreamUrl: string | null;
       liveSttStreamReason: string | null;
     }> => ipcRenderer.invoke('audio:recorder-config'),
-    reconcileLifecycle: (): Promise<{ ok: boolean }> =>
+    reconcileLifecycle: (): Promise<{ ok: boolean; processed: number; remaining: number }> =>
       ipcRenderer.invoke('audio:reconcile-lifecycle'),
     permissionStatus: (): Promise<{ granted: boolean }> =>
       ipcRenderer.invoke('audio:permission-status'),
@@ -97,7 +97,7 @@ const electronAPI = {
     start: (
       meetingId: string,
       deviceId: string,
-    ): Promise<{ sessionId: string; captureId: string }> =>
+    ): Promise<{ sessionId: string; transcriptSessionId: string; captureId: string }> =>
       ipcRenderer.invoke('audio:start', meetingId, deviceId),
     sendChunk: (payload: {
       captureId: string;

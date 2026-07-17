@@ -385,6 +385,7 @@ describe('App recorder readiness', () => {
     });
     vi.mocked(startRecording).mockResolvedValue({
       sessionId: 'SES-1',
+      transcriptSessionId: 'SES-1',
       hasLoopback: false,
       stop: vi.fn(),
       onError: vi.fn(),
@@ -443,6 +444,7 @@ describe('App recorder readiness', () => {
       });
     vi.mocked(startRecording).mockResolvedValue({
       sessionId: 'SES-1',
+      transcriptSessionId: 'SES-1',
       hasLoopback: false,
       stop: vi.fn(),
       onError: vi.fn(),
@@ -536,6 +538,7 @@ describe('App recorder readiness', () => {
     );
     vi.mocked(startRecording).mockResolvedValue({
       sessionId: 'SES-STOP-1',
+      transcriptSessionId: 'SES-STOP-1',
       hasLoopback: false,
       stop: stopMock,
       onError: vi.fn(),
@@ -587,6 +590,7 @@ describe('App recorder readiness', () => {
     });
     vi.mocked(startRecording).mockResolvedValue({
       sessionId: 'SES-PAUSE-1',
+      transcriptSessionId: 'SES-PAUSE-1',
       hasLoopback: false,
       stop: vi.fn().mockResolvedValue(undefined),
       onError: vi.fn(),
@@ -629,6 +633,7 @@ describe('App recorder readiness', () => {
     mockReadyCaptureWorklet();
     vi.mocked(startRecording).mockResolvedValue({
       sessionId: 'SES-STOP-2',
+      transcriptSessionId: 'SES-STOP-2',
       hasLoopback: false,
       stop: vi.fn().mockRejectedValue(new Error('upload finish patladi')),
       onError: vi.fn(),
@@ -705,6 +710,7 @@ describe('App recorder readiness', () => {
     });
     vi.mocked(startRecording).mockResolvedValue({
       sessionId: 'SES-1',
+      transcriptSessionId: 'SES-1',
       hasLoopback: false,
       stop: vi.fn(),
       onError: vi.fn(),
@@ -751,6 +757,7 @@ describe('App recorder readiness', () => {
     });
     vi.mocked(startRecording).mockResolvedValue({
       sessionId: 'SES-1',
+      transcriptSessionId: 'SES-1',
       hasLoopback: false,
       stop: vi.fn(),
       onError: vi.fn(),
@@ -823,6 +830,7 @@ describe('App recorder readiness', () => {
     });
     vi.mocked(startRecording).mockResolvedValue({
       sessionId: 'SES-1',
+      transcriptSessionId: 'SES-1',
       hasLoopback: false,
       stop: vi.fn(),
       onError: vi.fn(),
@@ -931,6 +939,7 @@ describe('App recorder readiness', () => {
     });
     vi.mocked(startRecording).mockResolvedValue({
       sessionId: 'SES-1',
+      transcriptSessionId: 'SES-1',
       hasLoopback: false,
       stop: vi.fn(),
       onError: vi.fn(),
@@ -1044,6 +1053,7 @@ describe('App recorder readiness', () => {
       });
       return {
         sessionId: 'SES-1',
+        transcriptSessionId: 'SES-1',
         hasLoopback: false,
         stop: vi.fn(),
         onError: vi.fn(),
@@ -1078,6 +1088,7 @@ describe('App recorder readiness', () => {
     });
     vi.mocked(startRecording).mockResolvedValue({
       sessionId: 'LOCAL-1',
+      transcriptSessionId: 'LOCAL-1',
       hasLoopback: false,
       gatewayActive: false,
       gatewayError: 'Direct STT baglanti hatasi',
@@ -1108,6 +1119,7 @@ describe('App recorder readiness', () => {
     });
     vi.mocked(startRecording).mockResolvedValue({
       sessionId: 'SES-1',
+      transcriptSessionId: 'SES-1',
       hasLoopback: false,
       stop: vi.fn(),
       onError: vi.fn(),
@@ -1254,6 +1266,7 @@ describe('App canonical Meeting Intelligence read', () => {
     const replacement = {
       ...canonicalMeetingResult(),
       analysisRunId: '66666666-6666-4666-8666-666666666666',
+      sessionId: 'CANONICAL-INTERNAL-SESSION',
       summary: 'Yeni kayıt için kalıcı toplantı özeti.',
       summary_citations: [
         {
@@ -1261,7 +1274,7 @@ describe('App canonical Meeting Intelligence read', () => {
           claim: 'Yeni kayıt için kalıcı toplantı özeti.',
         },
       ],
-      generatedAt: '2026-07-11T20:01:00.000Z',
+      generatedAt: new Date(Date.now() + 60_000).toISOString(),
     };
     vi.mocked(window.electronAPI!.meeting.getIntelligenceResult)
       .mockResolvedValueOnce({ status: 'ready', result: previous })
@@ -1270,6 +1283,7 @@ describe('App canonical Meeting Intelligence read', () => {
     vi.mocked(window.electronAPI!.meeting.analyze).mockResolvedValue({});
     vi.mocked(startRecording).mockResolvedValue({
       sessionId: 'SES-REANALYZE',
+      transcriptSessionId: 'SES-REANALYZE',
       hasLoopback: false,
       stop: vi.fn().mockResolvedValue(undefined),
       onError: vi.fn(),
@@ -1354,6 +1368,7 @@ describe('App recent meeting result navigation', () => {
     );
     vi.mocked(startRecording).mockResolvedValue({
       sessionId: 'SES-RECORDER-TARGET',
+      transcriptSessionId: 'SES-RECORDER-TARGET',
       hasLoopback: false,
       stop: vi.fn(),
       onError: vi.fn(),

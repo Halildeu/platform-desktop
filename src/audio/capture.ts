@@ -101,6 +101,7 @@ export async function testAudioCaptureWorklet(
 
 export interface Recorder {
   sessionId: string;
+  transcriptSessionId: string | null;
   hasLoopback: boolean;
   gatewayActive?: boolean;
   gatewayError?: string | null;
@@ -220,6 +221,7 @@ function canContinueDirectOnlyAfterRecorderStartupError(message: string): boolea
   const hasUnconfirmedGatewayMutation =
     message.includes('AUDIO_GATEWAY_CONSENT_UNCONFIRMED') ||
     message.includes('AUDIO_GATEWAY_SESSION_START_UNCONFIRMED');
+  const hasDefinitiveAccessDenial = message.includes('AUDIO_GATEWAY_SESSION_START_DENIED');
   const isLocalContractError =
     normalized.includes('consent required') ||
     normalized.includes('invalid format') ||
@@ -237,6 +239,7 @@ function canContinueDirectOnlyAfterRecorderStartupError(message: string): boolea
     normalized.includes('audio gateway oturumu zaman asimina ugradi');
   if (
     hasUnconfirmedGatewayMutation ||
+    hasDefinitiveAccessDenial ||
     isLocalContractError ||
     isPreparationTimeout ||
     isAmbiguousStartTimeout
@@ -259,8 +262,7 @@ function canContinueDirectOnlyAfterRecorderStartupError(message: string): boolea
     normalized.includes('fetch failed') ||
     normalized.includes('network') ||
     normalized.includes('econn') ||
-    normalized.includes('retryable=true') ||
-    /failed:\s*5\d\d/.test(normalized)
+    normalized.includes('retryable=true')
   );
 }
 
@@ -363,7 +365,11 @@ export async function startRecording(
   mixedSource.connect(captureNode);
   captureNode.connect(sink).connect(audioContext.destination);
 
-  let session: { sessionId: string; captureId: string } | null = null;
+  let session: {
+    sessionId: string;
+    transcriptSessionId: string;
+    captureId: string;
+  } | null = null;
   if (!recorderStartupError) {
     try {
       session = await withTimeout(
@@ -498,6 +504,7 @@ export async function startRecording(
 
   return {
     sessionId,
+    transcriptSessionId: session?.transcriptSessionId ?? null,
     hasLoopback: loopback !== null,
     gatewayActive: captureId !== null,
     gatewayError: recorderStartupError,

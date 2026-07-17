@@ -1721,6 +1721,7 @@ export function SummaryPanel({
 const initialTranscriptSessionFallback: TranscriptSessionState = {
   lifecycle: 'idle',
   sessionId: null,
+  gatewaySessionId: null,
   meetingId: null,
   deviceId: null,
   hasLoopback: false,

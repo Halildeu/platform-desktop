@@ -201,6 +201,110 @@ export interface SessionInfo {
   finishUrl?: string;
 }
 
+export interface FinishSessionInfo {
+  sessionId: string;
+  correlationId: string;
+  finalState: 'FINISHED';
+  finishedAtMs: number;
+  alreadyFinished: boolean;
+}
+
+export class GatewaySessionStartRejectedError extends Error {
+  readonly status: number;
+
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = 'GatewaySessionStartRejectedError';
+    this.status = status;
+  }
+}
+
+function requiredGatewayIdentifier(value: unknown, label: string): string {
+  if (typeof value !== 'string' || !/^[A-Za-z0-9._:-]{1,128}$/.test(value)) {
+    throw new Error(`${label} is invalid`);
+  }
+  return value;
+}
+
+function parseConsentInfo(value: unknown, expected: RecordConsentArgs): RecordConsentInfo {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('recordConsent response is not an object');
+  }
+  const record = value as Record<string, unknown>;
+  for (const field of [
+    'meetingId',
+    'captureId',
+    'consentVersion',
+    'consentTextHash',
+    'locale',
+  ] as const) {
+    if (record[field] !== expected[field]) {
+      throw new Error(`recordConsent response ${field} mismatch`);
+    }
+  }
+  const correlationId = requiredGatewayIdentifier(
+    record.correlationId,
+    'recordConsent correlationId',
+  );
+  if (
+    typeof record.acceptedAtMs !== 'number' ||
+    !Number.isSafeInteger(record.acceptedAtMs) ||
+    record.acceptedAtMs <= 0 ||
+    Math.abs(record.acceptedAtMs - Date.now()) > 5 * 60_000
+  ) {
+    throw new Error('recordConsent acceptedAtMs is invalid');
+  }
+  return {
+    ...expected,
+    correlationId,
+    acceptedAtMs: record.acceptedAtMs,
+  };
+}
+
+function parseSessionInfo(value: unknown): SessionInfo {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('startSession response is not an object');
+  }
+  const record = value as Record<string, unknown>;
+  return {
+    sessionId: requiredGatewayIdentifier(record.sessionId, 'startSession sessionId'),
+  };
+}
+
+function parseFinishSessionInfo(value: unknown, expectedSessionId: string): FinishSessionInfo {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('finishSession response is not an object');
+  }
+  const record = value as Record<string, unknown>;
+  const sessionId = requiredGatewayIdentifier(record.sessionId, 'finishSession sessionId');
+  if (sessionId !== expectedSessionId) {
+    throw new Error('finishSession response sessionId mismatch');
+  }
+  if (record.finalState !== 'FINISHED') {
+    throw new Error('finishSession response finalState is invalid');
+  }
+  if (
+    typeof record.finishedAtMs !== 'number' ||
+    !Number.isSafeInteger(record.finishedAtMs) ||
+    record.finishedAtMs <= 0
+  ) {
+    throw new Error('finishSession response finishedAtMs is invalid');
+  }
+  if (typeof record.alreadyFinished !== 'boolean') {
+    throw new Error('finishSession response alreadyFinished is invalid');
+  }
+  return {
+    sessionId,
+    correlationId: requiredGatewayIdentifier(
+      record.correlationId,
+      'finishSession correlationId',
+    ),
+    finalState: 'FINISHED',
+    finishedAtMs: record.finishedAtMs,
+    alreadyFinished: record.alreadyFinished,
+  };
+}
+
 export interface TranscriptGatewayEvent {
   eventId: string;
   sessionId: string;
@@ -265,7 +369,7 @@ export async function recordConsent(
       if (!res.ok) {
         throw new Error(await httpErrorMessage(res, 'recordConsent'));
       }
-      return (await res.json()) as RecordConsentInfo;
+      return parseConsentInfo(await res.json(), args);
     },
   );
 }
@@ -298,9 +402,12 @@ export async function startSession(
     'startSession',
     async (res) => {
       if (!res.ok) {
-        throw new Error(await httpErrorMessage(res, 'startSession'));
+        throw new GatewaySessionStartRejectedError(
+          await httpErrorMessage(res, 'startSession'),
+          res.status,
+        );
       }
-      return (await res.json()) as SessionInfo;
+      return parseSessionInfo(await res.json());
     },
   );
 }
@@ -341,8 +448,8 @@ export async function finishSession(
   jwt: string,
   sessionId: string,
   idempotencyKey: string = newIdempotencyKey(),
-): Promise<void> {
-  await fetchWithTimeout(
+): Promise<FinishSessionInfo> {
+  return fetchWithTimeout(
     finishUrl(cfg, sessionId),
     {
       method: 'POST',
@@ -356,6 +463,7 @@ export async function finishSession(
       if (!res.ok) {
         throw new Error(await httpErrorMessage(res, 'finishSession'));
       }
+      return parseFinishSessionInfo(await res.json(), sessionId);
     },
   );
 }

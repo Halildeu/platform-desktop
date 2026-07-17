@@ -1,38 +1,67 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const mocks = vi.hoisted(() => ({
-  handlers: new Map<string, (...args: unknown[]) => Promise<unknown>>(),
-  listeners: new Map<string, (...args: unknown[]) => unknown>(),
-  loadGatewayConfig: vi.fn(() => ({ baseUrl: 'https://gw.example.com' })),
-  loadMeetingConfig: vi.fn(() => ({ baseUrl: 'https://meeting.example.com' })),
-  syncRecordingLifecycle: vi.fn(),
-  recordConsent: vi.fn(),
-  finishSession: vi.fn(async () => undefined),
-  newIdempotencyKey: vi.fn(() => 'IK-1'),
-  getValidAccessToken: vi.fn(async () => 'JWT'),
-  senderStart: vi.fn(async () => 'SES-1'),
-  senderSend: vi.fn(async () => 0),
-  senderFinish: vi.fn(async () => undefined),
-  senderGetState: vi.fn(() => 'idle'),
-  beginCapturePermissionLease: vi.fn(() => 1781820000123),
-  clearCapturePermissionLease: vi.fn(),
-  setRecordingActive: vi.fn(),
-  transcriptSubscriptionCtor: vi.fn(),
-  transcriptSubscriptionStart: vi.fn(),
-  transcriptSubscriptionStop: vi.fn(),
-  pendingLifecycles: [] as Array<{
-    meetingId: string;
-    externalSessionId: string;
-    startedAt: string;
-    endedAt: string | null;
-    gatewayFinishPending: boolean;
-  }>,
-  outboxList: vi.fn(),
-  outboxUpsert: vi.fn(),
-  outboxMarkEnded: vi.fn(),
-  outboxMarkGatewayFinished: vi.fn(),
-  outboxRemove: vi.fn(),
-}));
+const mocks = vi.hoisted(() => {
+  class MockGatewaySessionStartRejectedError extends Error {
+    status: number;
+
+    constructor(message: string, status: number) {
+      super(message);
+      this.status = status;
+    }
+  }
+
+  class MockAmbiguousGatewaySessionStartError extends Error {}
+
+  return {
+    handlers: new Map<string, (...args: unknown[]) => Promise<unknown>>(),
+    listeners: new Map<string, (...args: unknown[]) => unknown>(),
+    loadGatewayConfig: vi.fn(() => ({ baseUrl: 'https://gw.example.com' })),
+    loadMeetingConfig: vi.fn(() => ({ baseUrl: 'https://meeting.example.com' })),
+    syncRecordingLifecycle: vi.fn(),
+    recordConsent: vi.fn(),
+    startSession: vi.fn(),
+    finishSession: vi.fn(async () => undefined),
+    newIdempotencyKey: vi.fn(() => 'IK-1'),
+    getValidAccessToken: vi.fn(async () => 'JWT'),
+    senderStart: vi.fn(async () => 'SES-1'),
+    senderSend: vi.fn(async () => 0),
+    senderFinish: vi.fn(async () => undefined),
+    senderGetState: vi.fn(() => 'idle'),
+    beginCapturePermissionLease: vi.fn(() => 1781820000123),
+    clearCapturePermissionLease: vi.fn(),
+    setRecordingActive: vi.fn(),
+    transcriptSubscriptionCtor: vi.fn(),
+    transcriptSubscriptionStart: vi.fn(),
+    transcriptSubscriptionStop: vi.fn(),
+    pendingLifecycles: [] as Array<{
+      meetingId: string;
+      externalSessionId: string;
+      startedAt: string;
+      endedAt: string | null;
+      gatewayFinishPending: boolean;
+      gatewayFinishIdempotencyKey?: string | null;
+    }>,
+    outboxList: vi.fn(),
+    outboxUpsert: vi.fn(),
+    outboxMarkEnded: vi.fn(),
+    outboxMarkGatewayFinished: vi.fn(),
+    outboxRemove: vi.fn(),
+    pendingStarts: [] as Array<{
+      meetingId: string;
+      captureId: string;
+      deviceId: string;
+      language: string;
+      startedAt: string;
+      idempotencyKey: string;
+      gatewayFinishIdempotencyKey: string;
+    }>,
+    startOutboxList: vi.fn(),
+    startOutboxUpsert: vi.fn(),
+    startOutboxRemove: vi.fn(),
+    MockGatewaySessionStartRejectedError,
+    MockAmbiguousGatewaySessionStartError,
+  };
+});
 
 vi.mock('electron', () => ({
   ipcMain: {
@@ -46,13 +75,16 @@ vi.mock('electron', () => ({
 }));
 
 vi.mock('../services/gateway/gateway-client', () => ({
+  GatewaySessionStartRejectedError: mocks.MockGatewaySessionStartRejectedError,
   finishSession: mocks.finishSession,
   loadGatewayConfig: mocks.loadGatewayConfig,
   newIdempotencyKey: mocks.newIdempotencyKey,
   recordConsent: mocks.recordConsent,
+  startSession: mocks.startSession,
 }));
 
 vi.mock('../services/gateway/chunk-sender', () => ({
+  AmbiguousGatewaySessionStartError: mocks.MockAmbiguousGatewaySessionStartError,
   ChunkSender: class MockChunkSender {
     getState = mocks.senderGetState;
     start = mocks.senderStart;
@@ -73,6 +105,14 @@ vi.mock('../services/meeting/recording-lifecycle-outbox', () => ({
     markEnded = mocks.outboxMarkEnded;
     markGatewayFinished = mocks.outboxMarkGatewayFinished;
     remove = mocks.outboxRemove;
+  },
+}));
+
+vi.mock('../services/meeting/recording-start-outbox', () => ({
+  RecordingStartOutbox: class MockRecordingStartOutbox {
+    list = mocks.startOutboxList;
+    upsert = mocks.startOutboxUpsert;
+    remove = mocks.startOutboxRemove;
   },
 }));
 
@@ -134,9 +174,12 @@ async function registerFreshAudioIpc(): Promise<void> {
     correlationId: 'corr-1',
     acceptedAtMs: 1781820000999,
   }));
+  mocks.startSession.mockReset();
+  mocks.startSession.mockResolvedValue({ sessionId: 'SES-recovered' });
   mocks.finishSession.mockReset();
   mocks.finishSession.mockResolvedValue(undefined);
-  mocks.newIdempotencyKey.mockClear();
+  mocks.newIdempotencyKey.mockReset();
+  mocks.newIdempotencyKey.mockReturnValue('IK-1');
   mocks.getValidAccessToken.mockClear();
   mocks.senderStart.mockClear();
   mocks.senderStart.mockResolvedValue('SES-1');
@@ -161,11 +204,31 @@ async function registerFreshAudioIpc(): Promise<void> {
         entry.meetingId === value.meetingId && entry.externalSessionId === value.externalSessionId,
     );
     if (index >= 0) {
+      const existing = mocks.pendingLifecycles[index];
+      if (existing.startedAt !== value.startedAt) {
+        throw new Error('pending recording lifecycle identity has conflicting startedAt');
+      }
+      if (existing.endedAt && value.endedAt && existing.endedAt !== value.endedAt) {
+        throw new Error('pending recording lifecycle identity has conflicting endedAt');
+      }
+      if (
+        existing.gatewayFinishIdempotencyKey &&
+        value.gatewayFinishIdempotencyKey &&
+        existing.gatewayFinishIdempotencyKey !== value.gatewayFinishIdempotencyKey
+      ) {
+        throw new Error(
+          'pending recording lifecycle identity has conflicting gateway finish idempotency key',
+        );
+      }
       mocks.pendingLifecycles[index] = {
         ...mocks.pendingLifecycles[index],
         endedAt: mocks.pendingLifecycles[index].endedAt ?? value.endedAt,
         gatewayFinishPending:
           mocks.pendingLifecycles[index].gatewayFinishPending && value.gatewayFinishPending,
+        gatewayFinishIdempotencyKey:
+          mocks.pendingLifecycles[index].gatewayFinishIdempotencyKey ??
+          value.gatewayFinishIdempotencyKey ??
+          null,
       };
       return mocks.pendingLifecycles[index];
     }
@@ -187,6 +250,19 @@ async function registerFreshAudioIpc(): Promise<void> {
       (entry) =>
         entry.meetingId !== value.meetingId || entry.externalSessionId !== value.externalSessionId,
     );
+  });
+  mocks.pendingStarts = [];
+  mocks.startOutboxList.mockReset();
+  mocks.startOutboxList.mockImplementation(() => [...mocks.pendingStarts]);
+  mocks.startOutboxUpsert.mockReset();
+  mocks.startOutboxUpsert.mockImplementation((record) => {
+    const value = record as (typeof mocks.pendingStarts)[number];
+    mocks.pendingStarts.push(value);
+    return value;
+  });
+  mocks.startOutboxRemove.mockReset();
+  mocks.startOutboxRemove.mockImplementation((captureId) => {
+    mocks.pendingStarts = mocks.pendingStarts.filter((entry) => entry.captureId !== captureId);
   });
 
   const audio = await import('./audio');
@@ -252,10 +328,12 @@ describe('audio IPC recorder consent gate', () => {
 
     const result = (await startHandler()({}, meetingId, deviceId)) as {
       sessionId: string;
+      transcriptSessionId: string;
       captureId: string;
     };
 
     expect(result.sessionId).toBe('SES-1');
+    expect(result.transcriptSessionId).toBe('33333333-3333-4333-8333-333333333333');
     expect(result.captureId).toMatch(
       /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
     );
@@ -281,7 +359,7 @@ describe('audio IPC recorder consent gate', () => {
       consentTextHash,
       locale: 'tr-TR',
     });
-    expect(mocks.senderStart).toHaveBeenCalledWith(meetingId, deviceId);
+    expect(mocks.senderStart).toHaveBeenCalledWith(meetingId, deviceId, 'tr', 'IK-1');
     expect(mocks.recordConsent.mock.invocationCallOrder[0]).toBeLessThan(
       mocks.senderStart.mock.invocationCallOrder[0],
     );
@@ -404,7 +482,9 @@ describe('audio IPC recorder consent gate', () => {
   });
 
   it('marks an ambiguous gateway session start as unconfirmed', async () => {
-    mocks.senderStart.mockRejectedValueOnce(new Error('startSession timed out after 15000ms'));
+    mocks.senderStart.mockRejectedValueOnce(
+      new mocks.MockAmbiguousGatewaySessionStartError('startSession timed out after 15000ms'),
+    );
     await acceptConsent();
 
     await expect(startHandler()({}, meetingId, deviceId)).rejects.toThrow(
@@ -412,11 +492,58 @@ describe('audio IPC recorder consent gate', () => {
     );
 
     expect(mocks.syncRecordingLifecycle).not.toHaveBeenCalled();
+    expect(mocks.pendingStarts).toEqual([
+      expect.objectContaining({ meetingId, deviceId, idempotencyKey: 'IK-1' }),
+    ]);
     expect(mocks.setRecordingActive).not.toHaveBeenCalledWith(true);
     expect(mocks.clearCapturePermissionLease).toHaveBeenCalledTimes(1);
   });
 
-  it('starts a replacement session without waiting for stale lifecycle cleanup', async () => {
+  it('does not call the gateway when the durable start intent cannot be persisted', async () => {
+    mocks.startOutboxUpsert.mockImplementationOnce(() => {
+      throw new Error('pending recording start recovery could not be persisted');
+    });
+    await acceptConsent();
+
+    await expect(startHandler()({}, meetingId, deviceId)).rejects.toThrow(
+      'pending recording start recovery could not be persisted',
+    );
+
+    expect(mocks.senderStart).not.toHaveBeenCalled();
+    expect(mocks.syncRecordingLifecycle).not.toHaveBeenCalled();
+  });
+
+  it('keeps a generic gateway 5xx start in the durable retry queue', async () => {
+    mocks.senderStart.mockRejectedValueOnce(
+      new mocks.MockGatewaySessionStartRejectedError('startSession failed: 503', 503),
+    );
+    await acceptConsent();
+
+    await expect(startHandler()({}, meetingId, deviceId)).rejects.toThrow(
+      'AUDIO_GATEWAY_SESSION_START_UNCONFIRMED: startSession failed: 503',
+    );
+
+    expect(mocks.pendingStarts).toEqual([
+      expect.objectContaining({ meetingId, deviceId, idempotencyKey: 'IK-1' }),
+    ]);
+    expect(mocks.syncRecordingLifecycle).not.toHaveBeenCalled();
+  });
+
+  it('blocks fallback after a definite authorization rejection', async () => {
+    mocks.senderStart.mockRejectedValueOnce(
+      new mocks.MockGatewaySessionStartRejectedError('startSession failed: 403', 403),
+    );
+    await acceptConsent();
+
+    await expect(startHandler()({}, meetingId, deviceId)).rejects.toThrow(
+      'AUDIO_GATEWAY_SESSION_START_DENIED: startSession failed: 403',
+    );
+
+    expect(mocks.pendingStarts).toEqual([]);
+    expect(mocks.syncRecordingLifecycle).not.toHaveBeenCalled();
+  });
+
+  it('waits for stale lifecycle cleanup before starting a replacement session', async () => {
     mocks.senderStart.mockResolvedValueOnce('SES-stale').mockResolvedValueOnce('SES-new');
     let resolveStaleFinish: () => void = () => undefined;
     mocks.senderFinish.mockImplementationOnce(
@@ -429,25 +556,24 @@ describe('audio IPC recorder consent gate', () => {
     await startHandler()({}, meetingId, deviceId);
     await acceptConsent();
 
-    await expect(startHandler()({}, meetingId, deviceId)).resolves.toEqual({
+    const replacement = startHandler()({}, meetingId, deviceId);
+    await Promise.resolve();
+
+    expect(mocks.senderStart).toHaveBeenCalledTimes(1);
+    expect(mocks.pendingLifecycles).toEqual([
+      expect.objectContaining({ externalSessionId: 'SES-stale', endedAt: expect.any(String) }),
+    ]);
+
+    resolveStaleFinish();
+    await expect(replacement).resolves.toEqual({
       sessionId: 'SES-new',
+      transcriptSessionId: '33333333-3333-4333-8333-333333333333',
       captureId: expect.any(String),
     });
 
-    expect(mocks.pendingLifecycles).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ externalSessionId: 'SES-stale', endedAt: expect.any(String) }),
-        expect.objectContaining({ externalSessionId: 'SES-new', endedAt: null }),
-      ]),
-    );
-    expect(mocks.setRecordingActive).toHaveBeenLastCalledWith(true);
-
-    resolveStaleFinish();
-    await vi.waitFor(() => {
-      expect(mocks.pendingLifecycles).toEqual([
-        expect.objectContaining({ externalSessionId: 'SES-new', endedAt: null }),
-      ]);
-    });
+    expect(mocks.pendingLifecycles).toEqual([
+      expect.objectContaining({ externalSessionId: 'SES-new', endedAt: null }),
+    ]);
     expect(mocks.setRecordingActive).toHaveBeenLastCalledWith(true);
   });
 
@@ -523,29 +649,25 @@ describe('audio IPC recorder consent gate', () => {
     ]);
   });
 
-  it('still confirms canonical finish and clears active state when the durable write fails', async () => {
+  it('does not mutate remote finish state when the durable terminal write fails', async () => {
     await acceptConsent();
     const started = (await startHandler()({}, meetingId, deviceId)) as { captureId: string };
     mocks.outboxMarkEnded.mockImplementationOnce(() => {
       throw new Error('recording lifecycle outbox write failed');
     });
 
-    await expect(finishHandler()({}, started.captureId)).resolves.toEqual({ ok: true });
-
-    expect(mocks.senderFinish).toHaveBeenCalledTimes(1);
-    expect(mocks.syncRecordingLifecycle).toHaveBeenCalledTimes(2);
-    expect(mocks.outboxRemove).toHaveBeenCalledWith(
-      expect.objectContaining({
-        externalSessionId: 'SES-1',
-        endedAt: expect.any(String),
-      }),
+    await expect(finishHandler()({}, started.captureId)).rejects.toThrow(
+      'recording lifecycle outbox write failed',
     );
-    expect(mocks.pendingLifecycles).toEqual([]);
+
+    expect(mocks.senderFinish).not.toHaveBeenCalled();
+    expect(mocks.syncRecordingLifecycle).toHaveBeenCalledTimes(1);
+    expect(mocks.outboxRemove).not.toHaveBeenCalled();
     expect(mocks.transcriptSubscriptionStop).toHaveBeenCalledTimes(1);
     expect(mocks.setRecordingActive).toHaveBeenLastCalledWith(false);
   });
 
-  it('does not report finish success when terminal lifecycle tombstone persistence fails', async () => {
+  it('reports the first durable terminal error without attempting a tombstone write', async () => {
     await acceptConsent();
     const started = (await startHandler()({}, meetingId, deviceId)) as { captureId: string };
     mocks.outboxMarkEnded.mockImplementationOnce(() => {
@@ -556,11 +678,12 @@ describe('audio IPC recorder consent gate', () => {
     });
 
     await expect(finishHandler()({}, started.captureId)).rejects.toThrow(
-      'recording lifecycle tombstone write failed',
+      'recording lifecycle outbox write failed',
     );
 
-    expect(mocks.syncRecordingLifecycle).toHaveBeenCalledTimes(2);
-    expect(mocks.senderFinish).toHaveBeenCalledTimes(1);
+    expect(mocks.syncRecordingLifecycle).toHaveBeenCalledTimes(1);
+    expect(mocks.senderFinish).not.toHaveBeenCalled();
+    expect(mocks.outboxRemove).not.toHaveBeenCalled();
     expect(mocks.setRecordingActive).toHaveBeenLastCalledWith(false);
   });
 
@@ -583,6 +706,9 @@ describe('audio IPC recorder consent gate', () => {
   });
 
   it('keeps the durable gateway identity when every finish confirmation fails', async () => {
+    mocks.newIdempotencyKey
+      .mockReturnValueOnce('11111111111111111111111111111111')
+      .mockReturnValue('22222222222222222222222222222222');
     await acceptConsent();
     const started = (await startHandler()({}, meetingId, deviceId)) as { captureId: string };
     mocks.senderFinish.mockRejectedValueOnce(new Error('finishSession response lost'));
@@ -593,6 +719,13 @@ describe('audio IPC recorder consent gate', () => {
     );
 
     expect(mocks.finishSession).toHaveBeenCalledTimes(3);
+    expect(mocks.senderFinish).toHaveBeenCalledWith('22222222222222222222222222222222');
+    expect(mocks.finishSession).toHaveBeenLastCalledWith(
+      { baseUrl: 'https://gw.example.com' },
+      'JWT',
+      'SES-1',
+      '22222222222222222222222222222222',
+    );
     expect(mocks.pendingLifecycles).toEqual([
       expect.objectContaining({
         meetingId,
@@ -604,7 +737,7 @@ describe('audio IPC recorder consent gate', () => {
     expect(mocks.setRecordingActive).toHaveBeenLastCalledWith(false);
   });
 
-  it('does not block a new capture lease while older lifecycle metadata awaits reconciliation', async () => {
+  it('blocks a new capture lease until gateway finalization is reconciled', async () => {
     mocks.pendingLifecycles = [
       {
         meetingId,
@@ -620,10 +753,14 @@ describe('audio IPC recorder consent gate', () => {
     const reconcile = mocks.handlers.get('audio:reconcile-lifecycle');
     if (!reconcile) throw new Error('audio:reconcile-lifecycle handler not registered');
 
-    await expect(prepare({})).resolves.toEqual({ ok: true, expiresAtMs: 1781820000123 });
+    await expect(prepare({})).rejects.toThrow(
+      'pending recording lifecycle must be reconciled before a new recording',
+    );
     expect(mocks.syncRecordingLifecycle).not.toHaveBeenCalled();
 
-    await expect(reconcile({})).resolves.toEqual({ ok: true });
+    await expect(reconcile({})).resolves.toEqual({ ok: true, processed: 1, remaining: 0 });
+
+    await expect(prepare({})).resolves.toEqual({ ok: true, expiresAtMs: 1781820000123 });
 
     expect(mocks.syncRecordingLifecycle).toHaveBeenCalledWith(
       { baseUrl: 'https://meeting.example.com' },
@@ -648,8 +785,11 @@ describe('audio IPC recorder consent gate', () => {
     );
     const reconcile = mocks.handlers.get('audio:reconcile-lifecycle');
     if (!reconcile) throw new Error('audio:reconcile-lifecycle handler not registered');
+    const prepare = mocks.handlers.get('audio:prepare-capture');
+    if (!prepare) throw new Error('audio:prepare-capture handler not registered');
+    await acceptConsent();
 
-    await expect(reconcile({})).rejects.toThrow('MEETING_UNAVAILABLE');
+    await expect(reconcile({})).resolves.toEqual({ ok: false, processed: 1, remaining: 1 });
 
     expect(mocks.finishSession).toHaveBeenCalledTimes(1);
     expect(mocks.pendingLifecycles).toEqual([
@@ -658,10 +798,14 @@ describe('audio IPC recorder consent gate', () => {
         gatewayFinishPending: false,
       }),
     ]);
+    await expect(prepare({})).rejects.toThrow(
+      'pending recording lifecycle must be reconciled before a new recording',
+    );
 
-    await expect(reconcile({})).resolves.toEqual({ ok: true });
+    await expect(reconcile({})).resolves.toEqual({ ok: true, processed: 1, remaining: 0 });
     expect(mocks.finishSession).toHaveBeenCalledTimes(1);
     expect(mocks.pendingLifecycles).toEqual([]);
+    await expect(prepare({})).resolves.toEqual({ ok: true, expiresAtMs: 1781820000123 });
   });
 
   it('replays durable lifecycle metadata after login reconciliation', async () => {
@@ -677,13 +821,84 @@ describe('audio IPC recorder consent gate', () => {
     const reconcile = mocks.handlers.get('audio:reconcile-lifecycle');
     if (!reconcile) throw new Error('audio:reconcile-lifecycle handler not registered');
 
-    await expect(reconcile({})).resolves.toEqual({ ok: true });
+    await expect(reconcile({})).resolves.toEqual({ ok: true, processed: 1, remaining: 0 });
 
     expect(mocks.outboxMarkEnded).toHaveBeenCalledWith(
       expect.objectContaining({ externalSessionId: 'SES-recovered' }),
       expect.any(String),
     );
     expect(mocks.syncRecordingLifecycle).toHaveBeenCalledTimes(1);
+    expect(mocks.pendingLifecycles).toEqual([]);
+  });
+
+  it('replays an ambiguous durable start with the original idempotency key', async () => {
+    mocks.pendingStarts = [
+      {
+        meetingId,
+        captureId: '33333333-3333-4333-8333-333333333333',
+        deviceId,
+        language: 'tr',
+        startedAt: '2026-07-17T08:43:20.000Z',
+        idempotencyKey: '0123456789abcdef0123456789abcdef',
+        gatewayFinishIdempotencyKey: 'fedcba9876543210fedcba9876543210',
+      },
+    ];
+    const reconcile = mocks.handlers.get('audio:reconcile-lifecycle');
+    if (!reconcile) throw new Error('audio:reconcile-lifecycle handler not registered');
+
+    await expect(reconcile({})).resolves.toEqual({ ok: true, processed: 1, remaining: 0 });
+
+    expect(mocks.startSession).toHaveBeenCalledWith(
+      { baseUrl: 'https://gw.example.com' },
+      'JWT',
+      { meetingId, deviceId, language: 'tr' },
+      '0123456789abcdef0123456789abcdef',
+    );
+    expect(mocks.finishSession).toHaveBeenCalledWith(
+      { baseUrl: 'https://gw.example.com' },
+      'JWT',
+      'SES-recovered',
+      'fedcba9876543210fedcba9876543210',
+    );
+    expect(mocks.pendingStarts).toEqual([]);
+    expect(mocks.pendingLifecycles).toEqual([]);
+  });
+
+  it('reuses an already-persisted recovered lifecycle without changing terminal identity', async () => {
+    mocks.pendingStarts = [
+      {
+        meetingId,
+        captureId: '33333333-3333-4333-8333-333333333333',
+        deviceId,
+        language: 'tr',
+        startedAt: '2026-07-17T08:43:20.000Z',
+        idempotencyKey: '0123456789abcdef0123456789abcdef',
+        gatewayFinishIdempotencyKey: 'fedcba9876543210fedcba9876543210',
+      },
+    ];
+    mocks.pendingLifecycles = [
+      {
+        meetingId,
+        externalSessionId: 'SES-recovered',
+        startedAt: '2026-07-17T08:43:20.000Z',
+        endedAt: '2026-07-17T08:44:20.000Z',
+        gatewayFinishPending: true,
+        gatewayFinishIdempotencyKey: 'fedcba9876543210fedcba9876543210',
+      },
+    ];
+    const reconcile = mocks.handlers.get('audio:reconcile-lifecycle');
+    if (!reconcile) throw new Error('audio:reconcile-lifecycle handler not registered');
+
+    await expect(reconcile({})).resolves.toEqual({ ok: true, processed: 1, remaining: 0 });
+
+    expect(mocks.outboxMarkEnded).not.toHaveBeenCalled();
+    expect(mocks.finishSession).toHaveBeenCalledWith(
+      { baseUrl: 'https://gw.example.com' },
+      'JWT',
+      'SES-recovered',
+      'fedcba9876543210fedcba9876543210',
+    );
+    expect(mocks.pendingStarts).toEqual([]);
     expect(mocks.pendingLifecycles).toEqual([]);
   });
 
@@ -700,7 +915,7 @@ describe('audio IPC recorder consent gate', () => {
     const reconcile = mocks.handlers.get('audio:reconcile-lifecycle');
     if (!reconcile) throw new Error('audio:reconcile-lifecycle handler not registered');
 
-    await expect(reconcile({})).resolves.toEqual({ ok: true });
+    await expect(reconcile({})).resolves.toEqual({ ok: true, processed: 1, remaining: 0 });
 
     expect(mocks.syncRecordingLifecycle).toHaveBeenCalledWith(
       { baseUrl: 'https://meeting.example.com' },
@@ -714,7 +929,7 @@ describe('audio IPC recorder consent gate', () => {
     expect(mocks.setRecordingActive).not.toHaveBeenLastCalledWith(false);
   });
 
-  it('bounds one reconciliation call to four historical records', async () => {
+  it('drains all bounded historical records in one reconciliation call', async () => {
     mocks.pendingLifecycles = Array.from({ length: 5 }, (_, index) => ({
       meetingId: `44444444-4444-4444-8444-44444444444${index}`,
       externalSessionId: `SES-batch-${index}`,
@@ -725,12 +940,10 @@ describe('audio IPC recorder consent gate', () => {
     const reconcile = mocks.handlers.get('audio:reconcile-lifecycle');
     if (!reconcile) throw new Error('audio:reconcile-lifecycle handler not registered');
 
-    await expect(reconcile({})).resolves.toEqual({ ok: true });
+    await expect(reconcile({})).resolves.toEqual({ ok: true, processed: 5, remaining: 0 });
 
-    expect(mocks.syncRecordingLifecycle).toHaveBeenCalledTimes(4);
-    expect(mocks.pendingLifecycles).toEqual([
-      expect.objectContaining({ externalSessionId: 'SES-batch-4' }),
-    ]);
+    expect(mocks.syncRecordingLifecycle).toHaveBeenCalledTimes(5);
+    expect(mocks.pendingLifecycles).toEqual([]);
   });
 
   it('continues past a poison lifecycle record before reporting its error', async () => {
@@ -756,7 +969,7 @@ describe('audio IPC recorder consent gate', () => {
     const reconcile = mocks.handlers.get('audio:reconcile-lifecycle');
     if (!reconcile) throw new Error('audio:reconcile-lifecycle handler not registered');
 
-    await expect(reconcile({})).rejects.toThrow('MEETING_FORBIDDEN');
+    await expect(reconcile({})).resolves.toEqual({ ok: false, processed: 2, remaining: 1 });
 
     expect(mocks.syncRecordingLifecycle).toHaveBeenCalledTimes(2);
     expect(mocks.pendingLifecycles).toEqual([
@@ -806,6 +1019,66 @@ describe('audio IPC recorder consent gate', () => {
       expect(mocks.transcriptSubscriptionStop).toHaveBeenCalledTimes(1);
       expect(mocks.setRecordingActive).toHaveBeenLastCalledWith(false);
     });
+  });
+
+  it('finishes a gateway session when its renderer unloads during canonical start', async () => {
+    let resolveCanonical: ((value: unknown) => void) | null = null;
+    mocks.syncRecordingLifecycle.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveCanonical = resolve;
+        }),
+    );
+    await acceptConsent();
+
+    const start = startHandler()({ sender: { id: 17, send: vi.fn() } }, meetingId, deviceId);
+    await vi.waitFor(() => expect(mocks.syncRecordingLifecycle).toHaveBeenCalledTimes(1));
+    rendererUnloadedListener()({ sender: { id: 17 } });
+    resolveCanonical?.({
+      meetingId,
+      sessionId: '33333333-3333-4333-8333-333333333333',
+      externalSessionId: 'SES-1',
+      meetingStatus: 'IN_PROGRESS',
+      transcriptStatus: 'PENDING',
+      startedAt: expect.any(String),
+      endedAt: null,
+    });
+
+    await expect(start).rejects.toThrow('renderer unloaded while recording session was starting');
+    expect(mocks.finishSession).toHaveBeenCalledTimes(1);
+    expect(mocks.transcriptSubscriptionStart).not.toHaveBeenCalled();
+    expect(mocks.setRecordingActive).not.toHaveBeenCalledWith(true);
+    expect(mocks.pendingLifecycles).toEqual([]);
+  });
+
+  it('single-flights unload and abort while rejecting concurrent reconciliation', async () => {
+    let releaseFinish: (() => void) | null = null;
+    mocks.senderFinish.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          releaseFinish = resolve;
+        }),
+    );
+    await acceptConsent();
+    const started = (await startHandler()(
+      { sender: { id: 7, send: vi.fn() } },
+      meetingId,
+      deviceId,
+    )) as {
+      captureId: string;
+    };
+    const reconcile = mocks.handlers.get('audio:reconcile-lifecycle');
+    if (!reconcile) throw new Error('audio:reconcile-lifecycle handler not registered');
+
+    rendererUnloadedListener()({ sender: { id: 7 } });
+    const abortPromise = abortHandler()({}, started.captureId);
+    await expect(reconcile({})).rejects.toThrow('recording lifecycle reconciliation is busy');
+    expect(mocks.senderFinish).toHaveBeenCalledTimes(1);
+
+    releaseFinish?.();
+    await expect(abortPromise).resolves.toEqual({ ok: true });
+    expect(mocks.senderFinish).toHaveBeenCalledTimes(1);
+    expect(mocks.syncRecordingLifecycle).toHaveBeenCalledTimes(2);
   });
 
   it('stops transcript polling when the recording is aborted', async () => {

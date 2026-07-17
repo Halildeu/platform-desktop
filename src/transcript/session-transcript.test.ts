@@ -44,6 +44,59 @@ describe('session transcript state', () => {
     });
   });
 
+  it('keeps gateway delivery identity out of the canonical analysis request', () => {
+    const canonicalSessionId = '33333333-3333-4333-8333-333333333333';
+    const recording = startTranscriptSession(initialTranscriptSession(), {
+      sessionId: canonicalSessionId,
+      gatewaySessionId: 'SES-gateway-1',
+      meetingId: '22222222-2222-4222-8222-222222222222',
+      deviceId: 'desktop-1',
+      hasLoopback: false,
+      startedAtMs: 1000,
+    });
+    const finished = finishTranscriptSession(
+      upsertTranscriptSegment(recording, {
+        id: 'seg-1',
+        speakerLabel: 'Konuşmacı',
+        startedAtMs: 2000,
+        status: 'final',
+        text: 'Canonical oturum kimliği analiz isteğinde korunur ve gateway kimliği sızdırılmaz.',
+      }),
+      20_000,
+    );
+
+    const bundle = buildMeetingAiSourcePackage(finished, 21_000);
+    expect(bundle.package.session_id).toBe(canonicalSessionId);
+    expect(bundle.package.request.session_id).toBe(canonicalSessionId);
+    expect(bundle.json).not.toContain('SES-gateway-1');
+  });
+
+  it('blocks analysis when only a local transport session exists', () => {
+    const recording = startTranscriptSession(initialTranscriptSession(), {
+      sessionId: null,
+      gatewaySessionId: 'LOCAL-direct-1',
+      meetingId: '22222222-2222-4222-8222-222222222222',
+      deviceId: 'desktop-1',
+      hasLoopback: false,
+      startedAtMs: 1000,
+    });
+    const finished = finishTranscriptSession(
+      upsertTranscriptSegment(recording, {
+        id: 'seg-1',
+        speakerLabel: 'Konuşmacı',
+        startedAtMs: 2000,
+        status: 'final',
+        text: 'Direct stream transkripti görünür kalır ama canonical oturum olmadan analiz edilmez.',
+      }),
+      20_000,
+    );
+
+    const bundle = buildMeetingAiSourcePackage(finished, 21_000);
+    expect(bundle.package.request.session_id).toBeNull();
+    expect(bundle.package.gate.can_submit).toBe(false);
+    expect(bundle.package.gate.blocked_by).toContain('recorder sessionId yok');
+  });
+
   it('orders transcript segments and prevents status regression', () => {
     const recording = startTranscriptSession(initialTranscriptSession(), {
       sessionId: 'SES-1',

@@ -12,6 +12,18 @@ function mockFetch() {
     if (url.endsWith('/sessions')) {
       return { ok: true, json: async () => ({ sessionId: 'SES-1' }) };
     }
+    if (url.endsWith('/finish')) {
+      return {
+        ok: true,
+        json: async () => ({
+          sessionId: 'SES-1',
+          correlationId: 'corr-1',
+          finalState: 'FINISHED',
+          finishedAtMs: 1781820000000,
+          alreadyFinished: false,
+        }),
+      };
+    }
     return { ok: true };
   });
   vi.stubGlobal('fetch', fetchMock);
@@ -60,6 +72,44 @@ describe('ChunkSender (seq state machine)', () => {
     expect(sender.getState()).toBe('active');
   });
 
+  it('does not retry a definite gateway start rejection', async () => {
+    const fetchMock = vi.fn(async () => ({
+      ok: false,
+      status: 403,
+      headers: { get: () => 'application/json' },
+      text: async () => JSON.stringify({ code: 'AUDIO_GATEWAY_MEETING_FORBIDDEN' }),
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(sender.start(meetingId, 'dev1')).rejects.toMatchObject({
+      name: 'GatewaySessionStartRejectedError',
+      status: 403,
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(sender.getState()).toBe('idle');
+  });
+
+  it('retries gateway 5xx with the same key and keeps the outcome ambiguous', async () => {
+    const idempotencyKeys: string[] = [];
+    const fetchMock = vi.fn(async (_url: string, opts?: RequestInit) => {
+      idempotencyKeys.push((opts?.headers as Record<string, string>)['Idempotency-Key']);
+      return {
+        ok: false,
+        status: 503,
+        headers: { get: () => 'application/json' },
+        text: async () => JSON.stringify({ code: 'AUDIO_GATEWAY_UNAVAILABLE' }),
+      };
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(sender.start(meetingId, 'dev1')).rejects.toMatchObject({
+      name: 'AmbiguousGatewaySessionStartError',
+    });
+    expect(idempotencyKeys).toHaveLength(2);
+    expect(idempotencyKeys[0]).toBe(idempotencyKeys[1]);
+    expect(sender.getState()).toBe('idle');
+  });
+
   it('send: seq 0,1,2 strict-contiguous artar', async () => {
     mockFetch();
     await sender.start(meetingId, 'dev1');
@@ -100,6 +150,35 @@ describe('ChunkSender (seq state machine)', () => {
     await sender.start(meetingId, 'dev1');
     await sender.finish();
     expect(sender.getState()).toBe('finished');
+  });
+
+  it('uses the caller-owned idempotency key for gateway finish', async () => {
+    const finishKeys: string[] = [];
+    const fetchMock = vi.fn(async (url: string, opts?: RequestInit) => {
+      if (url.endsWith('/sessions')) {
+        return { ok: true, json: async () => ({ sessionId: 'SES-1' }) };
+      }
+      if (url.endsWith('/finish')) {
+        finishKeys.push((opts?.headers as Record<string, string>)['Idempotency-Key']);
+        return {
+          ok: true,
+          json: async () => ({
+            sessionId: 'SES-1',
+            correlationId: 'corr-1',
+            finalState: 'FINISHED',
+            finishedAtMs: 1781820000000,
+            alreadyFinished: false,
+          }),
+        };
+      }
+      return { ok: true };
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await sender.start(meetingId, 'dev1');
+    await sender.finish('0123456789abcdef0123456789abcdef');
+
+    expect(finishKeys).toEqual(['0123456789abcdef0123456789abcdef']);
   });
 
   it('send before start → throw', async () => {

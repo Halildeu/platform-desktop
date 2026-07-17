@@ -28,6 +28,7 @@ const active: PendingRecordingLifecycle = {
   startedAt: '2026-07-17T08:43:20Z',
   endedAt: null,
   gatewayFinishPending: true,
+  gatewayFinishIdempotencyKey: '0123456789abcdef0123456789abcdef',
 };
 
 describe('RecordingLifecycleOutbox', () => {
@@ -87,6 +88,7 @@ describe('RecordingLifecycleOutbox', () => {
         startedAt: '2026-07-17T08:43:20.000Z',
         endedAt: null,
         gatewayFinishPending: true,
+        gatewayFinishIdempotencyKey: active.gatewayFinishIdempotencyKey,
       },
     ]);
   });
@@ -110,17 +112,21 @@ describe('RecordingLifecycleOutbox', () => {
     expect(outbox.list()).toEqual(recovery.snapshot?.pending);
   });
 
-  it('does not resurrect an acknowledged lifecycle when recovery cleanup fails', () => {
+  it('fails closed before acknowledging a lifecycle when recovery persistence fails', () => {
     const primary = new MemoryStore();
     const recovery = new MemoryStore();
     primary.snapshot = { generation: 2, pending: [{ ...active }] };
     recovery.snapshot = { generation: 1, pending: [{ ...active }] };
     recovery.failWrites = true;
 
-    new RecordingLifecycleOutbox(primary, recovery).remove(active);
+    expect(() => new RecordingLifecycleOutbox(primary, recovery).remove(active)).toThrow(
+      'recovery snapshot could not be persisted',
+    );
 
-    expect(new RecordingLifecycleOutbox(primary, recovery).list()).toEqual([]);
-    expect(primary.snapshot).toEqual({ generation: 3, pending: [] });
+    expect(new RecordingLifecycleOutbox(primary, recovery).list()).toEqual([
+      { ...active, startedAt: '2026-07-17T08:43:20.000Z' },
+    ]);
+    expect(primary.snapshot).toEqual({ generation: 2, pending: [{ ...active }] });
     expect(recovery.snapshot?.generation).toBe(1);
   });
 
@@ -135,8 +141,38 @@ describe('RecordingLifecycleOutbox', () => {
     outbox.markEnded(active, '2026-07-17T08:44:20Z');
 
     expect(primary.snapshot?.generation).toBe(5);
-    expect(recovery.snapshot).toEqual({ generation: 5, pending: [] });
+    expect(recovery.snapshot).toEqual({
+      generation: 5,
+      pending: [
+        {
+          ...active,
+          startedAt: '2026-07-17T08:43:20.000Z',
+          endedAt: '2026-07-17T08:44:20.000Z',
+        },
+      ],
+    });
     expect(outbox.list()[0].endedAt).toBe('2026-07-17T08:44:20.000Z');
+  });
+
+  it('recovers the full latest lifecycle snapshot when the primary copy is corrupted', () => {
+    const primary = new MemoryStore();
+    const recovery = new MemoryStore();
+    const outbox = new RecordingLifecycleOutbox(primary, recovery);
+
+    outbox.upsert(active);
+    outbox.markEnded(active, '2026-07-17T08:44:20Z');
+    primary.snapshot = {
+      generation: 2,
+      pending: [{ ...active, externalSessionId: '../corrupt' }],
+    };
+
+    expect(new RecordingLifecycleOutbox(primary, recovery).list()).toEqual([
+      {
+        ...active,
+        startedAt: '2026-07-17T08:43:20.000Z',
+        endedAt: '2026-07-17T08:44:20.000Z',
+      },
+    ]);
   });
 
   it('fails closed when malformed metadata has no durable peer snapshot', () => {
@@ -146,5 +182,17 @@ describe('RecordingLifecycleOutbox', () => {
     expect(() => new RecordingLifecycleOutbox(primary, new MemoryStore()).list()).toThrow(
       'without a durable recovery snapshot',
     );
+  });
+
+  it('rejects conflicting finish idempotency keys for the same gateway identity', () => {
+    const outbox = new RecordingLifecycleOutbox(new MemoryStore(), new MemoryStore());
+    outbox.upsert(active);
+
+    expect(() =>
+      outbox.upsert({
+        ...active,
+        gatewayFinishIdempotencyKey: 'fedcba9876543210fedcba9876543210',
+      }),
+    ).toThrow('conflicting gateway finish idempotency key');
   });
 });

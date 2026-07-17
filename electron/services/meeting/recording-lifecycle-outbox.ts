@@ -4,6 +4,7 @@ const MAX_PENDING_LIFECYCLES = 32;
 const MEETING_ID_PATTERN =
   /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
 const EXTERNAL_SESSION_ID_PATTERN = /^[A-Za-z0-9._:-]{1,128}$/;
+const IDEMPOTENCY_KEY_PATTERN = /^[A-Za-z0-9._:-]{16,128}$/;
 
 export interface PendingRecordingLifecycle {
   meetingId: string;
@@ -11,6 +12,7 @@ export interface PendingRecordingLifecycle {
   startedAt: string;
   endedAt: string | null;
   gatewayFinishPending: boolean;
+  gatewayFinishIdempotencyKey?: string | null;
 }
 
 interface PersistShape {
@@ -58,6 +60,14 @@ function validate(value: unknown): PendingRecordingLifecycle {
   if (typeof gatewayFinishPending !== 'boolean') {
     throw new Error('pending recording lifecycle gatewayFinishPending is invalid');
   }
+  const gatewayFinishIdempotencyKey = record.gatewayFinishIdempotencyKey ?? null;
+  if (
+    gatewayFinishIdempotencyKey !== null &&
+    (typeof gatewayFinishIdempotencyKey !== 'string' ||
+      !IDEMPOTENCY_KEY_PATTERN.test(gatewayFinishIdempotencyKey))
+  ) {
+    throw new Error('pending recording lifecycle gatewayFinishIdempotencyKey is invalid');
+  }
   if (endedAt && Date.parse(endedAt) < Date.parse(startedAt)) {
     throw new Error('pending recording lifecycle endedAt precedes startedAt');
   }
@@ -67,6 +77,7 @@ function validate(value: unknown): PendingRecordingLifecycle {
     startedAt,
     endedAt,
     gatewayFinishPending,
+    gatewayFinishIdempotencyKey,
   };
 }
 
@@ -125,10 +136,21 @@ export class RecordingLifecycleOutbox {
       if (existing.endedAt && entry.endedAt && existing.endedAt !== entry.endedAt) {
         throw new Error('pending recording lifecycle identity has conflicting endedAt');
       }
+      if (
+        existing.gatewayFinishIdempotencyKey &&
+        entry.gatewayFinishIdempotencyKey &&
+        existing.gatewayFinishIdempotencyKey !== entry.gatewayFinishIdempotencyKey
+      ) {
+        throw new Error(
+          'pending recording lifecycle identity has conflicting gateway finish idempotency key',
+        );
+      }
       merged[index] = {
         ...existing,
         endedAt: existing.endedAt ?? entry.endedAt,
         gatewayFinishPending: existing.gatewayFinishPending && entry.gatewayFinishPending,
+        gatewayFinishIdempotencyKey:
+          existing.gatewayFinishIdempotencyKey ?? entry.gatewayFinishIdempotencyKey ?? null,
       };
     }
     if (merged.length > MAX_PENDING_LIFECYCLES) {
@@ -225,22 +247,20 @@ export class RecordingLifecycleOutbox {
       pending: pending.map((entry) => validate(entry)),
     };
     try {
+      // Recovery is written first. A crash between the two writes leaves the
+      // newer full snapshot authoritative instead of resurrecting stale data.
+      this.recoveryStore.set('snapshot', snapshot);
+    } catch (recoveryError) {
+      throw new AggregateError(
+        [recoveryError],
+        'pending recording lifecycle recovery snapshot could not be persisted',
+      );
+    }
+    try {
       this.store.set('snapshot', snapshot);
-      try {
-        this.recoveryStore.set('snapshot', { generation, pending: [] });
-      } catch {
-        // The primary snapshot has the newer generation, so stale recovery
-        // data cannot resurrect an acknowledged lifecycle after restart.
-      }
-    } catch (primaryError) {
-      try {
-        this.recoveryStore.set('snapshot', snapshot);
-      } catch (recoveryError) {
-        throw new AggregateError(
-          [primaryError, recoveryError],
-          'pending recording lifecycle could not be persisted',
-        );
-      }
+    } catch {
+      // The full recovery snapshot is already durable and has the newest
+      // generation. A later write will heal the primary copy.
     }
   }
 
@@ -256,10 +276,21 @@ export class RecordingLifecycleOutbox {
       if (existing.endedAt && normalized.endedAt && existing.endedAt !== normalized.endedAt) {
         throw new Error('pending recording lifecycle identity has conflicting endedAt');
       }
+      if (
+        existing.gatewayFinishIdempotencyKey &&
+        normalized.gatewayFinishIdempotencyKey &&
+        existing.gatewayFinishIdempotencyKey !== normalized.gatewayFinishIdempotencyKey
+      ) {
+        throw new Error(
+          'pending recording lifecycle identity has conflicting gateway finish idempotency key',
+        );
+      }
       pending[index] = {
         ...existing,
         endedAt: existing.endedAt ?? normalized.endedAt,
         gatewayFinishPending: existing.gatewayFinishPending && normalized.gatewayFinishPending,
+        gatewayFinishIdempotencyKey:
+          existing.gatewayFinishIdempotencyKey ?? normalized.gatewayFinishIdempotencyKey ?? null,
       };
     } else {
       if (pending.length >= MAX_PENDING_LIFECYCLES) {
@@ -272,7 +303,8 @@ export class RecordingLifecycleOutbox {
   }
 
   markEnded(
-    identity: Pick<PendingRecordingLifecycle, 'meetingId' | 'externalSessionId' | 'startedAt'>,
+    identity: Pick<PendingRecordingLifecycle, 'meetingId' | 'externalSessionId' | 'startedAt'> &
+      Partial<Pick<PendingRecordingLifecycle, 'gatewayFinishIdempotencyKey'>>,
     endedAt: string,
   ): PendingRecordingLifecycle {
     const existing = this.list().find((entry) => sameIdentity(entry, identity));
@@ -280,6 +312,8 @@ export class RecordingLifecycleOutbox {
       ...identity,
       endedAt,
       gatewayFinishPending: existing?.gatewayFinishPending ?? true,
+      gatewayFinishIdempotencyKey:
+        existing?.gatewayFinishIdempotencyKey ?? identity.gatewayFinishIdempotencyKey ?? null,
     });
   }
 

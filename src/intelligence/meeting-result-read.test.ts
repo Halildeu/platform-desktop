@@ -128,6 +128,15 @@ describe('canonical Meeting Intelligence result mapper', () => {
     expect(isNewCanonicalAnalysisRun(previous, RUN_ID)).toBe(false);
     expect(isNewCanonicalAnalysisRun(replacement, RUN_ID)).toBe(true);
     expect(isNewCanonicalAnalysisRun(previous, null)).toBe(true);
+    expect(
+      isNewCanonicalAnalysisRun(previous, null, Date.parse('2026-07-11T20:00:01.000Z')),
+    ).toBe(false);
+    expect(
+      isNewCanonicalAnalysisRun(previous, null, Date.parse('2026-07-11T19:59:59.000Z')),
+    ).toBe(true);
+    expect(
+      isNewCanonicalAnalysisRun(replacement, RUN_ID, Date.parse('2026-07-11T20:00:01.000Z')),
+    ).toBe(false);
   });
 
   it('falls back to the run captured before recording when product state was cleared', () => {
