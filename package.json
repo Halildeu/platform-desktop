@@ -1,6 +1,6 @@
 {
   "name": "platform-desktop",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "Meeting Intelligence Desktop Client — Electron + React + TypeScript",
   "author": {
     "name": "Acik Platform Team",
@@ -20,7 +20,8 @@
     "security:audit": "npm audit --audit-level=moderate",
     "preview": "vite preview",
     "package": "npm run build && electron-builder",
-    "package:mac": "npm run build && electron-builder --mac",
+    "package:mac": "npm run release:mac:assert-env && npm run build && electron-builder --mac --universal --publish never",
+    "package:mac:unsigned": "npm run build && CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac --universal --dir --publish never --config.mac.forceCodeSigning=false --config.mac.notarize=false --config.directories.output=release/macos-unsigned",
     "package:win": "npm run build && electron-builder --win",
     "package:linux": "npm run package:linux:x64",
     "package:linux:x64": "npm run build && electron-builder --linux --x64 --publish never --config.directories.output=release/linux-x64",
@@ -31,7 +32,10 @@
     "format:check": "prettier --check .",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "release:mac:assert-env": "node scripts/macos-release-contract.mjs assert-env",
+    "release:mac:verify-update": "node scripts/macos-release-contract.mjs verify-update",
+    "release:mac:manifest": "node scripts/macos-release-contract.mjs create-manifest"
   },
   "dependencies": {
     "@reduxjs/toolkit": "^2.5.0",
@@ -70,7 +74,8 @@
     "vite": "^6.0.0",
     "vite-plugin-electron": "^0.29.0",
     "vite-plugin-electron-renderer": "^1.0.0",
-    "vitest": "^4.1.9"
+    "vitest": "^4.1.9",
+    "yaml": "^2.9.0"
   },
   "build": {
     "appId": "com.acik.platform.meeting-intelligence",
@@ -92,6 +97,8 @@
       }
     ],
     "mac": {
+      "forceCodeSigning": true,
+      "artifactName": "Meeting-Intelligence-${version}-${arch}.${ext}",
       "category": "public.app-category.business",
       "icon": "build/icon.png",
       "target": [
@@ -101,12 +108,24 @@
       ],
       "hardenedRuntime": true,
       "gatekeeperAssess": false,
+      "notarize": true,
+      "strictVerify": true,
+      "type": "distribution",
       "entitlements": "build/entitlements.mac.plist",
-      "entitlementsInherit": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.inherit.plist",
       "extendInfo": {
         "NSMicrophoneUsageDescription": "Meeting Intelligence needs microphone access to record meeting audio for live transcription.",
         "NSScreenCaptureUsageDescription": "Meeting Intelligence needs screen recording permission to capture system audio for meeting transcription."
       }
+    },
+    "dmg": {
+      "sign": false,
+      "writeUpdateInfo": false
+    },
+    "pkg": {
+      "allowAnywhere": false,
+      "allowCurrentUserHome": false,
+      "allowRootDirectory": true
     },
     "win": {
       "icon": "build/icon.png",
