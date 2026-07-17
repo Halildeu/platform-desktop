@@ -104,16 +104,33 @@ describe('packaged runtime resources', () => {
     expect(workflow).toContain('cosign verify-blob');
     expect(workflow).toContain('--certificate-github-workflow-sha "$GITHUB_SHA"');
     expect(workflow).toContain('smoke-linux-x64:');
-    expect(workflow).toContain('desktop-file-utils xvfb rpm cpio "./${packages[0]}"');
-    expect(workflow).not.toContain('desktop-file-utils xvfb rpm cpio "${packages[0]}"');
+    expect(workflow).toContain('desktop-file-utils xvfb rpm "./${packages[0]}"');
+    expect(workflow).not.toContain('desktop-file-utils xvfb rpm "${packages[0]}"');
+    expect(workflow).toContain('Exec="/opt/Meeting Intelligence/platform-desktop" %U');
+    expect(workflow).toContain("test -x '/opt/Meeting Intelligence/platform-desktop'");
+    expect(workflow).toContain(
+      "assert_renderer_ready deb '/opt/Meeting Intelligence/platform-desktop'",
+    );
+    expect(workflow).toMatch(
+      /if ! unshare --user true; then\n\s+sudo sysctl -w kernel\.apparmor_restrict_unprivileged_userns=0\n\s+unshare --user true\n\s+fi/,
+    );
+    expect(workflow).toContain('sudo dpkg --remove platform-desktop');
+    expect(workflow).toContain('sudo rpm --install --nodeps "${rpms[0]}"');
+    expect(workflow).toContain('rpm -q platform-desktop');
+    expect(workflow).toContain('sudo update-desktop-database /usr/share/applications');
+    expect(workflow).not.toContain('rpm2cpio "../${rpms[0]}"');
+    expect(workflow).not.toContain('mkdir rpm-root');
     expect(workflow).toContain('MEETING_INTELLIGENCE_RELEASE_SMOKE_READY');
     expect(electronMain).toContain('MEETING_INTELLIGENCE_RELEASE_SMOKE_READY');
     expect(electronMain).toContain("webContents.once('did-finish-load'");
     expect(electronMain).toContain("document.getElementById('root')?.childElementCount > 0");
-    expect(workflow).not.toContain('meeting-intelligence --no-sandbox');
-    expect(workflow).toContain('assert_renderer_ready deb');
-    expect(workflow).toContain('assert_renderer_ready appimage');
-    expect(workflow).toContain('assert_renderer_ready rpm');
+    expect(workflow).not.toContain('--no-sandbox');
+    expect(workflow).toMatch(
+      /assert_renderer_ready appimage \\\n\s+env APPIMAGE_EXTRACT_AND_RUN=1 "\$\{appimages\[0\]\}"/,
+    );
+    expect(workflow).toContain(
+      "assert_renderer_ready rpm '/opt/Meeting Intelligence/platform-desktop'",
+    );
     expect(workflow).toContain('application exited during renderer stability check');
     expect(workflow).not.toContain('immutable-releases');
     expect(workflow).toContain('-F draft=true');
@@ -155,6 +172,33 @@ describe('packaged runtime resources', () => {
     expect(workflow).toContain('immutable_state');
     expect(workflow).toContain('exit 1');
     expect(workflow).toContain('- smoke-linux-x64');
+
+    const rpmSmokeStart = workflow.indexOf('sudo dpkg --remove platform-desktop');
+    const rpmInstall = workflow.indexOf('sudo rpm --install --nodeps "${rpms[0]}"');
+    const rpmMimeRefresh = workflow.indexOf('sudo update-desktop-database /usr/share/applications');
+    const rpmExactExec = workflow.indexOf(
+      'grep -Fx \'Exec="/opt/Meeting Intelligence/platform-desktop" %U\' \\',
+      rpmMimeRefresh,
+    );
+    const rpmExactMime = workflow.indexOf(
+      "grep -Fx 'MimeType=x-scheme-handler/meeting-intelligence;' \\",
+      rpmExactExec,
+    );
+    const rpmGioRegistration = workflow.indexOf(
+      'gio mime x-scheme-handler/meeting-intelligence \\',
+      rpmExactMime,
+    );
+    const rpmReady = workflow.indexOf(
+      "assert_renderer_ready rpm '/opt/Meeting Intelligence/platform-desktop'",
+      rpmGioRegistration,
+    );
+    expect(rpmSmokeStart).toBeGreaterThan(-1);
+    expect(rpmInstall).toBeGreaterThan(rpmSmokeStart);
+    expect(rpmMimeRefresh).toBeGreaterThan(rpmInstall);
+    expect(rpmExactExec).toBeGreaterThan(rpmMimeRefresh);
+    expect(rpmExactMime).toBeGreaterThan(rpmExactExec);
+    expect(rpmGioRegistration).toBeGreaterThan(rpmExactMime);
+    expect(rpmReady).toBeGreaterThan(rpmGioRegistration);
 
     const candidateMatchStart = workflow.indexOf(
       'if test "${#candidate_release_ids[@]}" -eq 1; then',

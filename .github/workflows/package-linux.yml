@@ -146,9 +146,8 @@ jobs:
           packages=(release/Meeting-Intelligence-*-amd64.deb)
           test "${#packages[@]}" -eq 1
           sudo apt-get update
-          sudo apt-get install --yes desktop-file-utils xvfb rpm cpio "./${packages[0]}"
-          command -v rpm2cpio
-          command -v cpio
+          sudo apt-get install --yes desktop-file-utils xvfb rpm "./${packages[0]}"
+          command -v rpm
 
       - name: Verify desktop registration
         run: |
@@ -156,10 +155,10 @@ jobs:
           test -f "$desktop_file"
           desktop-file-validate "$desktop_file"
           grep -Fx 'MimeType=x-scheme-handler/meeting-intelligence;' "$desktop_file"
-          grep -E '^Exec=.*meeting-intelligence' "$desktop_file"
+          grep -Fx 'Exec="/opt/Meeting Intelligence/platform-desktop" %U' "$desktop_file"
           gio mime x-scheme-handler/meeting-intelligence \
             | grep -F 'meeting-intelligence.desktop'
-          command -v meeting-intelligence
+          test -x '/opt/Meeting Intelligence/platform-desktop'
 
       - name: Launch deb, AppImage and rpm applications
         run: |
@@ -170,6 +169,11 @@ jobs:
             fi
           }
           trap cleanup_launch EXIT
+
+          if ! unshare --user true; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+            unshare --user true
+          fi
 
           assert_renderer_ready() {
             local package_kind=$1
@@ -216,7 +220,7 @@ jobs:
             cat "$log_file"
           }
 
-          assert_renderer_ready deb meeting-intelligence
+          assert_renderer_ready deb '/opt/Meeting Intelligence/platform-desktop'
 
           shopt -s nullglob
           appimages=(release/Meeting-Intelligence-*-x86_64.AppImage)
@@ -227,16 +231,22 @@ jobs:
           assert_renderer_ready appimage \
             env APPIMAGE_EXTRACT_AND_RUN=1 "${appimages[0]}"
 
-          mkdir rpm-root
-          (
-            cd rpm-root
-            rpm2cpio "../${rpms[0]}" | cpio -idm --quiet
-          )
-          mapfile -t rpm_binaries < <(
-            find rpm-root/opt -type f -name meeting-intelligence -perm /111
-          )
-          test "${#rpm_binaries[@]}" -eq 1
-          assert_renderer_ready rpm "${rpm_binaries[0]}"
+          sudo dpkg --remove platform-desktop
+          test ! -e '/opt/Meeting Intelligence/platform-desktop'
+          rpm_package_name=$(rpm -qp --queryformat '%{NAME}\n' "${rpms[0]}")
+          test "$rpm_package_name" = platform-desktop
+          sudo rpm --install --nodeps "${rpms[0]}"
+          rpm -q platform-desktop
+          test -x '/opt/Meeting Intelligence/platform-desktop'
+          sudo update-desktop-database /usr/share/applications
+          desktop-file-validate /usr/share/applications/meeting-intelligence.desktop
+          grep -Fx 'Exec="/opt/Meeting Intelligence/platform-desktop" %U' \
+            /usr/share/applications/meeting-intelligence.desktop
+          grep -Fx 'MimeType=x-scheme-handler/meeting-intelligence;' \
+            /usr/share/applications/meeting-intelligence.desktop
+          gio mime x-scheme-handler/meeting-intelligence \
+            | grep -F 'meeting-intelligence.desktop'
+          assert_renderer_ready rpm '/opt/Meeting Intelligence/platform-desktop'
 
           trap - EXIT
 
