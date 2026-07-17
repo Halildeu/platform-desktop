@@ -316,9 +316,7 @@ describe('gateway-client HTTP fetch wrapper', () => {
       }),
     );
 
-    await expect(finishSession(cfg, 'JWT', 'SES-9', 'IK')).rejects.toThrow(
-      'sessionId mismatch',
-    );
+    await expect(finishSession(cfg, 'JWT', 'SES-9', 'IK')).rejects.toThrow('sessionId mismatch');
   });
 
   it('readTranscriptEvents sends bearer token and cursor params', async () => {

@@ -166,7 +166,11 @@ function installElectronApiMock(): void {
       prepareCapture: vi.fn().mockResolvedValue({ ok: true, expiresAtMs: Date.now() + 1000 }),
       cancelCapture: vi.fn().mockResolvedValue({ ok: true }),
       consent: vi.fn(),
-      start: vi.fn().mockResolvedValue({ sessionId: 'SES-1', transcriptSessionId: '33333333-3333-4333-8333-333333333333', captureId: 'CAP-1' }),
+      start: vi.fn().mockResolvedValue({
+        sessionId: 'SES-1',
+        transcriptSessionId: '33333333-3333-4333-8333-333333333333',
+        captureId: 'CAP-1',
+      }),
       sendChunk: vi.fn(),
       finish: vi.fn().mockResolvedValue({ ok: true }),
       abort: vi.fn().mockResolvedValue({ ok: true }),
@@ -627,8 +631,11 @@ describe('startRecording', () => {
       setUserAgent('Mozilla/5.0 (Macintosh; Intel Mac OS X 15_5)');
       const { micTrack } = installBrowserAudioMocks();
       vi.stubGlobal('WebSocket', FakeWebSocket);
-      let resolveStart: (session: { sessionId: string; transcriptSessionId: string; captureId: string }) => void = () =>
-        undefined;
+      let resolveStart: (session: {
+        sessionId: string;
+        transcriptSessionId: string;
+        captureId: string;
+      }) => void = () => undefined;
       vi.mocked(window.electronAPI!.audio.start).mockReturnValueOnce(
         new Promise((resolve) => {
           resolveStart = resolve;
@@ -648,7 +655,11 @@ describe('startRecording', () => {
       expect(FakeWebSocket.instances).toHaveLength(0);
       expect(window.electronAPI?.audio.cancelCapture).toHaveBeenCalledTimes(1);
 
-      resolveStart({ sessionId: 'SES-LATE', transcriptSessionId: '33333333-3333-4333-8333-333333333333', captureId: 'CAP-LATE' });
+      resolveStart({
+        sessionId: 'SES-LATE',
+        transcriptSessionId: '33333333-3333-4333-8333-333333333333',
+        captureId: 'CAP-LATE',
+      });
       await Promise.resolve();
       await Promise.resolve();
       expect(window.electronAPI?.audio.abort).toHaveBeenCalledWith('CAP-LATE');

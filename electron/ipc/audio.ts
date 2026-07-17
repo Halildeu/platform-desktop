@@ -287,8 +287,7 @@ async function recoverPendingStart(intent: PendingRecordingStart): Promise<void>
         .list()
         .find(
           (record) =>
-            record.meetingId === intent.meetingId &&
-            record.externalSessionId === session.sessionId,
+            record.meetingId === intent.meetingId && record.externalSessionId === session.sessionId,
         ) ??
       lifecycleOutbox.upsert({
         meetingId: intent.meetingId,
@@ -735,10 +734,7 @@ export function registerAudioIpc(): void {
           throw error;
         }
         if (rendererId !== null && unloadedRendererIds.delete(rendererId)) {
-          const finished = lifecycleOutbox.markEnded(
-            pendingLifecycle,
-            new Date().toISOString(),
-          );
+          const finished = lifecycleOutbox.markEnded(pendingLifecycle, new Date().toISOString());
           await syncPendingLifecycle(finished);
           throw new Error('renderer unloaded while recording session was starting');
         }

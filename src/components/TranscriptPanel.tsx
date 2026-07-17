@@ -1076,7 +1076,7 @@ export function TranscriptPanel({
         <div>
           <h2 id="transcript-title">Canlı Transkript</h2>
           <p className="panel-subtitle">
-            {session.sessionId ?? session.gatewaySessionId
+            {(session.sessionId ?? session.gatewaySessionId)
               ? `Oturum ${session.sessionId ?? session.gatewaySessionId}`
               : 'Recorder oturumu yok'}
           </p>

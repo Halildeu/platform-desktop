@@ -295,10 +295,7 @@ function parseFinishSessionInfo(value: unknown, expectedSessionId: string): Fini
   }
   return {
     sessionId,
-    correlationId: requiredGatewayIdentifier(
-      record.correlationId,
-      'finishSession correlationId',
-    ),
+    correlationId: requiredGatewayIdentifier(record.correlationId, 'finishSession correlationId'),
     finalState: 'FINISHED',
     finishedAtMs: record.finishedAtMs,
     alreadyFinished: record.alreadyFinished,
