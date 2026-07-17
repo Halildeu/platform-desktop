@@ -48,6 +48,7 @@ let isQuitting = false;
 
 const DEFAULT_BOUNDS: WindowBounds = { x: 0, y: 0, width: 1280, height: 800 };
 const APP_PROTOCOL = 'meeting-intelligence';
+const RELEASE_SMOKE_READY = 'MEETING_INTELLIGENCE_RELEASE_SMOKE_READY';
 
 function showMainWindow(): void {
   if (!mainWindow) {
@@ -108,6 +109,18 @@ function createMainWindow(): void {
       void shell.openExternal(url);
     }
     return { action: 'deny' };
+  });
+
+  mainWindow.webContents.once('did-finish-load', async () => {
+    if (process.env.MEETING_INTELLIGENCE_RELEASE_SMOKE === '1') {
+      const rendererMounted = await mainWindow?.webContents.executeJavaScript(
+        "document.getElementById('root')?.childElementCount > 0",
+        true,
+      );
+      if (rendererMounted === true) {
+        process.stdout.write(`${RELEASE_SMOKE_READY}\n`);
+      }
+    }
   });
 
   if (isDev && process.env.VITE_DEV_SERVER_URL) {

@@ -9,23 +9,39 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: linux-package-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   package-linux-x64:
-    runs-on: [self-hosted, platform-desktop-ci]
+    runs-on: ubuntu-latest
     timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write
     env:
       PACKAGE_DIR: release/linux-x64-${{ github.sha }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: '22'
           cache: npm
 
-      - name: Verify Linux package tools
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@d7543c93d881b35a8faa02e8e3605f69b7a1ce62 # v3.10.0
+
+      - name: Install Linux package tools
         run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends --yes rpm cpio
           command -v rpmbuild
+          command -v rpm2cpio
+          command -v cpio
           command -v sha256sum
 
       - name: Install dependencies
@@ -45,7 +61,9 @@ jobs:
 
       - name: Verify tag matches the packaged version
         if: github.ref_type == 'tag'
-        run: test "${GITHUB_REF_NAME#v}" = "$PACKAGE_VERSION"
+        run: |
+          test "${GITHUB_REF_NAME#v}" = "$PACKAGE_VERSION"
+          test "$(git rev-list --max-count=1 "$GITHUB_REF_NAME")" = "$GITHUB_SHA"
 
       - name: Record immutable artifact hashes
         run: |
@@ -62,9 +80,20 @@ jobs:
             | sort -z \
             | xargs -0 sha256sum \
             > SHA256SUMS-linux-x64.txt
+          sha256sum --check SHA256SUMS-linux-x64.txt
+
+      - name: Sign Linux package provenance
+        run: |
+          cd "$PACKAGE_DIR"
+          while read -r _ artifact; do
+            cosign sign-blob \
+              --yes \
+              --bundle "$artifact.sigstore.json" \
+              "$artifact"
+          done < SHA256SUMS-linux-x64.txt
 
       - name: Upload Linux package evidence
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: meeting-intelligence-linux-x64-${{ github.sha }}
           if-no-files-found: error
@@ -74,41 +103,430 @@ jobs:
             ${{ env.PACKAGE_DIR }}/Meeting-Intelligence-*-amd64.deb
             ${{ env.PACKAGE_DIR }}/Meeting-Intelligence-*-x86_64.rpm
             ${{ env.PACKAGE_DIR }}/latest-linux.yml
+            ${{ env.PACKAGE_DIR }}/*.sigstore.json
             ${{ env.PACKAGE_DIR }}/SHA256SUMS-linux-x64.txt
+
+  smoke-linux-x64:
+    needs: package-linux-x64
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: Download immutable Linux package evidence
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: meeting-intelligence-linux-x64-${{ github.sha }}
+          path: release
+
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@d7543c93d881b35a8faa02e8e3605f69b7a1ce62 # v3.10.0
+
+      - name: Verify immutable hashes
+        working-directory: release
+        run: sha256sum --check SHA256SUMS-linux-x64.txt
+
+      - name: Verify signed build provenance
+        run: |
+          while read -r _ artifact; do
+            cosign verify-blob \
+              --bundle "release/$artifact.sigstore.json" \
+              --certificate-identity "https://github.com/$GITHUB_REPOSITORY/.github/workflows/package-linux.yml@$GITHUB_REF" \
+              --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+              --certificate-github-workflow-repository "$GITHUB_REPOSITORY" \
+              --certificate-github-workflow-ref "$GITHUB_REF" \
+              --certificate-github-workflow-sha "$GITHUB_SHA" \
+              --certificate-github-workflow-trigger "$GITHUB_EVENT_NAME" \
+              "release/$artifact"
+          done < release/SHA256SUMS-linux-x64.txt
+
+      - name: Install the deb package
+        run: |
+          shopt -s nullglob
+          packages=(release/Meeting-Intelligence-*-amd64.deb)
+          test "${#packages[@]}" -eq 1
+          sudo apt-get update
+          sudo apt-get install --yes desktop-file-utils xvfb rpm cpio "${packages[0]}"
+          command -v rpm2cpio
+          command -v cpio
+
+      - name: Verify desktop registration
+        run: |
+          desktop_file=/usr/share/applications/meeting-intelligence.desktop
+          test -f "$desktop_file"
+          desktop-file-validate "$desktop_file"
+          grep -Fx 'MimeType=x-scheme-handler/meeting-intelligence;' "$desktop_file"
+          grep -E '^Exec=.*meeting-intelligence' "$desktop_file"
+          gio mime x-scheme-handler/meeting-intelligence \
+            | grep -F 'meeting-intelligence.desktop'
+          command -v meeting-intelligence
+
+      - name: Launch deb, AppImage and rpm applications
+        run: |
+          cleanup_launch() {
+            if test -n "${launch_pid:-}"; then
+              kill -TERM -- "-$launch_pid" 2>/dev/null || true
+              wait "$launch_pid" 2>/dev/null || true
+            fi
+          }
+          trap cleanup_launch EXIT
+
+          assert_renderer_ready() {
+            local package_kind=$1
+            shift
+            local log_file="meeting-intelligence-$package_kind.log"
+
+            MEETING_INTELLIGENCE_RELEASE_SMOKE=1 \
+              setsid xvfb-run --auto-servernum "$@" \
+              >"$log_file" 2>&1 &
+            launch_pid=$!
+
+            local ready=false
+            for _ in $(seq 1 30); do
+              if grep -Fxq 'MEETING_INTELLIGENCE_RELEASE_SMOKE_READY' \
+                "$log_file"; then
+                ready=true
+                break
+              fi
+              if ! kill -0 "$launch_pid" 2>/dev/null; then
+                wait "$launch_pid" || true
+                cat "$log_file"
+                echo "::error::$package_kind application exited before renderer readiness"
+                exit 1
+              fi
+              sleep 0.5
+            done
+
+            if test "$ready" != true; then
+              cat "$log_file"
+              echo "::error::$package_kind renderer readiness was not observed within 15 seconds"
+              exit 1
+            fi
+
+            sleep 2
+            if ! kill -0 "$launch_pid" 2>/dev/null; then
+              wait "$launch_pid" || true
+              cat "$log_file"
+              echo "::error::$package_kind application exited during renderer stability check"
+              exit 1
+            fi
+
+            cleanup_launch
+            launch_pid=
+            cat "$log_file"
+          }
+
+          assert_renderer_ready deb meeting-intelligence
+
+          shopt -s nullglob
+          appimages=(release/Meeting-Intelligence-*-x86_64.AppImage)
+          rpms=(release/Meeting-Intelligence-*-x86_64.rpm)
+          test "${#appimages[@]}" -eq 1
+          test "${#rpms[@]}" -eq 1
+          chmod +x "${appimages[0]}"
+          assert_renderer_ready appimage \
+            env APPIMAGE_EXTRACT_AND_RUN=1 "${appimages[0]}"
+
+          mkdir rpm-root
+          (
+            cd rpm-root
+            rpm2cpio "../${rpms[0]}" | cpio -idm --quiet
+          )
+          mapfile -t rpm_binaries < <(
+            find rpm-root/opt -type f -name meeting-intelligence -perm /111
+          )
+          test "${#rpm_binaries[@]}" -eq 1
+          assert_renderer_ready rpm "${rpm_binaries[0]}"
+
+          trap - EXIT
 
   publish-release:
     if: github.ref_type == 'tag'
-    needs: package-linux-x64
+    needs:
+      - package-linux-x64
+      - smoke-linux-x64
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
       - name: Download immutable Linux package evidence
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: meeting-intelligence-linux-x64-${{ github.sha }}
           path: release
+
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@d7543c93d881b35a8faa02e8e3605f69b7a1ce62 # v3.10.0
 
       - name: Publish Linux packages and updater metadata
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           shopt -s nullglob
+          verify_remote_tag_sha() {
+            read -r object_type object_sha < <(
+              gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$GITHUB_REF_NAME" \
+                --jq '.object | [.type, .sha] | @tsv'
+            )
+            while test "$object_type" = tag; do
+              read -r object_type object_sha < <(
+                gh api "repos/$GITHUB_REPOSITORY/git/tags/$object_sha" \
+                  --jq '.object | [.type, .sha] | @tsv'
+              )
+            done
+            test "$object_type" = commit
+            test "$object_sha" = "$GITHUB_SHA"
+          }
+
+          verify_signed_provenance() {
+            local artifact=$1
+            cosign verify-blob \
+              --bundle "$artifact.sigstore.json" \
+              --certificate-identity "https://github.com/$GITHUB_REPOSITORY/.github/workflows/package-linux.yml@$GITHUB_REF" \
+              --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+              --certificate-github-workflow-repository "$GITHUB_REPOSITORY" \
+              --certificate-github-workflow-ref "$GITHUB_REF" \
+              --certificate-github-workflow-sha "$GITHUB_SHA" \
+              --certificate-github-workflow-trigger "$GITHUB_EVENT_NAME" \
+              "$artifact"
+          }
+
           assets=(
             release/Meeting-Intelligence-*-x86_64.AppImage
             release/Meeting-Intelligence-*-amd64.deb
             release/Meeting-Intelligence-*-x86_64.rpm
             release/latest-linux.yml
+            release/*.sigstore.json
             release/SHA256SUMS-linux-x64.txt
           )
-          test "${#assets[@]}" -eq 5
+          test "${#assets[@]}" -eq 9
+          while read -r _ artifact; do
+            verify_signed_provenance "release/$artifact"
+          done < release/SHA256SUMS-linux-x64.txt
           if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             echo "Release $GITHUB_REF_NAME already exists; refusing to replace immutable assets."
             exit 1
           fi
-          gh release create "$GITHUB_REF_NAME" \
-            "${assets[@]}" \
-            --repo "$GITHUB_REPOSITORY" \
-            --verify-tag \
-            --generate-notes \
-            --title "Meeting Intelligence $GITHUB_REF_NAME"
+
+          verify_remote_tag_sha
+          created_release_response=$(mktemp)
+          created_release_id=
+          release_name="Meeting Intelligence $GITHUB_REF_NAME"
+          draft_release_name="$release_name [run $GITHUB_RUN_ID.$GITHUB_RUN_ATTEMPT]"
+          cleanup_release() {
+            local release_id=$created_release_id
+            local lookup_response
+            local candidate_response
+            local last_lookup_confirmed_zero=false
+            local release_state
+            local state_succeeded=false
+            local delete_succeeded=false
+            local status_response
+            local status_code
+            local -a candidate_release_ids=()
+
+            if test -z "$release_id" && jq -e '.id' "$created_release_response" >/dev/null 2>&1; then
+              release_id=$(jq -er '.id' "$created_release_response")
+            fi
+
+            if test -z "$release_id"; then
+              lookup_response=$(mktemp)
+              candidate_response=$(mktemp)
+              for attempt in 1 2 3 4 5; do
+                last_lookup_confirmed_zero=false
+                if ! gh api \
+                  "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
+                  > "$lookup_response"; then
+                  sleep "$attempt"
+                  continue
+                fi
+                if ! jq -r \
+                  --arg name "$draft_release_name" \
+                  --arg tag "$GITHUB_REF_NAME" \
+                  '.[] | select(.draft and .name == $name and .tag_name == $tag) | .id' \
+                  "$lookup_response" \
+                  > "$candidate_response"; then
+                  sleep "$attempt"
+                  continue
+                fi
+
+                mapfile -t candidate_release_ids < "$candidate_response"
+                if test "${#candidate_release_ids[@]}" -gt 1; then
+                  echo "::error::Multiple draft releases matched cleanup marker $draft_release_name"
+                  return 1
+                fi
+                if test "${#candidate_release_ids[@]}" -eq 1; then
+                  release_id=${candidate_release_ids[0]}
+                  break
+                fi
+                last_lookup_confirmed_zero=true
+                sleep "$attempt"
+              done
+              if test -z "$release_id"; then
+                if test "$last_lookup_confirmed_zero" != true; then
+                  echo "::error::Unable to inspect releases while cleaning draft marker $draft_release_name"
+                  return 1
+                fi
+                return 0
+              fi
+            fi
+
+            release_state=$(mktemp)
+            for attempt in 1 2 3 4 5; do
+              if gh api \
+                "repos/$GITHUB_REPOSITORY/releases/$release_id" \
+                > "$release_state"; then
+                state_succeeded=true
+                break
+              fi
+              sleep "$attempt"
+            done
+            if test "$state_succeeded" != true; then
+              echo "::error::Unable to inspect exact release ID $release_id before cleanup"
+              return 1
+            fi
+
+            if ! jq -e \
+              --argjson id "$release_id" \
+              --arg draft_name "$draft_release_name" \
+              --arg release_name "$release_name" \
+              --arg tag "$GITHUB_REF_NAME" \
+              '.id == $id and .tag_name == $tag and (.name == $draft_name or .name == $release_name)' \
+              "$release_state" \
+              >/dev/null; then
+              echo "::error::Release cleanup identity guard failed for exact ID $release_id"
+              return 1
+            fi
+
+            if test "$(jq -r '.immutable' "$release_state")" = true; then
+              return 0
+            fi
+
+            for attempt in 1 2 3 4 5; do
+              if gh api \
+                --method DELETE \
+                "repos/$GITHUB_REPOSITORY/releases/$release_id" \
+                >/dev/null; then
+                delete_succeeded=true
+                break
+              fi
+              sleep "$attempt"
+            done
+            if test "$delete_succeeded" != true; then
+              echo "::error::Unable to delete mutable release ID $release_id after retries"
+              return 1
+            fi
+
+            for attempt in 1 2 3 4 5; do
+              status_response=$(gh api \
+                --include \
+                "repos/$GITHUB_REPOSITORY/releases/$release_id" \
+                2>&1) || true
+              status_code=$(printf '%s\n' "$status_response" \
+                | awk '/^HTTP/{code=$2} END{print code}')
+              if test "$status_code" = 404; then
+                return 0
+              fi
+              sleep "$attempt"
+            done
+
+            echo "::error::Release ID $release_id was not confirmed deleted with HTTP 404"
+            return 1
+          }
+          on_exit() {
+            local exit_code=$?
+            trap - EXIT
+            if ! cleanup_release; then
+              if test "$exit_code" -eq 0; then
+                exit 1
+              fi
+              exit "$exit_code"
+            fi
+            exit "$exit_code"
+          }
+          trap on_exit EXIT
+
+          gh api \
+            --method POST \
+            "repos/$GITHUB_REPOSITORY/releases" \
+            -f tag_name="$GITHUB_REF_NAME" \
+            -f target_commitish="$GITHUB_SHA" \
+            -f name="$draft_release_name" \
+            -F draft=true \
+            -F generate_release_notes=true \
+            > "$created_release_response"
+          created_release_id=$(jq -er '.id' "$created_release_response")
+          created_upload_url=$(jq -er '.upload_url | sub("\\{.*$"; "")' \
+            "$created_release_response")
+          test -n "$created_release_id"
+          test -n "$created_upload_url"
+
+          for asset in "${assets[@]}"; do
+            asset_name=${asset#release/}
+            encoded_name=$(jq -rn --arg value "$asset_name" '$value | @uri')
+            uploaded_name=$(gh api \
+              --method POST \
+              -H 'Content-Type: application/octet-stream' \
+              --input "$asset" \
+              "$created_upload_url?name=$encoded_name" \
+              --jq '.name')
+            test "$uploaded_name" = "$asset_name"
+          done
+
+          expected_assets=$(printf '%s\n' "${assets[@]#release/}" | sort)
+          actual_assets=$(gh api \
+            "repos/$GITHUB_REPOSITORY/releases/$created_release_id/assets?per_page=100" \
+            --paginate \
+            --jq '.[].name' \
+            | sort)
+          diff -u <(printf '%s\n' "$expected_assets") \
+            <(printf '%s\n' "$actual_assets")
+
+          mkdir release-verification
+          while IFS=$'\t' read -r asset_name asset_id; do
+            gh api \
+              -H 'Accept: application/octet-stream' \
+              "repos/$GITHUB_REPOSITORY/releases/assets/$asset_id" \
+              > "release-verification/$asset_name"
+          done < <(
+            gh api \
+              "repos/$GITHUB_REPOSITORY/releases/$created_release_id/assets?per_page=100" \
+              --paginate \
+              --jq '.[] | [.name, (.id | tostring)] | @tsv' \
+              | sort
+          )
+          (
+            cd release-verification
+            sha256sum --check SHA256SUMS-linux-x64.txt
+          )
+
+          for asset in "${assets[@]}"; do
+            cmp -- "$asset" "release-verification/${asset#release/}"
+          done
+          while read -r _ artifact; do
+            verify_signed_provenance "release-verification/$artifact"
+          done < release-verification/SHA256SUMS-linux-x64.txt
+
+          verify_remote_tag_sha
+          published_release_id=$(gh api \
+            --method PATCH \
+            "repos/$GITHUB_REPOSITORY/releases/$created_release_id" \
+            -f name="$release_name" \
+            -F draft=false \
+            --jq '.id')
+          test "$published_release_id" = "$created_release_id"
+          published_release_response=$(mktemp)
+          gh api \
+            "repos/$GITHUB_REPOSITORY/releases/$created_release_id" \
+            > "$published_release_response"
+          immutable_state=$(jq -r \
+            --argjson id "$created_release_id" \
+            --arg name "$release_name" \
+            --arg tag "$GITHUB_REF_NAME" \
+            'select(.id == $id and .draft == false and .name == $name and .tag_name == $tag) | .immutable' \
+            "$published_release_response")
+          if test "$immutable_state" != true; then
+            echo "::error::Published release is not immutable; removing exact release ID $created_release_id"
+            exit 1
+          fi
+          trap - EXIT
