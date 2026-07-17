@@ -11,11 +11,11 @@
     capture flow) — without com.apple.security.device.audio-input, macOS
     denies mic access outright regardless of the in-app TCC prompt.
   - System-audio loopback capture (desktopCapturer + { audio: 'loopback' } in
-    main.ts) needs screen-recording entitlement; macOS gates system audio
-    capture behind the same TCC category as screen capture.
-  - JIT/unsigned-memory entitlements Electron's own renderer/V8 needs under
-    Hardened Runtime (electron-builder's own default set, kept explicit here
-    for auditability rather than relying on an implicit default).
+    main.ts) is gated by NSScreenCaptureUsageDescription plus attended TCC
+    consent. There is no public Developer ID screen-recording entitlement.
+  - JIT/unsigned-memory and library-validation exceptions are Electron's
+    documented non-MAS defaults. Helper processes receive the narrower
+    build/entitlements.mac.inherit.plist instead of these capture permissions.
 -->
 <plist version="1.0">
   <dict>
@@ -23,15 +23,9 @@
     <true/>
     <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
     <true/>
-    <key>com.apple.security.cs.allow-dyld-environment-variables</key>
-    <true/>
     <key>com.apple.security.cs.disable-library-validation</key>
     <true/>
     <key>com.apple.security.device.audio-input</key>
-    <true/>
-    <key>com.apple.security.device.camera</key>
-    <false/>
-    <key>com.apple.security.screen-recording</key>
     <true/>
     <key>com.apple.security.network.client</key>
     <true/>
