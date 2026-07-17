@@ -950,6 +950,7 @@ function buildTranscriptDiagnostics(
     `lifecycle=${session.lifecycle}`,
     `meetingId=${session.meetingId ?? '-'}`,
     `sessionId=${session.sessionId ?? '-'}`,
+    `gatewaySessionId=${session.gatewaySessionId ?? '-'}`,
     `deviceId=${session.deviceId ?? '-'}`,
     `captureMode=${captureMode(session.hasLoopback)}`,
     `recordingActive=${recordingActive}`,
@@ -1067,7 +1068,7 @@ export function TranscriptPanel({
     setSegmentTextDrafts({});
     setTranscriptQuery('');
     setTranscriptFilter('all');
-  }, [session.meetingId, session.sessionId]);
+  }, [session.gatewaySessionId, session.meetingId, session.sessionId]);
 
   return (
     <section className="transcript-panel" aria-labelledby="transcript-title">
@@ -1075,7 +1076,9 @@ export function TranscriptPanel({
         <div>
           <h2 id="transcript-title">Canlı Transkript</h2>
           <p className="panel-subtitle">
-            {session.sessionId ? `Oturum ${session.sessionId}` : 'Recorder oturumu yok'}
+            {(session.sessionId ?? session.gatewaySessionId)
+              ? `Oturum ${session.sessionId ?? session.gatewaySessionId}`
+              : 'Recorder oturumu yok'}
           </p>
         </div>
         <div className="panel-header-actions">

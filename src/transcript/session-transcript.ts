@@ -27,6 +27,7 @@ export interface TranscriptSegment {
 export interface TranscriptSessionState {
   lifecycle: TranscriptLifecycle;
   sessionId: string | null;
+  gatewaySessionId: string | null;
   meetingId: string | null;
   deviceId: string | null;
   hasLoopback: boolean;
@@ -289,6 +290,7 @@ export function initialTranscriptSession(): TranscriptSessionState {
   return {
     lifecycle: 'idle',
     sessionId: null,
+    gatewaySessionId: null,
     meetingId: null,
     deviceId: null,
     hasLoopback: false,
@@ -320,6 +322,7 @@ export function markTranscriptBlocked(
     ...state,
     lifecycle: 'blocked',
     sessionId: null,
+    gatewaySessionId: null,
     error: args.reason,
     segments: [],
   };
@@ -333,6 +336,7 @@ export function markTranscriptWaitingForContract(
     ...state,
     lifecycle: 'idle',
     sessionId: null,
+    gatewaySessionId: null,
     meetingId: null,
     deviceId: args.deviceId,
     error: null,
@@ -343,7 +347,8 @@ export function markTranscriptWaitingForContract(
 export function startTranscriptSession(
   state: TranscriptSessionState,
   args: {
-    sessionId: string;
+    sessionId: string | null;
+    gatewaySessionId?: string | null;
     meetingId: string;
     deviceId: string;
     hasLoopback: boolean;
@@ -354,6 +359,7 @@ export function startTranscriptSession(
     ...state,
     lifecycle: 'recording',
     sessionId: args.sessionId,
+    gatewaySessionId: args.gatewaySessionId ?? args.sessionId,
     meetingId: args.meetingId,
     deviceId: args.deviceId,
     hasLoopback: args.hasLoopback,

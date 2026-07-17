@@ -11,7 +11,9 @@ import {
   parseMeetingIntelligenceCanonicalResponse,
   parseRecentMeetingsPage,
   recentMeetingsUrl,
+  recordingLifecycleUrl,
   readMeetingIntelligenceResult,
+  syncRecordingLifecycle,
 } from './meeting-client';
 
 const MEETING_ID = '33333333-3333-4333-8333-333333333333';
@@ -74,6 +76,7 @@ function canonicalResultFixture(): Record<string, unknown> {
 }
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
@@ -242,6 +245,212 @@ describe('meeting-client', () => {
       `https://testai.acik.com/api/v1/admin/meetings/${MEETING_ID}/intelligence/result`,
     );
     expect(() => meetingIntelligenceResultUrl(cfg, 'MTG-1')).toThrow('canonical UUID');
+  });
+
+  it('builds the canonical recording lifecycle URL', () => {
+    const cfg = loadMeetingConfig({ MEETING_BASE_URL: 'https://testai.acik.com' });
+    expect(recordingLifecycleUrl(cfg, MEETING_ID)).toBe(
+      `https://testai.acik.com/api/v1/admin/meetings/${MEETING_ID}/recording-lifecycle`,
+    );
+    expect(() => recordingLifecycleUrl(cfg, 'MTG-1')).toThrow('canonical UUID');
+  });
+
+  it('syncs one allowlisted recording lifecycle projection with bearer auth', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        meetingId: MEETING_ID,
+        sessionId: RUN_ID,
+        externalSessionId: 'SES-1',
+        meetingStatus: 'COMPLETED',
+        transcriptStatus: 'PROCESSING',
+        startedAt: '2026-07-17T08:43:20Z',
+        endedAt: '2026-07-17T08:44:20Z',
+        tenantId: 'must-not-cross-main-process',
+      }),
+      headers: new Headers({ 'content-type': 'application/json' }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await syncRecordingLifecycle({ baseUrl: 'https://testai.acik.com' }, 'JWT', {
+      meetingId: MEETING_ID,
+      externalSessionId: 'SES-1',
+      startedAt: '2026-07-17T08:43:20Z',
+      endedAt: '2026-07-17T08:44:20Z',
+    });
+
+    expect(result).toEqual({
+      meetingId: MEETING_ID,
+      sessionId: RUN_ID,
+      externalSessionId: 'SES-1',
+      meetingStatus: 'COMPLETED',
+      transcriptStatus: 'PROCESSING',
+      startedAt: '2026-07-17T08:43:20.000Z',
+      endedAt: '2026-07-17T08:44:20.000Z',
+    });
+    expect(JSON.stringify(result)).not.toContain('tenantId');
+    expect(fetchMock).toHaveBeenCalledWith(
+      `https://testai.acik.com/api/v1/admin/meetings/${MEETING_ID}/recording-lifecycle`,
+      expect.objectContaining({
+        method: 'PUT',
+        headers: {
+          Authorization: 'Bearer JWT',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          externalSessionId: 'SES-1',
+          startedAt: '2026-07-17T08:43:20.000Z',
+          endedAt: '2026-07-17T08:44:20.000Z',
+        }),
+        signal: expect.any(AbortSignal),
+      }),
+    );
+  });
+
+  it('fails closed when lifecycle success does not confirm the requested state', async () => {
+    const response = {
+      meetingId: MEETING_ID,
+      sessionId: RUN_ID,
+      externalSessionId: 'SES-1',
+      meetingStatus: 'IN_PROGRESS',
+      transcriptStatus: 'PENDING',
+      startedAt: '2026-07-17T08:43:20Z',
+      endedAt: null,
+    };
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => response,
+        headers: new Headers({ 'content-type': 'application/json' }),
+      }),
+    );
+
+    await expect(
+      syncRecordingLifecycle({ baseUrl: 'https://testai.acik.com' }, 'JWT', {
+        meetingId: MEETING_ID,
+        externalSessionId: 'SES-1',
+        startedAt: '2026-07-17T08:43:20Z',
+        endedAt: '2026-07-17T08:44:20Z',
+      }),
+    ).rejects.toThrow('does not confirm the requested finish');
+
+    await expect(
+      syncRecordingLifecycle({ baseUrl: 'https://testai.acik.com' }, 'JWT', {
+        meetingId: MEETING_ID,
+        externalSessionId: 'SES-1',
+        startedAt: '2026-07-17T08:43:19Z',
+      }),
+    ).rejects.toThrow('startedAt does not match request');
+  });
+
+  it('keeps a finish pending when canonical status or transcript processing is unconfirmed', async () => {
+    const response = {
+      meetingId: MEETING_ID,
+      sessionId: RUN_ID,
+      externalSessionId: 'SES-1',
+      meetingStatus: 'COMPLETED',
+      transcriptStatus: 'PENDING',
+      startedAt: '2026-07-17T08:43:20Z',
+      endedAt: '2026-07-17T08:44:20Z',
+    };
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => response,
+        headers: new Headers({ 'content-type': 'application/json' }),
+      }),
+    );
+
+    await expect(
+      syncRecordingLifecycle({ baseUrl: 'https://testai.acik.com' }, 'JWT', {
+        meetingId: MEETING_ID,
+        externalSessionId: 'SES-1',
+        startedAt: '2026-07-17T08:43:20Z',
+        endedAt: '2026-07-17T08:44:20Z',
+      }),
+    ).rejects.toThrow('does not confirm transcript processing');
+
+    response.transcriptStatus = 'PROCESSING';
+    response.meetingStatus = 'IN_PROGRESS';
+    await expect(
+      syncRecordingLifecycle({ baseUrl: 'https://testai.acik.com' }, 'JWT', {
+        meetingId: MEETING_ID,
+        externalSessionId: 'SES-1',
+        startedAt: '2026-07-17T08:43:20Z',
+        endedAt: '2026-07-17T08:44:20Z',
+      }),
+    ).rejects.toThrow('does not confirm the requested finish');
+  });
+
+  it('rejects unknown lifecycle status enums', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          meetingId: MEETING_ID,
+          sessionId: RUN_ID,
+          externalSessionId: 'SES-1',
+          meetingStatus: 'SCHEDULED',
+          transcriptStatus: 'PENDING',
+          startedAt: '2026-07-17T08:43:20Z',
+          endedAt: null,
+        }),
+        headers: new Headers({ 'content-type': 'application/json' }),
+      }),
+    );
+
+    await expect(
+      syncRecordingLifecycle({ baseUrl: 'https://testai.acik.com' }, 'JWT', {
+        meetingId: MEETING_ID,
+        externalSessionId: 'SES-1',
+        startedAt: '2026-07-17T08:43:20Z',
+      }),
+    ).rejects.toThrow('meetingStatus is invalid');
+  });
+
+  it('retries transient recording lifecycle errors and keeps error bodies redacted', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 503,
+        text: async () => JSON.stringify({ transcript: 'must not appear' }),
+        body: { cancel: vi.fn() },
+        headers: new Headers({ 'content-type': 'application/json' }),
+      })
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 403,
+        text: async () =>
+          JSON.stringify({
+            code: 'MEETING_FORBIDDEN',
+            correlationId: 'cid-lifecycle',
+            transcript: 'must not appear',
+          }),
+        headers: new Headers({ 'content-type': 'application/json' }),
+      });
+    vi.stubGlobal('fetch', fetchMock);
+    vi.useFakeTimers();
+
+    const rejection = expect(
+      syncRecordingLifecycle({ baseUrl: 'https://testai.acik.com' }, 'JWT', {
+        meetingId: MEETING_ID,
+        externalSessionId: 'SES-1',
+        startedAt: '2026-07-17T08:43:20Z',
+      }),
+    ).rejects.toThrow(
+      'syncRecordingLifecycle failed: 403 code=MEETING_FORBIDDEN correlationId=cid-lifecycle',
+    );
+    await vi.advanceTimersByTimeAsync(250);
+    await rejection;
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
   it('creates a meeting contract with the bearer token in main process', async () => {
@@ -468,6 +677,40 @@ describe('meeting-client', () => {
         },
       }),
     );
+  });
+
+  it('bounds canonical result response body reads and retries the GET safely', async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi.fn().mockImplementation((_url: string, init?: RequestInit) => {
+      const signal = init?.signal as AbortSignal;
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        headers: new Headers({ 'content-type': 'application/json' }),
+        json: () =>
+          new Promise((_resolve, reject) => {
+            signal.addEventListener(
+              'abort',
+              () => reject(Object.assign(new Error('aborted'), { name: 'AbortError' })),
+              { once: true },
+            );
+          }),
+      });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const pending = readMeetingIntelligenceResult(
+      { baseUrl: 'https://testai.acik.com' },
+      'JWT',
+      MEETING_ID,
+    );
+    const rejection = expect(pending).rejects.toThrow(
+      'readMeetingIntelligenceResult failed before response after 3 attempts: network=REQUEST_TIMEOUT',
+    );
+    await vi.advanceTimersByTimeAsync(30_000);
+
+    await rejection;
+    expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 
   it('maps only ANALYSIS_RESULT_NOT_FOUND to the not-ready product state', async () => {

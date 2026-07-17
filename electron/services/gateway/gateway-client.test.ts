@@ -24,6 +24,7 @@ const captureId = '33333333-3333-4333-8333-333333333333';
 const consentTextHash = 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
@@ -111,6 +112,7 @@ describe('gateway-client pure helpers', () => {
 
 describe('gateway-client HTTP fetch wrapper', () => {
   it('recordConsent posts consent proof without client clock or raw text', async () => {
+    const acceptedAtMs = Date.now();
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
       json: async () => ({
@@ -120,7 +122,7 @@ describe('gateway-client HTTP fetch wrapper', () => {
         consentTextHash,
         locale: 'tr-TR',
         correlationId: 'corr-1',
-        acceptedAtMs: 1781820000123,
+        acceptedAtMs,
       }),
     });
     vi.stubGlobal('fetch', fetchMock);
@@ -133,7 +135,7 @@ describe('gateway-client HTTP fetch wrapper', () => {
       locale: 'tr-TR',
     });
 
-    expect(info.acceptedAtMs).toBe(1781820000123);
+    expect(info.acceptedAtMs).toBe(acceptedAtMs);
     const [url, opts] = fetchMock.mock.calls[0];
     expect(url).toBe('https://gw.example.com/api/v1/audio-gateway/consents');
     expect(opts.headers.Authorization).toBe('Bearer JWT');
@@ -148,6 +150,50 @@ describe('gateway-client HTTP fetch wrapper', () => {
     expect(body).not.toHaveProperty('acceptedAt');
     expect(body).not.toHaveProperty('acceptedAtMs');
     expect(body).not.toHaveProperty('consentText');
+  });
+
+  it('recordConsent rejects mismatched identity and implausible server time', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          meetingId,
+          captureId: '44444444-4444-4444-8444-444444444444',
+          consentVersion: '1.0.0',
+          consentTextHash,
+          locale: 'tr-TR',
+          correlationId: 'corr-1',
+          acceptedAtMs: Date.now(),
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          meetingId,
+          captureId,
+          consentVersion: '1.0.0',
+          consentTextHash,
+          locale: 'tr-TR',
+          correlationId: 'corr-1',
+          acceptedAtMs: Date.now() - 10 * 60_000,
+        }),
+      });
+    vi.stubGlobal('fetch', fetchMock);
+    const args = {
+      meetingId,
+      captureId,
+      consentVersion: '1.0.0',
+      consentTextHash,
+      locale: 'tr-TR',
+    };
+
+    await expect(recordConsent(cfg, 'JWT', args)).rejects.toThrow(
+      'recordConsent response captureId mismatch',
+    );
+    await expect(recordConsent(cfg, 'JWT', args)).rejects.toThrow(
+      'recordConsent acceptedAtMs is invalid',
+    );
   });
 
   it('startSession posts session metadata as PCM16/16k/mono', async () => {
@@ -177,6 +223,49 @@ describe('gateway-client HTTP fetch wrapper', () => {
     });
   });
 
+  it('startSession rejects an invalid session identity from a successful response', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ sessionId: '../foreign' }),
+      }),
+    );
+
+    await expect(
+      startSession(cfg, 'JWT', { meetingId, deviceId: 'dev1', language: 'tr' }, 'IK'),
+    ).rejects.toThrow('startSession sessionId is invalid');
+  });
+
+  it('keeps the start deadline active while the response body is read', async () => {
+    vi.useFakeTimers();
+    let requestSignal: AbortSignal | null = null;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockImplementation((_url: string, init?: RequestInit) => {
+        requestSignal = init?.signal as AbortSignal;
+        return Promise.resolve({
+          ok: true,
+          json: () =>
+            new Promise((_resolve, reject) => {
+              requestSignal?.addEventListener(
+                'abort',
+                () => reject(Object.assign(new Error('aborted'), { name: 'AbortError' })),
+                { once: true },
+              );
+            }),
+        });
+      }),
+    );
+
+    const pending = startSession(cfg, 'JWT', { meetingId, deviceId: 'dev1', language: 'tr' }, 'IK');
+    const rejection = expect(pending).rejects.toThrow('startSession timed out after 15000ms');
+    await vi.advanceTimersByTimeAsync(15_000);
+
+    await rejection;
+    expect(requestSignal?.aborted).toBe(true);
+  });
+
   it('sendChunk posts byte body with strict sequence headers', async () => {
     const fetchMock = vi.fn().mockResolvedValue({ ok: true });
     vi.stubGlobal('fetch', fetchMock);
@@ -195,12 +284,39 @@ describe('gateway-client HTTP fetch wrapper', () => {
   });
 
   it('finishSession posts finish request', async () => {
-    const fetchMock = vi.fn().mockResolvedValue({ ok: true });
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        sessionId: 'SES-9',
+        correlationId: 'corr-1',
+        finalState: 'FINISHED',
+        finishedAtMs: 1781820000000,
+        alreadyFinished: false,
+      }),
+    });
     vi.stubGlobal('fetch', fetchMock);
     await finishSession(cfg, 'JWT', 'SES-9', 'IK');
     expect(fetchMock.mock.calls[0][0]).toBe(
       'https://gw.example.com/api/v1/audio-gateway/sessions/SES-9/finish',
     );
+  });
+
+  it('rejects an unconfirmed finish response body', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          sessionId: 'SES-other',
+          correlationId: 'corr-1',
+          finalState: 'FINISHED',
+          finishedAtMs: 1781820000000,
+          alreadyFinished: false,
+        }),
+      }),
+    );
+
+    await expect(finishSession(cfg, 'JWT', 'SES-9', 'IK')).rejects.toThrow('sessionId mismatch');
   });
 
   it('readTranscriptEvents sends bearer token and cursor params', async () => {

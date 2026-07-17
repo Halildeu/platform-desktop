@@ -22,7 +22,10 @@ import {
 } from './components/ConsentDialog';
 import { MeetingResultPicker, type RecentMeetingsStatus } from './components/MeetingResultPicker';
 import { SummaryPanel, type CanonicalResultLoadStatus } from './components/SummaryPanel';
-import type { RecentMeetingSummary } from '../electron/services/meeting/meeting-client';
+import type {
+  MeetingIntelligenceReadOutcome,
+  RecentMeetingSummary,
+} from '../electron/services/meeting/meeting-client';
 import {
   bindMeetingIntelligenceTarget,
   failMeetingIntelligence,
@@ -54,13 +57,23 @@ import {
 const MEETING_ID_MISSING_MESSAGE =
   'Geçerli meetingId bulunamadı; kayıt başlatılamaz. (meetingId kaynağı henüz belirlenmedi)';
 const RECORDER_MEETING_ID_UNSET_MARKER = 'RECORDER_MEETING_ID tanimli degil';
-const RECORDER_START_TIMEOUT_MS = 45_000;
+// This guard must exceed capture.ts's bounded permission, worklet, loopback and
+// main-process startup budget so it cannot orphan a still-running IPC request.
+const RECORDER_START_TIMEOUT_MS = 150_000;
 const TRANSCRIPT_CLIENT_CLOCK_SKEW_MS = 30_000;
 const MAX_PENDING_LIVE_TRANSCRIPT_EVENTS = 50;
 const ACTIVE_AUDIO_RMS = 0.0008;
 const LIVE_STT_PREFLIGHT_MAX_ATTEMPTS = 3;
 const LIVE_STT_PREFLIGHT_RETRY_DELAY_MS = 180;
-const CANONICAL_RESULT_POLL_DELAYS_MS = [0, 500, 1_000, 2_000, 4_000, 8_000, 15_000] as const;
+// Canonical analysis can legitimately trail the attended recording by minutes.
+// Keep the user-visible state honest while a bounded five-minute follow-up runs.
+export const CANONICAL_RESULT_POLL_DELAYS_MS = [
+  0, 500, 1_000, 2_000, 4_000, 8_000, 15_000, 30_000, 60_000, 60_000, 60_000, 60_000,
+] as const;
+export const CANONICAL_RESULT_FOLLOW_UP_TIMEOUT_MS = 300_000;
+export const CANONICAL_RESULT_REQUEST_TIMEOUT_MS = 25_000;
+const LIFECYCLE_RECONCILIATION_MAX_ATTEMPTS = 6;
+const LIFECYCLE_RECONCILIATION_BASE_DELAY_MS = 1_000;
 
 interface RecorderRuntimeConfig {
   meetingId: string | null;
@@ -196,6 +209,28 @@ async function startRecordingWithTimeout(
       clearTimeout(timeoutId);
     }
   }
+}
+
+function withCanonicalResultRequestTimeout<T>(
+  operation: Promise<T>,
+  timeoutMs: number,
+): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timeoutId = window.setTimeout(
+      () => reject(new Error('Kalıcı toplantı çıktısı isteği zaman aşımına uğradı')),
+      timeoutMs,
+    );
+    operation.then(
+      (value) => {
+        window.clearTimeout(timeoutId);
+        resolve(value);
+      },
+      (error: unknown) => {
+        window.clearTimeout(timeoutId);
+        reject(error instanceof Error ? error : new Error(String(error)));
+      },
+    );
+  });
 }
 
 function transcriptStatusFromGateway(status: string): TranscriptSegmentStatus {
@@ -391,7 +426,11 @@ function App() {
   const canonicalResultReadSequenceRef = useRef(0);
   const canonicalResultMeetingIdRef = useRef<string | null>(meetingIntelligence.meetingId);
   const meetingIntelligenceStatusRef = useRef(meetingIntelligence.status);
-  const canonicalRunBeforeRecordingRef = useRef<string | null>(null);
+  const canonicalRunBeforeRecordingRef = useRef<{
+    meetingId: string;
+    analysisRunId: string | null;
+    recordingStartedAtMs: number;
+  } | null>(null);
   canonicalResultMeetingIdRef.current = meetingIntelligence.meetingId;
   meetingIntelligenceStatusRef.current = meetingIntelligence.status;
 
@@ -400,6 +439,7 @@ function App() {
       meetingId: string,
       pollUntilReady = false,
       previousAnalysisRunId: string | null = null,
+      generatedNotBeforeMs: number | null = null,
     ): Promise<void> => {
       const readSequence = canonicalResultReadSequenceRef.current + 1;
       canonicalResultReadSequenceRef.current = readSequence;
@@ -407,23 +447,56 @@ function App() {
       setCanonicalResultError(null);
 
       const delays = pollUntilReady ? CANONICAL_RESULT_POLL_DELAYS_MS : ([0] as const);
+      const followUpDeadlineMs = Date.now() + CANONICAL_RESULT_FOLLOW_UP_TIMEOUT_MS;
       try {
         for (const delayMs of delays) {
           if (delayMs > 0) {
+            const remainingBeforeDelayMs = followUpDeadlineMs - Date.now();
+            if (remainingBeforeDelayMs <= 0) {
+              break;
+            }
             await new Promise<void>((resolve) => {
-              window.setTimeout(resolve, delayMs);
+              window.setTimeout(resolve, Math.min(delayMs, remainingBeforeDelayMs));
             });
           }
           if (canonicalResultReadSequenceRef.current !== readSequence) {
             return;
           }
 
-          const outcome = await window.electronAPI?.meeting.getIntelligenceResult({ meetingId });
+          const remainingBeforeReadMs = followUpDeadlineMs - Date.now();
+          if (pollUntilReady && remainingBeforeReadMs <= 0) {
+            break;
+          }
+
+          const resultRead = window.electronAPI?.meeting.getIntelligenceResult({ meetingId });
+          if (!resultRead) {
+            throw new Error('Electron meeting result bridge yanıt vermedi');
+          }
+          const requestTimeoutMs = pollUntilReady
+            ? Math.min(CANONICAL_RESULT_REQUEST_TIMEOUT_MS, remainingBeforeReadMs)
+            : CANONICAL_RESULT_REQUEST_TIMEOUT_MS;
+          let outcome: MeetingIntelligenceReadOutcome;
+          try {
+            outcome = await withCanonicalResultRequestTimeout(resultRead, requestTimeoutMs);
+          } catch (readError) {
+            if (!pollUntilReady) {
+              throw readError;
+            }
+            setCanonicalResultStatus('not_ready');
+            continue;
+          }
           if (!outcome) {
             throw new Error('Electron meeting result bridge yanıt vermedi');
           }
           if (outcome.status === 'ready') {
-            if (!isNewCanonicalAnalysisRun(outcome.result, previousAnalysisRunId)) {
+            if (
+              !isNewCanonicalAnalysisRun(
+                outcome.result,
+                previousAnalysisRunId,
+                generatedNotBeforeMs,
+              )
+            ) {
+              setCanonicalResultStatus('not_ready');
               continue;
             }
             const result = meetingIntelligenceResultFromCanonicalResponse(outcome.result);
@@ -437,15 +510,13 @@ function App() {
               if (current.meetingId !== meetingId) {
                 return current;
               }
-              return setMeetingIntelligenceResult(
-                { ...current, sessionId: outcome.result.sessionId },
-                result,
-              );
+              return setMeetingIntelligenceResult(current, result);
             });
             canonicalRunBeforeRecordingRef.current = null;
             setCanonicalResultStatus('ready');
             return;
           }
+          setCanonicalResultStatus('not_ready');
         }
 
         if (
@@ -510,8 +581,9 @@ function App() {
   };
 
   useEffect(() => {
-    transcriptSessionIdRef.current = transcriptSession.sessionId;
-  }, [transcriptSession.sessionId]);
+    transcriptSessionIdRef.current =
+      transcriptSession.gatewaySessionId ?? transcriptSession.sessionId;
+  }, [transcriptSession.gatewaySessionId, transcriptSession.sessionId]);
 
   useEffect(() => {
     if (
@@ -549,14 +621,17 @@ function App() {
   }, [recorderConfig?.liveSttStreamUrl]);
 
   useEffect(() => {
-    if (!transcriptSession.sessionId || pendingLiveTranscriptEventsRef.current.length === 0) {
+    if (
+      !(transcriptSession.gatewaySessionId ?? transcriptSession.sessionId) ||
+      pendingLiveTranscriptEventsRef.current.length === 0
+    ) {
       return;
     }
 
     const pending = pendingLiveTranscriptEventsRef.current;
     pendingLiveTranscriptEventsRef.current = [];
     setTranscriptSession((current) => {
-      if (!current.sessionId) {
+      if (!(current.gatewaySessionId ?? current.sessionId)) {
         pendingLiveTranscriptEventsRef.current = [
           ...pending,
           ...pendingLiveTranscriptEventsRef.current,
@@ -565,7 +640,7 @@ function App() {
       }
       return pending.reduce(applyLiveTranscriptEvent, current);
     });
-  }, [transcriptSession.sessionId]);
+  }, [transcriptSession.gatewaySessionId, transcriptSession.sessionId]);
 
   useEffect(() => {
     void window.electronAPI?.app
@@ -629,13 +704,51 @@ function App() {
       setRecentMeetingsError(null);
       return;
     }
+    let cancelled = false;
+    let retryTimer: number | null = null;
+    const reconcile = async (attempt: number): Promise<void> => {
+      try {
+        const outcome = await window.electronAPI?.audio.reconcileLifecycle();
+        if (cancelled || !outcome || outcome.remaining === 0) {
+          return;
+        }
+        if (attempt >= LIFECYCLE_RECONCILIATION_MAX_ATTEMPTS - 1) {
+          setError(`Bekleyen ${outcome.remaining} kayıt durumu daha sonra yeniden denenecek.`);
+          return;
+        }
+      } catch (error) {
+        if (cancelled) {
+          return;
+        }
+        if (attempt >= LIFECYCLE_RECONCILIATION_MAX_ATTEMPTS - 1) {
+          setError(
+            `Bekleyen kayıt durumu meeting-service ile eşitlenemedi: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          );
+          return;
+        }
+      }
+      retryTimer = window.setTimeout(
+        () => void reconcile(attempt + 1),
+        LIFECYCLE_RECONCILIATION_BASE_DELAY_MS * 2 ** attempt,
+      );
+    };
+    void reconcile(0);
     void loadRecentMeetings();
+    return () => {
+      cancelled = true;
+      if (retryTimer !== null) {
+        window.clearTimeout(retryTimer);
+      }
+    };
   }, [loadRecentMeetings, loggedIn]);
 
   useEffect(() => {
     const offTranscriptEvent = window.electronAPI?.audio.onTranscriptEvent?.((event) => {
       setTranscriptSession((current) => {
-        if (!current.sessionId || event.sessionId !== current.sessionId) {
+        const gatewaySessionId = current.gatewaySessionId ?? current.sessionId;
+        if (!gatewaySessionId || event.sessionId !== gatewaySessionId) {
           return current;
         }
         if (!shouldApplyGatewayTranscriptEvent(current, event, liveStreamHasEventsRef.current)) {
@@ -658,7 +771,8 @@ function App() {
     });
     const offTranscriptError = window.electronAPI?.audio.onTranscriptError?.((event) => {
       setTranscriptSession((current) => {
-        if (!current.sessionId || event.sessionId !== current.sessionId) {
+        const gatewaySessionId = current.gatewaySessionId ?? current.sessionId;
+        if (!gatewaySessionId || event.sessionId !== gatewaySessionId) {
           return current;
         }
         return { ...current, error: event.message };
@@ -856,6 +970,14 @@ function App() {
       }
       const meetingId = recorderConfig.meetingId;
       const deviceId = recorderConfig.deviceId;
+      canonicalRunBeforeRecordingRef.current = {
+        meetingId,
+        analysisRunId:
+          meetingIntelligence.meetingId === meetingId
+            ? (meetingIntelligence.result?.analysisRunId ?? null)
+            : null,
+        recordingStartedAtMs: Date.now(),
+      };
       liveStreamHasEventsRef.current = false;
       directStreamConfiguredRef.current = Boolean(liveSttStreamUrlForSession);
       setLiveStreamActive(false);
@@ -889,7 +1011,7 @@ function App() {
             return;
           }
           setTranscriptSession((current) => {
-            if (!current.sessionId) {
+            if (!(current.gatewaySessionId ?? current.sessionId)) {
               enqueuePendingLiveTranscriptEvent(event);
               return current;
             }
@@ -898,7 +1020,7 @@ function App() {
         },
         onLiveTranscriptError: (err) => {
           setTranscriptSession((current) => {
-            if (!current.sessionId) {
+            if (!(current.gatewaySessionId ?? current.sessionId)) {
               return current;
             }
             return {
@@ -936,7 +1058,8 @@ function App() {
         pendingLiveTranscriptEvents.reduce(
           applyLiveTranscriptEvent,
           startTranscriptSession(current, {
-            sessionId: rec.sessionId,
+            sessionId: rec.transcriptSessionId,
+            gatewaySessionId: rec.sessionId,
             meetingId,
             deviceId,
             hasLoopback: rec.hasLoopback,
@@ -944,9 +1067,11 @@ function App() {
           }),
         ),
       );
-      canonicalRunBeforeRecordingRef.current = meetingIntelligence.result?.analysisRunId ?? null;
       setMeetingIntelligence((current) =>
-        markIntelligenceRecording(current, { meetingId, sessionId: rec.sessionId }),
+        markIntelligenceRecording(current, {
+          meetingId,
+          sessionId: rec.transcriptSessionId,
+        }),
       );
       const mode = rec.hasLoopback ? 'mikrofon + sistem sesi' : 'yalnız mikrofon';
       const gatewayMode = rec.gatewayActive === false ? ', direct stream' : '';
@@ -1347,8 +1472,15 @@ function App() {
                         true,
                         canonicalAnalysisRunBaseline(
                           meetingIntelligence.result?.analysisRunId ?? null,
-                          canonicalRunBeforeRecordingRef.current,
+                          canonicalRunBeforeRecordingRef.current?.meetingId ===
+                            meetingIntelligence.meetingId
+                            ? canonicalRunBeforeRecordingRef.current.analysisRunId
+                            : null,
                         ),
+                        canonicalRunBeforeRecordingRef.current?.meetingId ===
+                          meetingIntelligence.meetingId
+                          ? canonicalRunBeforeRecordingRef.current.recordingStartedAtMs
+                          : null,
                       )
                   : undefined
               }
@@ -1359,8 +1491,15 @@ function App() {
                     true,
                     canonicalAnalysisRunBaseline(
                       meetingIntelligence.result?.analysisRunId ?? null,
-                      canonicalRunBeforeRecordingRef.current,
+                      canonicalRunBeforeRecordingRef.current?.meetingId ===
+                        meetingIntelligence.meetingId
+                        ? canonicalRunBeforeRecordingRef.current.analysisRunId
+                        : null,
                     ),
+                    canonicalRunBeforeRecordingRef.current?.meetingId ===
+                      meetingIntelligence.meetingId
+                      ? canonicalRunBeforeRecordingRef.current.recordingStartedAtMs
+                      : null,
                   );
                 }
               }}

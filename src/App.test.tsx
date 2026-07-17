@@ -27,7 +27,11 @@ vi.mock('./audio/live-stt-preflight', async (importOriginal) => {
 
 import { startRecording, testAudioCaptureWorklet } from './audio/capture';
 import { testLiveSttStreamConnection } from './audio/live-stt-preflight';
-import App from './App';
+import App, {
+  CANONICAL_RESULT_FOLLOW_UP_TIMEOUT_MS,
+  CANONICAL_RESULT_POLL_DELAYS_MS,
+  CANONICAL_RESULT_REQUEST_TIMEOUT_MS,
+} from './App';
 
 interface TestTranscriptGatewayEvent {
   eventId: string;
@@ -169,6 +173,7 @@ function installElectronApiMock(recorderConfig: {
         liveSttStreamReason: null,
         ...recorderConfig,
       }),
+      reconcileLifecycle: vi.fn().mockResolvedValue({ ok: true }),
       permissionStatus: vi.fn(),
       prepareCapture: vi.fn(),
       cancelCapture: vi.fn(),
@@ -380,6 +385,7 @@ describe('App recorder readiness', () => {
     });
     vi.mocked(startRecording).mockResolvedValue({
       sessionId: 'SES-1',
+      transcriptSessionId: 'SES-1',
       hasLoopback: false,
       stop: vi.fn(),
       onError: vi.fn(),
@@ -438,6 +444,7 @@ describe('App recorder readiness', () => {
       });
     vi.mocked(startRecording).mockResolvedValue({
       sessionId: 'SES-1',
+      transcriptSessionId: 'SES-1',
       hasLoopback: false,
       stop: vi.fn(),
       onError: vi.fn(),
@@ -531,6 +538,7 @@ describe('App recorder readiness', () => {
     );
     vi.mocked(startRecording).mockResolvedValue({
       sessionId: 'SES-STOP-1',
+      transcriptSessionId: 'SES-STOP-1',
       hasLoopback: false,
       stop: stopMock,
       onError: vi.fn(),
@@ -582,6 +590,7 @@ describe('App recorder readiness', () => {
     });
     vi.mocked(startRecording).mockResolvedValue({
       sessionId: 'SES-PAUSE-1',
+      transcriptSessionId: 'SES-PAUSE-1',
       hasLoopback: false,
       stop: vi.fn().mockResolvedValue(undefined),
       onError: vi.fn(),
@@ -624,6 +633,7 @@ describe('App recorder readiness', () => {
     mockReadyCaptureWorklet();
     vi.mocked(startRecording).mockResolvedValue({
       sessionId: 'SES-STOP-2',
+      transcriptSessionId: 'SES-STOP-2',
       hasLoopback: false,
       stop: vi.fn().mockRejectedValue(new Error('upload finish patladi')),
       onError: vi.fn(),
@@ -679,13 +689,13 @@ describe('App recorder readiness', () => {
     );
 
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(45_000);
+      await vi.advanceTimersByTimeAsync(150_000);
       await Promise.resolve();
     });
     vi.useRealTimers();
 
     const timeoutErrors = screen.getAllByText(
-      'Kayıt başlatılamadı: Recorder başlatma 45 sn içinde yanıt vermedi; izin/gateway zinciri kontrol edilmeli.',
+      'Kayıt başlatılamadı: Recorder başlatma 150 sn içinde yanıt vermedi; izin/gateway zinciri kontrol edilmeli.',
     );
     expect(timeoutErrors.length).toBeGreaterThan(0);
     expect(screen.getByRole('button', { name: 'Kaydet' })).toBeEnabled();
@@ -700,6 +710,7 @@ describe('App recorder readiness', () => {
     });
     vi.mocked(startRecording).mockResolvedValue({
       sessionId: 'SES-1',
+      transcriptSessionId: 'SES-1',
       hasLoopback: false,
       stop: vi.fn(),
       onError: vi.fn(),
@@ -746,6 +757,7 @@ describe('App recorder readiness', () => {
     });
     vi.mocked(startRecording).mockResolvedValue({
       sessionId: 'SES-1',
+      transcriptSessionId: 'SES-1',
       hasLoopback: false,
       stop: vi.fn(),
       onError: vi.fn(),
@@ -818,6 +830,7 @@ describe('App recorder readiness', () => {
     });
     vi.mocked(startRecording).mockResolvedValue({
       sessionId: 'SES-1',
+      transcriptSessionId: 'SES-1',
       hasLoopback: false,
       stop: vi.fn(),
       onError: vi.fn(),
@@ -926,6 +939,7 @@ describe('App recorder readiness', () => {
     });
     vi.mocked(startRecording).mockResolvedValue({
       sessionId: 'SES-1',
+      transcriptSessionId: 'SES-1',
       hasLoopback: false,
       stop: vi.fn(),
       onError: vi.fn(),
@@ -1039,6 +1053,7 @@ describe('App recorder readiness', () => {
       });
       return {
         sessionId: 'SES-1',
+        transcriptSessionId: 'SES-1',
         hasLoopback: false,
         stop: vi.fn(),
         onError: vi.fn(),
@@ -1073,6 +1088,7 @@ describe('App recorder readiness', () => {
     });
     vi.mocked(startRecording).mockResolvedValue({
       sessionId: 'LOCAL-1',
+      transcriptSessionId: 'LOCAL-1',
       hasLoopback: false,
       gatewayActive: false,
       gatewayError: 'Direct STT baglanti hatasi',
@@ -1103,6 +1119,7 @@ describe('App recorder readiness', () => {
     });
     vi.mocked(startRecording).mockResolvedValue({
       sessionId: 'SES-1',
+      transcriptSessionId: 'SES-1',
       hasLoopback: false,
       stop: vi.fn(),
       onError: vi.fn(),
@@ -1152,6 +1169,49 @@ describe('App recorder readiness', () => {
 });
 
 describe('App canonical Meeting Intelligence read', () => {
+  it('keeps a bounded canonical follow-up open beyond the former thirty-second window', () => {
+    const totalDelayMs = CANONICAL_RESULT_POLL_DELAYS_MS.reduce<number>(
+      (total, delay) => total + delay,
+      0,
+    );
+
+    expect(totalDelayMs).toBeGreaterThan(30_500);
+    expect(totalDelayMs).toBeLessThanOrEqual(301_000);
+    expect(CANONICAL_RESULT_POLL_DELAYS_MS).toContain(60_000);
+    expect(CANONICAL_RESULT_FOLLOW_UP_TIMEOUT_MS).toBe(300_000);
+  });
+
+  it('fails a stalled canonical bridge read within the per-request deadline', async () => {
+    installElectronApiMock({
+      meetingId: CANONICAL_MEETING_ID,
+      deviceId: 'desktop-1',
+      ready: true,
+      reason: null,
+    });
+    vi.mocked(window.electronAPI!.meeting.getIntelligenceResult).mockReturnValue(
+      new Promise(() => undefined),
+    );
+    vi.useFakeTimers();
+
+    render(<App />);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(window.electronAPI?.meeting.getIntelligenceResult).toHaveBeenCalledWith({
+      meetingId: CANONICAL_MEETING_ID,
+    });
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(CANONICAL_RESULT_REQUEST_TIMEOUT_MS);
+    });
+
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'Kalıcı toplantı çıktısı isteği zaman aşımına uğradı',
+    );
+  });
+
   it('hydrates the product panel from the one persisted canonical snapshot', async () => {
     installElectronApiMock({
       meetingId: CANONICAL_MEETING_ID,
@@ -1206,6 +1266,7 @@ describe('App canonical Meeting Intelligence read', () => {
     const replacement = {
       ...canonicalMeetingResult(),
       analysisRunId: '66666666-6666-4666-8666-666666666666',
+      sessionId: 'CANONICAL-INTERNAL-SESSION',
       summary: 'Yeni kayıt için kalıcı toplantı özeti.',
       summary_citations: [
         {
@@ -1213,7 +1274,7 @@ describe('App canonical Meeting Intelligence read', () => {
           claim: 'Yeni kayıt için kalıcı toplantı özeti.',
         },
       ],
-      generatedAt: '2026-07-11T20:01:00.000Z',
+      generatedAt: new Date(Date.now() + 60_000).toISOString(),
     };
     vi.mocked(window.electronAPI!.meeting.getIntelligenceResult)
       .mockResolvedValueOnce({ status: 'ready', result: previous })
@@ -1222,6 +1283,7 @@ describe('App canonical Meeting Intelligence read', () => {
     vi.mocked(window.electronAPI!.meeting.analyze).mockResolvedValue({});
     vi.mocked(startRecording).mockResolvedValue({
       sessionId: 'SES-REANALYZE',
+      transcriptSessionId: 'SES-REANALYZE',
       hasLoopback: false,
       stop: vi.fn().mockResolvedValue(undefined),
       onError: vi.fn(),
@@ -1306,6 +1368,7 @@ describe('App recent meeting result navigation', () => {
     );
     vi.mocked(startRecording).mockResolvedValue({
       sessionId: 'SES-RECORDER-TARGET',
+      transcriptSessionId: 'SES-RECORDER-TARGET',
       hasLoopback: false,
       stop: vi.fn(),
       onError: vi.fn(),

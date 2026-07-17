@@ -8,6 +8,7 @@
 
 import {
   type GatewayConfig,
+  GatewaySessionStartRejectedError,
   finishSession,
   newIdempotencyKey,
   sendChunk,
@@ -15,6 +16,14 @@ import {
 } from './gateway-client.js';
 
 export type SessionState = 'idle' | 'active' | 'finished';
+const START_MAX_ATTEMPTS = 2;
+
+export class AmbiguousGatewaySessionStartError extends Error {
+  constructor(error: unknown) {
+    super(error instanceof Error ? error.message : String(error));
+    this.name = 'AmbiguousGatewaySessionStartError';
+  }
+}
 
 export class ChunkSender {
   private seq = -1;
@@ -37,16 +46,39 @@ export class ChunkSender {
     return this.seq + 1;
   }
 
-  async start(meetingId: string, deviceId: string, language = 'tr'): Promise<string> {
+  async start(
+    meetingId: string,
+    deviceId: string,
+    language = 'tr',
+    idempotencyKey = newIdempotencyKey(),
+  ): Promise<string> {
     if (this.state === 'active') {
       throw new Error('session already active');
     }
-    const info = await startSession(
-      this.cfg,
-      await this.getJwt(),
-      { meetingId, deviceId, language },
-      newIdempotencyKey(),
-    );
+    const jwt = await this.getJwt();
+    let info: Awaited<ReturnType<typeof startSession>> | null = null;
+    for (let attempt = 1; attempt <= START_MAX_ATTEMPTS; attempt += 1) {
+      try {
+        info = await startSession(this.cfg, jwt, { meetingId, deviceId, language }, idempotencyKey);
+        break;
+      } catch (error) {
+        if (error instanceof GatewaySessionStartRejectedError) {
+          if (error.status !== 429 && error.status < 500) {
+            throw error;
+          }
+          if (attempt === START_MAX_ATTEMPTS) {
+            throw new AmbiguousGatewaySessionStartError(error);
+          }
+          continue;
+        }
+        if (attempt === START_MAX_ATTEMPTS) {
+          throw new AmbiguousGatewaySessionStartError(error);
+        }
+      }
+    }
+    if (!info) {
+      throw new Error('session start could not be confirmed');
+    }
     this.sessionId = info.sessionId;
     this.seq = -1;
     this.failed = null;
@@ -81,7 +113,7 @@ export class ChunkSender {
     return op;
   }
 
-  async finish(): Promise<void> {
+  async finish(idempotencyKey = newIdempotencyKey()): Promise<void> {
     await this.tail;
     if (this.failed) {
       throw this.failed;
@@ -89,7 +121,7 @@ export class ChunkSender {
     if (this.state !== 'active' || this.sessionId === null) {
       throw new Error('no active session');
     }
-    await finishSession(this.cfg, await this.getJwt(), this.sessionId, newIdempotencyKey());
+    await finishSession(this.cfg, await this.getJwt(), this.sessionId, idempotencyKey);
     this.state = 'finished';
   }
 }

@@ -222,7 +222,7 @@ export function bindMeetingIntelligenceTarget(
 
 export function markIntelligenceRecording(
   state: MeetingIntelligenceState,
-  args: { meetingId: string; sessionId: string },
+  args: { meetingId: string; sessionId: string | null },
 ): MeetingIntelligenceState {
   return {
     ...state,

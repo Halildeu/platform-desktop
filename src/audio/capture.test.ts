@@ -161,11 +161,16 @@ function installElectronApiMock(): void {
     },
     audio: {
       recorderConfig: vi.fn(),
+      reconcileLifecycle: vi.fn(),
       permissionStatus: vi.fn(),
       prepareCapture: vi.fn().mockResolvedValue({ ok: true, expiresAtMs: Date.now() + 1000 }),
       cancelCapture: vi.fn().mockResolvedValue({ ok: true }),
       consent: vi.fn(),
-      start: vi.fn().mockResolvedValue({ sessionId: 'SES-1', captureId: 'CAP-1' }),
+      start: vi.fn().mockResolvedValue({
+        sessionId: 'SES-1',
+        transcriptSessionId: '33333333-3333-4333-8333-333333333333',
+        captureId: 'CAP-1',
+      }),
       sendChunk: vi.fn(),
       finish: vi.fn().mockResolvedValue({ ok: true }),
       abort: vi.fn().mockResolvedValue({ ok: true }),
@@ -518,6 +523,25 @@ describe('startRecording', () => {
     expect(window.electronAPI?.audio.abort).not.toHaveBeenCalled();
   });
 
+  it('does not mask a preparation timeout with Direct-STT fallback', async () => {
+    installElectronApiMock();
+    setUserAgent('Mozilla/5.0 (Macintosh; Intel Mac OS X 15_5)');
+    installBrowserAudioMocks();
+    vi.stubGlobal('WebSocket', FakeWebSocket);
+    vi.mocked(window.electronAPI!.audio.prepareCapture).mockRejectedValueOnce(
+      new Error('Recorder izin hazırlığı zaman aşımına uğradı.'),
+    );
+
+    await expect(
+      startRecording('meeting-1', 'desktop-1', {
+        liveSttStreamUrl: 'ws://127.0.0.1:18220/ws/stream',
+      }),
+    ).rejects.toThrow('Recorder izin hazırlığı zaman aşımına uğradı.');
+
+    expect(window.electronAPI?.audio.start).not.toHaveBeenCalled();
+    expect(FakeWebSocket.instances).toHaveLength(0);
+  });
+
   it('does not use direct-only fallback for recorder contract errors', async () => {
     installElectronApiMock();
     setUserAgent('Mozilla/5.0 (Macintosh; Intel Mac OS X 15_5)');
@@ -536,5 +560,111 @@ describe('startRecording', () => {
     expect(micTrack.stop).toHaveBeenCalled();
     expect(FakeWebSocket.instances).toHaveLength(0);
     expect(window.electronAPI?.audio.cancelCapture).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not mask canonical lifecycle failure with Direct-STT fallback', async () => {
+    installElectronApiMock();
+    setUserAgent('Mozilla/5.0 (Macintosh; Intel Mac OS X 15_5)');
+    const { micTrack } = installBrowserAudioMocks();
+    vi.stubGlobal('WebSocket', FakeWebSocket);
+    vi.mocked(window.electronAPI!.audio.start).mockRejectedValueOnce(
+      new Error(
+        "Error invoking remote method 'audio:start': Error: syncRecordingLifecycle failed: 503 code=MEETING_UNAVAILABLE",
+      ),
+    );
+
+    await expect(
+      startRecording('meeting-1', 'desktop-1', {
+        liveSttStreamUrl: 'wss://stt.example.com/stream',
+      }),
+    ).rejects.toThrow('syncRecordingLifecycle failed');
+
+    expect(micTrack.stop).toHaveBeenCalled();
+    expect(FakeWebSocket.instances).toHaveLength(0);
+    expect(window.electronAPI?.audio.cancelCapture).toHaveBeenCalledTimes(1);
+  });
+
+  it('fails closed when consent persistence is unconfirmed', async () => {
+    installElectronApiMock();
+    setUserAgent('Mozilla/5.0 (Macintosh; Intel Mac OS X 15_5)');
+    const { micTrack } = installBrowserAudioMocks();
+    vi.stubGlobal('WebSocket', FakeWebSocket);
+    vi.mocked(window.electronAPI!.audio.start).mockRejectedValueOnce(
+      new Error('AUDIO_GATEWAY_CONSENT_UNCONFIRMED: recordConsent failed: 503 retryable=true'),
+    );
+
+    await expect(
+      startRecording('meeting-1', 'desktop-1', {
+        liveSttStreamUrl: 'wss://stt.example.com/stream',
+      }),
+    ).rejects.toThrow('AUDIO_GATEWAY_CONSENT_UNCONFIRMED');
+
+    expect(micTrack.stop).toHaveBeenCalled();
+    expect(FakeWebSocket.instances).toHaveLength(0);
+    expect(window.electronAPI?.audio.cancelCapture).toHaveBeenCalledTimes(1);
+  });
+
+  it('fails closed when gateway session creation is unconfirmed', async () => {
+    installElectronApiMock();
+    setUserAgent('Mozilla/5.0 (Macintosh; Intel Mac OS X 15_5)');
+    const { micTrack } = installBrowserAudioMocks();
+    vi.stubGlobal('WebSocket', FakeWebSocket);
+    vi.mocked(window.electronAPI!.audio.start).mockRejectedValueOnce(
+      new Error('AUDIO_GATEWAY_SESSION_START_UNCONFIRMED: startSession timed out after 15000ms'),
+    );
+
+    await expect(
+      startRecording('meeting-1', 'desktop-1', {
+        liveSttStreamUrl: 'wss://stt.example.com/stream',
+      }),
+    ).rejects.toThrow('AUDIO_GATEWAY_SESSION_START_UNCONFIRMED');
+
+    expect(micTrack.stop).toHaveBeenCalled();
+    expect(FakeWebSocket.instances).toHaveLength(0);
+    expect(window.electronAPI?.audio.cancelCapture).toHaveBeenCalledTimes(1);
+  });
+
+  it('fails closed when audio:start times out after a potentially ambiguous mutation', async () => {
+    vi.useFakeTimers();
+    try {
+      installElectronApiMock();
+      setUserAgent('Mozilla/5.0 (Macintosh; Intel Mac OS X 15_5)');
+      const { micTrack } = installBrowserAudioMocks();
+      vi.stubGlobal('WebSocket', FakeWebSocket);
+      let resolveStart: (session: {
+        sessionId: string;
+        transcriptSessionId: string;
+        captureId: string;
+      }) => void = () => undefined;
+      vi.mocked(window.electronAPI!.audio.start).mockReturnValueOnce(
+        new Promise((resolve) => {
+          resolveStart = resolve;
+        }),
+      );
+
+      const recording = startRecording('meeting-1', 'desktop-1', {
+        liveSttStreamUrl: 'wss://stt.example.com/stream',
+      });
+      const rejection = expect(recording).rejects.toThrow(
+        'Audio gateway oturumu zaman aşımına uğradı.',
+      );
+      await vi.advanceTimersByTimeAsync(60_000);
+
+      await rejection;
+      expect(micTrack.stop).toHaveBeenCalled();
+      expect(FakeWebSocket.instances).toHaveLength(0);
+      expect(window.electronAPI?.audio.cancelCapture).toHaveBeenCalledTimes(1);
+
+      resolveStart({
+        sessionId: 'SES-LATE',
+        transcriptSessionId: '33333333-3333-4333-8333-333333333333',
+        captureId: 'CAP-LATE',
+      });
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(window.electronAPI?.audio.abort).toHaveBeenCalledWith('CAP-LATE');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
