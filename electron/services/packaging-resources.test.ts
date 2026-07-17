@@ -28,6 +28,11 @@ interface PlatformDesktopPackage {
       syncDesktopName?: boolean;
       target?: string[];
     };
+    rpm?: {
+      afterInstall?: string;
+      afterRemove?: string;
+      fpm?: string[];
+    };
     mac?: {
       extendInfo?: Record<string, string>;
     };
@@ -45,6 +50,14 @@ function readLinuxPackageWorkflow(): string {
     new URL('../../.github/workflows/package-linux.yml', import.meta.url),
     'utf8',
   );
+}
+
+function readLinuxRpmAfterInstall(): string {
+  return readFileSync(new URL('../../build/linux-rpm-install-state.sh', import.meta.url), 'utf8');
+}
+
+function readLinuxRpmAfterRemove(): string {
+  return readFileSync(new URL('../../build/linux-rpm-after-remove.tpl', import.meta.url), 'utf8');
 }
 
 function readElectronMain(): string {
@@ -94,6 +107,26 @@ describe('packaged runtime resources', () => {
     });
     expect(packageJson.dependencies?.['electron-updater']).toBe('^6.8.9');
     expect(packageJson.devDependencies?.['electron-updater']).toBeUndefined();
+    expect(packageJson.build?.rpm?.afterInstall).toBe('build/linux-rpm-install-state.sh');
+    expect(packageJson.build?.rpm?.afterRemove).toBe('build/linux-rpm-after-remove.tpl');
+    expect(packageJson.build?.rpm?.fpm).toEqual([
+      '--rpm-posttrans=build/linux-rpm-install-state.sh',
+    ]);
+
+    const rpmAfterInstall = readLinuxRpmAfterInstall();
+    expect(rpmAfterInstall).toContain('#!/bin/sh');
+    expect(rpmAfterInstall).toContain(
+      'if ! { [ -L /proc/self/ns/user ] && unshare --user true; }; then',
+    );
+    expect(rpmAfterInstall).not.toContain('[[');
+
+    const rpmAfterRemove = readLinuxRpmAfterRemove();
+    expect(rpmAfterRemove).toContain('#!/bin/sh');
+    expect(rpmAfterRemove).toContain('if [ "${1:-0}" -gt 0 ]; then');
+    expect(rpmAfterRemove).toContain(
+      "[ \"$(readlink '/usr/bin/${executable}')\" = '/opt/${sanitizedProductName}/${executable}' ]",
+    );
+    expect(rpmAfterRemove).not.toContain('[[');
   });
 
   it('gates Linux releases on package installation and application startup', () => {
@@ -110,6 +143,11 @@ describe('packaged runtime resources', () => {
     expect(workflow).toContain('smoke-linux-x64:');
     expect(workflow).toContain('Verify packaged runtime dependencies');
     expect(workflow).toContain("grep -Fx '/node_modules/electron-updater/package.json'");
+    expect(workflow).toContain('Verify RPM scriptlets are POSIX-compatible');
+    expect(workflow).toContain('rpm -qp --scripts "${rpms[0]}"');
+    expect(workflow).toContain("if grep -Fq '[['");
+    expect(workflow).toContain('if [ \\"\\${1:-0}\\" -gt 0 ]; then');
+    expect(workflow).toContain('posttrans scriptlet (using /bin/sh)');
     expect(workflow).toContain('desktop-file-utils xvfb rpm "./${packages[0]}"');
     expect(workflow).not.toContain('desktop-file-utils xvfb rpm "${packages[0]}"');
     expect(workflow).toContain('Exec="/opt/Meeting Intelligence/platform-desktop" %U');
@@ -122,7 +160,17 @@ describe('packaged runtime resources', () => {
     );
     expect(workflow).toContain('sudo dpkg --remove platform-desktop');
     expect(workflow).toContain('sudo rpm --install --nodeps "${rpms[0]}"');
+    expect(workflow).toContain('Version: 0.1.2');
+    expect(workflow).toContain('Reproduces the unconditional legacy postun');
+    expect(workflow).toContain('sudo rpm --upgrade --nodeps "${rpms[0]}"');
     expect(workflow).toContain('rpm -q platform-desktop');
+    expect(workflow).toContain("grep -Fx 'Value: /opt/Meeting Intelligence/platform-desktop'");
+    expect(workflow).toContain('sudo rpm --erase platform-desktop');
+    expect(workflow).toContain('RPM package remained installed after upgrade-path erase');
+    expect(workflow).toContain("echo '::error::RPM package remained installed after erase'");
+    expect(workflow).toContain('test ! -e /usr/bin/platform-desktop');
+    expect(workflow).toContain('test ! -L /usr/bin/platform-desktop');
+    expect(workflow).toContain('test ! -e /etc/apparmor.d/platform-desktop');
     expect(workflow).toContain('sudo update-desktop-database /usr/share/applications');
     expect(workflow).not.toContain('rpm2cpio "../${rpms[0]}"');
     expect(workflow).not.toContain('mkdir rpm-root');
@@ -142,7 +190,10 @@ describe('packaged runtime resources', () => {
     expect(workflow).not.toContain('APPIMAGE_EXTRACT_AND_RUN=1');
     expect(workflow).not.toContain('--appimage-extract-and-run');
     expect(workflow).toContain(
-      "assert_renderer_ready rpm '/opt/Meeting Intelligence/platform-desktop'",
+      "assert_renderer_ready rpm-upgrade '/opt/Meeting Intelligence/platform-desktop'",
+    );
+    expect(workflow).toContain(
+      "assert_renderer_ready rpm-install '/opt/Meeting Intelligence/platform-desktop'",
     );
     expect(workflow).toContain('application exited during renderer stability check');
     expect(workflow).toContain('kill -TERM -- "-$process_group"');
@@ -206,7 +257,7 @@ describe('packaged runtime resources', () => {
       rpmExactMime,
     );
     const rpmReady = workflow.indexOf(
-      "assert_renderer_ready rpm '/opt/Meeting Intelligence/platform-desktop'",
+      "assert_renderer_ready rpm-install '/opt/Meeting Intelligence/platform-desktop'",
       rpmGioRegistration,
     );
     expect(rpmSmokeStart).toBeGreaterThan(-1);

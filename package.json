@@ -134,6 +134,13 @@
         }
       }
     },
+    "rpm": {
+      "afterInstall": "build/linux-rpm-install-state.sh",
+      "afterRemove": "build/linux-rpm-after-remove.tpl",
+      "fpm": [
+        "--rpm-posttrans=build/linux-rpm-install-state.sh"
+      ]
+    },
     "publish": {
       "provider": "github",
       "owner": "Halildeu",
