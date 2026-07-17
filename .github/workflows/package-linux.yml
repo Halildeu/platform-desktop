@@ -341,13 +341,13 @@ jobs:
           legacy_rpm=$(find "$legacy_topdir/RPMS" -type f -name '*.rpm' -print -quit)
           test -n "$legacy_rpm"
           sudo rpm --install --nodeps "$legacy_rpm"
-          rpm -q --queryformat '%{VERSION}\n' platform-desktop | grep -Fx '0.1.2'
+          sudo rpm -q --queryformat '%{VERSION}\n' platform-desktop | grep -Fx '0.1.2'
 
           expected_rpm_version=$(rpm -qp --queryformat '%{VERSION}\n' "${rpms[0]}")
           sudo rpm --upgrade --nodeps "${rpms[0]}"
-          rpm -q --queryformat '%{VERSION}\n' platform-desktop \
+          sudo rpm -q --queryformat '%{VERSION}\n' platform-desktop \
             | grep -Fx "$expected_rpm_version"
-          rpm -q platform-desktop
+          sudo rpm -q platform-desktop
           test -x '/opt/Meeting Intelligence/platform-desktop'
           update-alternatives --query platform-desktop \
             | grep -Fx 'Value: /opt/Meeting Intelligence/platform-desktop'
@@ -360,7 +360,7 @@ jobs:
           assert_renderer_ready rpm-upgrade '/opt/Meeting Intelligence/platform-desktop'
 
           sudo rpm --erase platform-desktop
-          if rpm -q platform-desktop; then
+          if sudo rpm -q platform-desktop; then
             echo '::error::RPM package remained installed after upgrade-path erase'
             exit 1
           fi
@@ -370,7 +370,7 @@ jobs:
           test ! -e /etc/apparmor.d/platform-desktop
 
           sudo rpm --install --nodeps "${rpms[0]}"
-          rpm -q platform-desktop
+          sudo rpm -q platform-desktop
           test -x '/opt/Meeting Intelligence/platform-desktop'
           update-alternatives --query platform-desktop \
             | grep -Fx 'Value: /opt/Meeting Intelligence/platform-desktop'
@@ -391,7 +391,7 @@ jobs:
           assert_renderer_ready rpm-install '/opt/Meeting Intelligence/platform-desktop'
 
           sudo rpm --erase platform-desktop
-          if rpm -q platform-desktop; then
+          if sudo rpm -q platform-desktop; then
             echo '::error::RPM package remained installed after erase'
             exit 1
           fi

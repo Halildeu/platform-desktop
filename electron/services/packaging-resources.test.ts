@@ -163,7 +163,11 @@ describe('packaged runtime resources', () => {
     expect(workflow).toContain('Version: 0.1.2');
     expect(workflow).toContain('Reproduces the unconditional legacy postun');
     expect(workflow).toContain('sudo rpm --upgrade --nodeps "${rpms[0]}"');
-    expect(workflow).toContain('rpm -q platform-desktop');
+    expect(workflow).toContain(
+      "sudo rpm -q --queryformat '%{VERSION}\\n' platform-desktop | grep -Fx '0.1.2'",
+    );
+    expect(workflow).toContain('sudo rpm -q platform-desktop');
+    expect(workflow).not.toMatch(/^\s+rpm -q(?:\s|$)/m);
     expect(workflow).toContain("grep -Fx 'Value: /opt/Meeting Intelligence/platform-desktop'");
     expect(workflow).toContain('sudo rpm --erase platform-desktop');
     expect(workflow).toContain('RPM package remained installed after upgrade-path erase');
