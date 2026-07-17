@@ -72,8 +72,20 @@ export const CANONICAL_RESULT_POLL_DELAYS_MS = [
 ] as const;
 export const CANONICAL_RESULT_FOLLOW_UP_TIMEOUT_MS = 300_000;
 export const CANONICAL_RESULT_REQUEST_TIMEOUT_MS = 25_000;
+export const CANONICAL_RESULT_DURABLE_RETRY_BASE_DELAY_MS = 60_000;
+export const CANONICAL_RESULT_DURABLE_RETRY_MAX_DELAY_MS = 15 * 60_000;
+export const CANONICAL_RESULT_DURABLE_RETRY_JITTER_RATIO = 0.2;
 const LIFECYCLE_RECONCILIATION_MAX_ATTEMPTS = 6;
 const LIFECYCLE_RECONCILIATION_BASE_DELAY_MS = 1_000;
+
+type CanonicalResultRetryReason = 'disabled' | 'not_ready' | 'recoverable_error';
+
+interface CanonicalResultLoadOptions {
+  pollUntilReady?: boolean;
+  previousAnalysisRunId?: string | null;
+  generatedNotBeforeMs?: number | null;
+  resetDurableBackoff?: boolean;
+}
 
 interface RecorderRuntimeConfig {
   meetingId: string | null;
@@ -211,26 +223,115 @@ async function startRecordingWithTimeout(
   }
 }
 
+function canonicalResultAbortError(): Error {
+  return Object.assign(new Error('Canonical result read cancelled'), { name: 'AbortError' });
+}
+
+function isCanonicalResultAbortError(error: unknown): boolean {
+  return error instanceof Error && error.name === 'AbortError';
+}
+
+function waitForCanonicalResultDelay(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    if (signal.aborted) {
+      reject(canonicalResultAbortError());
+      return;
+    }
+    const timeoutId = window.setTimeout(() => {
+      signal.removeEventListener('abort', handleAbort);
+      resolve();
+    }, ms);
+    const handleAbort = (): void => {
+      window.clearTimeout(timeoutId);
+      signal.removeEventListener('abort', handleAbort);
+      reject(canonicalResultAbortError());
+    };
+    signal.addEventListener('abort', handleAbort, { once: true });
+  });
+}
+
 function withCanonicalResultRequestTimeout<T>(
   operation: Promise<T>,
   timeoutMs: number,
+  signal: AbortSignal,
 ): Promise<T> {
   return new Promise<T>((resolve, reject) => {
+    if (signal.aborted) {
+      reject(canonicalResultAbortError());
+      return;
+    }
+    let settled = false;
     const timeoutId = window.setTimeout(
-      () => reject(new Error('Kalıcı toplantı çıktısı isteği zaman aşımına uğradı')),
+      () => finish(() => reject(new Error('Kalıcı toplantı çıktısı isteği zaman aşımına uğradı'))),
       timeoutMs,
     );
+    const handleAbort = (): void => finish(() => reject(canonicalResultAbortError()));
+    const finish = (settle: () => void): void => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      window.clearTimeout(timeoutId);
+      signal.removeEventListener('abort', handleAbort);
+      settle();
+    };
+    signal.addEventListener('abort', handleAbort, { once: true });
     operation.then(
       (value) => {
-        window.clearTimeout(timeoutId);
-        resolve(value);
+        finish(() => resolve(value));
       },
       (error: unknown) => {
-        window.clearTimeout(timeoutId);
-        reject(error instanceof Error ? error : new Error(String(error)));
+        finish(() => reject(error instanceof Error ? error : new Error(String(error))));
       },
     );
   });
+}
+
+export function canonicalResultDurableRetryDelayMs(
+  attempt: number,
+  randomValue = Math.random(),
+): number {
+  const exponentialDelay = Math.min(
+    CANONICAL_RESULT_DURABLE_RETRY_MAX_DELAY_MS,
+    CANONICAL_RESULT_DURABLE_RETRY_BASE_DELAY_MS * 2 ** Math.max(0, attempt),
+  );
+  const boundedRandom = Math.min(1, Math.max(0, randomValue));
+  const jitterMultiplier =
+    1 -
+    CANONICAL_RESULT_DURABLE_RETRY_JITTER_RATIO +
+    boundedRandom * CANONICAL_RESULT_DURABLE_RETRY_JITTER_RATIO * 2;
+  return Math.round(exponentialDelay * jitterMultiplier);
+}
+
+function isRecoverableCanonicalResultError(error: unknown): boolean {
+  const message = (error instanceof Error ? error.message : String(error)).toLocaleLowerCase(
+    'tr-TR',
+  );
+  if (
+    /failed:\s*(401|403|400|404|405|409|410|415|422)\b/.test(message) ||
+    message.includes('retryable=false') ||
+    message.includes('forbidden') ||
+    message.includes('unauthorized') ||
+    message.includes('validation') ||
+    message.includes('invalid canonical') ||
+    message.includes('yanıt vermedi')
+  ) {
+    return false;
+  }
+  return (
+    /failed:\s*(408|425|429|5\d\d)\b/.test(message) ||
+    message.includes('retryable=true') ||
+    message.includes('network=') ||
+    message.includes('fetch failed') ||
+    message.includes('socket') ||
+    message.includes('bağlantı') ||
+    message.includes('baglanti') ||
+    message.includes('offline') ||
+    message.includes('çevrimdışı') ||
+    message.includes('cevrimdisi') ||
+    message.includes('zaman aşım') ||
+    message.includes('timeout')
+  );
 }
 
 function transcriptStatusFromGateway(status: string): TranscriptSegmentStatus {
@@ -402,6 +503,15 @@ function App() {
   const [canonicalResultStatus, setCanonicalResultStatus] =
     useState<CanonicalResultLoadStatus>('idle');
   const [canonicalResultError, setCanonicalResultError] = useState<string | null>(null);
+  const [canonicalResultRetryReason, setCanonicalResultRetryReason] =
+    useState<CanonicalResultRetryReason>('disabled');
+  const [canonicalResultRetryGeneration, setCanonicalResultRetryGeneration] = useState(0);
+  const [canonicalNetworkOnline, setCanonicalNetworkOnline] = useState(
+    () => navigator.onLine !== false,
+  );
+  const [canonicalDocumentVisible, setCanonicalDocumentVisible] = useState(
+    () => document.visibilityState !== 'hidden',
+  );
   const [status, setStatus] = useState('');
   const [error, setError] = useState('');
   const [liveStreamActive, setLiveStreamActive] = useState(false);
@@ -424,6 +534,10 @@ function App() {
   const pendingLiveTranscriptEventsRef = useRef<LiveSttTranscriptEvent[]>([]);
   const recentMeetingsReadSequenceRef = useRef(0);
   const canonicalResultReadSequenceRef = useRef(0);
+  const canonicalResultAbortControllerRef = useRef<AbortController | null>(null);
+  const canonicalResultReadInFlightRef = useRef(false);
+  const canonicalResultDurableRetryTimerRef = useRef<number | null>(null);
+  const canonicalResultDurableRetryAttemptRef = useRef(0);
   const canonicalResultMeetingIdRef = useRef<string | null>(meetingIntelligence.meetingId);
   const meetingIntelligenceStatusRef = useRef(meetingIntelligence.status);
   const canonicalRunBeforeRecordingRef = useRef<{
@@ -434,32 +548,74 @@ function App() {
   canonicalResultMeetingIdRef.current = meetingIntelligence.meetingId;
   meetingIntelligenceStatusRef.current = meetingIntelligence.status;
 
+  const disableCanonicalDurableRetry = useCallback((): void => {
+    if (canonicalResultDurableRetryTimerRef.current !== null) {
+      window.clearTimeout(canonicalResultDurableRetryTimerRef.current);
+      canonicalResultDurableRetryTimerRef.current = null;
+    }
+    setCanonicalResultRetryReason('disabled');
+  }, []);
+
+  const enableCanonicalDurableRetry = useCallback(
+    (reason: Exclude<CanonicalResultRetryReason, 'disabled'>): void => {
+      setCanonicalResultRetryReason(reason);
+      setCanonicalResultRetryGeneration((current) => current + 1);
+    },
+    [],
+  );
+
+  const cancelCanonicalResultWork = useCallback((): void => {
+    canonicalResultReadSequenceRef.current += 1;
+    canonicalResultAbortControllerRef.current?.abort();
+    canonicalResultAbortControllerRef.current = null;
+    canonicalResultReadInFlightRef.current = false;
+    disableCanonicalDurableRetry();
+  }, [disableCanonicalDurableRetry]);
+
   const loadCanonicalMeetingResult = useCallback(
-    async (
-      meetingId: string,
-      pollUntilReady = false,
-      previousAnalysisRunId: string | null = null,
-      generatedNotBeforeMs: number | null = null,
-    ): Promise<void> => {
+    async (meetingId: string, options: CanonicalResultLoadOptions = {}): Promise<void> => {
+      const {
+        pollUntilReady = false,
+        previousAnalysisRunId = null,
+        generatedNotBeforeMs = null,
+        resetDurableBackoff = true,
+      } = options;
+      canonicalResultAbortControllerRef.current?.abort();
+      disableCanonicalDurableRetry();
+      const abortController = new AbortController();
+      canonicalResultAbortControllerRef.current = abortController;
+      canonicalResultReadInFlightRef.current = true;
       const readSequence = canonicalResultReadSequenceRef.current + 1;
       canonicalResultReadSequenceRef.current = readSequence;
+      if (resetDurableBackoff) {
+        canonicalResultDurableRetryAttemptRef.current = 0;
+      }
       setCanonicalResultStatus('loading');
       setCanonicalResultError(null);
 
       const delays = pollUntilReady ? CANONICAL_RESULT_POLL_DELAYS_MS : ([0] as const);
       const followUpDeadlineMs = Date.now() + CANONICAL_RESULT_FOLLOW_UP_TIMEOUT_MS;
+      let sawNotReady = false;
+      let lastRecoverableError: unknown = null;
       try {
+        if (navigator.onLine === false) {
+          throw new Error('Cihaz çevrimdışı; kalıcı toplantı çıktısı ağ geri gelince yenilenecek');
+        }
         for (const delayMs of delays) {
           if (delayMs > 0) {
             const remainingBeforeDelayMs = followUpDeadlineMs - Date.now();
             if (remainingBeforeDelayMs <= 0) {
               break;
             }
-            await new Promise<void>((resolve) => {
-              window.setTimeout(resolve, Math.min(delayMs, remainingBeforeDelayMs));
-            });
+            await waitForCanonicalResultDelay(
+              Math.min(delayMs, remainingBeforeDelayMs),
+              abortController.signal,
+            );
           }
-          if (canonicalResultReadSequenceRef.current !== readSequence) {
+          if (
+            abortController.signal.aborted ||
+            canonicalResultReadSequenceRef.current !== readSequence
+          ) {
             return;
           }
 
@@ -477,12 +633,19 @@ function App() {
             : CANONICAL_RESULT_REQUEST_TIMEOUT_MS;
           let outcome: MeetingIntelligenceReadOutcome;
           try {
-            outcome = await withCanonicalResultRequestTimeout(resultRead, requestTimeoutMs);
+            outcome = await withCanonicalResultRequestTimeout(
+              resultRead,
+              requestTimeoutMs,
+              abortController.signal,
+            );
           } catch (readError) {
-            if (!pollUntilReady) {
+            if (isCanonicalResultAbortError(readError)) {
+              return;
+            }
+            if (!pollUntilReady || !isRecoverableCanonicalResultError(readError)) {
               throw readError;
             }
-            setCanonicalResultStatus('not_ready');
+            lastRecoverableError = readError;
             continue;
           }
           if (!outcome) {
@@ -496,7 +659,7 @@ function App() {
                 generatedNotBeforeMs,
               )
             ) {
-              setCanonicalResultStatus('not_ready');
+              sawNotReady = true;
               continue;
             }
             const result = meetingIntelligenceResultFromCanonicalResponse(outcome.result);
@@ -513,19 +676,27 @@ function App() {
               return setMeetingIntelligenceResult(current, result);
             });
             canonicalRunBeforeRecordingRef.current = null;
+            canonicalResultDurableRetryAttemptRef.current = 0;
             setCanonicalResultStatus('ready');
             return;
           }
-          setCanonicalResultStatus('not_ready');
+          sawNotReady = true;
         }
 
         if (
           canonicalResultReadSequenceRef.current === readSequence &&
           canonicalResultMeetingIdRef.current === meetingId
         ) {
+          if (!sawNotReady && lastRecoverableError) {
+            throw lastRecoverableError;
+          }
           setCanonicalResultStatus('not_ready');
+          enableCanonicalDurableRetry('not_ready');
         }
       } catch (readError) {
+        if (isCanonicalResultAbortError(readError)) {
+          return;
+        }
         if (
           canonicalResultReadSequenceRef.current !== readSequence ||
           canonicalResultMeetingIdRef.current !== meetingId
@@ -535,9 +706,17 @@ function App() {
         const message = readError instanceof Error ? readError.message : String(readError);
         setCanonicalResultStatus('error');
         setCanonicalResultError(`Kalıcı toplantı çıktısı alınamadı: ${message}`);
+        if (isRecoverableCanonicalResultError(readError)) {
+          enableCanonicalDurableRetry('recoverable_error');
+        }
+      } finally {
+        if (canonicalResultAbortControllerRef.current === abortController) {
+          canonicalResultAbortControllerRef.current = null;
+          canonicalResultReadInFlightRef.current = false;
+        }
       }
     },
-    [],
+    [disableCanonicalDurableRetry, enableCanonicalDurableRetry],
   );
 
   const loadRecentMeetings = useCallback(
@@ -590,24 +769,144 @@ function App() {
       !loggedIn ||
       !meetingIntelligence.meetingId ||
       recording ||
-      meetingIntelligenceStatusRef.current === 'recording' ||
-      meetingIntelligenceStatusRef.current === 'waiting'
+      meetingIntelligenceStatusRef.current === 'recording'
     ) {
-      canonicalResultReadSequenceRef.current += 1;
+      cancelCanonicalResultWork();
       setCanonicalResultStatus('idle');
       setCanonicalResultError(null);
       return;
     }
-    void loadCanonicalMeetingResult(meetingIntelligence.meetingId);
-  }, [loadCanonicalMeetingResult, loggedIn, meetingIntelligence.meetingId, recording]);
+    const recordingBaseline =
+      canonicalRunBeforeRecordingRef.current?.meetingId === meetingIntelligence.meetingId
+        ? canonicalRunBeforeRecordingRef.current
+        : null;
+    void loadCanonicalMeetingResult(meetingIntelligence.meetingId, {
+      previousAnalysisRunId: recordingBaseline?.analysisRunId ?? null,
+      generatedNotBeforeMs: recordingBaseline?.recordingStartedAtMs ?? null,
+    });
+  }, [
+    cancelCanonicalResultWork,
+    loadCanonicalMeetingResult,
+    loggedIn,
+    meetingIntelligence.meetingId,
+    recording,
+  ]);
 
   useEffect(() => {
     canonicalRunBeforeRecordingRef.current = null;
   }, [meetingIntelligence.meetingId]);
 
+  const revalidateCanonicalMeetingResult = useCallback((): void => {
+    const meetingId = canonicalResultMeetingIdRef.current;
+    if (
+      !loggedIn ||
+      !meetingId ||
+      recording ||
+      canonicalResultReadInFlightRef.current ||
+      meetingIntelligenceStatusRef.current === 'recording' ||
+      navigator.onLine === false ||
+      document.visibilityState === 'hidden'
+    ) {
+      return;
+    }
+    const recordingBaseline =
+      canonicalRunBeforeRecordingRef.current?.meetingId === meetingId
+        ? canonicalRunBeforeRecordingRef.current
+        : null;
+    void loadCanonicalMeetingResult(meetingId, {
+      previousAnalysisRunId: recordingBaseline?.analysisRunId ?? null,
+      generatedNotBeforeMs: recordingBaseline?.recordingStartedAtMs ?? null,
+      resetDurableBackoff: true,
+    });
+  }, [loadCanonicalMeetingResult, loggedIn, recording]);
+
+  useEffect(() => {
+    const handleOnline = (): void => {
+      setCanonicalNetworkOnline(true);
+      revalidateCanonicalMeetingResult();
+    };
+    const handleOffline = (): void => {
+      setCanonicalNetworkOnline(false);
+    };
+    const handleVisibilityChange = (): void => {
+      const visible = document.visibilityState !== 'hidden';
+      setCanonicalDocumentVisible(visible);
+      if (visible) {
+        revalidateCanonicalMeetingResult();
+      }
+    };
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, [revalidateCanonicalMeetingResult]);
+
+  useEffect(() => {
+    if (
+      canonicalResultRetryReason === 'disabled' ||
+      !canonicalNetworkOnline ||
+      !canonicalDocumentVisible ||
+      !loggedIn ||
+      !meetingIntelligence.meetingId ||
+      recording ||
+      meetingIntelligenceStatusRef.current === 'recording'
+    ) {
+      if (canonicalResultDurableRetryTimerRef.current !== null) {
+        window.clearTimeout(canonicalResultDurableRetryTimerRef.current);
+        canonicalResultDurableRetryTimerRef.current = null;
+      }
+      return;
+    }
+
+    const meetingId = meetingIntelligence.meetingId;
+    const recordingBaseline =
+      canonicalRunBeforeRecordingRef.current?.meetingId === meetingId
+        ? canonicalRunBeforeRecordingRef.current
+        : null;
+    const retryDelayMs = canonicalResultDurableRetryDelayMs(
+      canonicalResultDurableRetryAttemptRef.current,
+    );
+    canonicalResultDurableRetryAttemptRef.current += 1;
+    canonicalResultDurableRetryTimerRef.current = window.setTimeout(() => {
+      canonicalResultDurableRetryTimerRef.current = null;
+      void loadCanonicalMeetingResult(meetingId, {
+        previousAnalysisRunId: recordingBaseline?.analysisRunId ?? null,
+        generatedNotBeforeMs: recordingBaseline?.recordingStartedAtMs ?? null,
+        resetDurableBackoff: false,
+      });
+    }, retryDelayMs);
+
+    return () => {
+      if (canonicalResultDurableRetryTimerRef.current !== null) {
+        window.clearTimeout(canonicalResultDurableRetryTimerRef.current);
+        canonicalResultDurableRetryTimerRef.current = null;
+      }
+    };
+  }, [
+    canonicalDocumentVisible,
+    canonicalNetworkOnline,
+    canonicalResultRetryGeneration,
+    canonicalResultRetryReason,
+    loadCanonicalMeetingResult,
+    loggedIn,
+    meetingIntelligence.meetingId,
+    recording,
+  ]);
+
   useEffect(
     () => () => {
       canonicalResultReadSequenceRef.current += 1;
+      canonicalResultAbortControllerRef.current?.abort();
+      canonicalResultAbortControllerRef.current = null;
+      canonicalResultReadInFlightRef.current = false;
+      if (canonicalResultDurableRetryTimerRef.current !== null) {
+        window.clearTimeout(canonicalResultDurableRetryTimerRef.current);
+        canonicalResultDurableRetryTimerRef.current = null;
+      }
     },
     [],
   );
@@ -845,6 +1144,7 @@ function App() {
   };
 
   const handleMeetingResultSelect = (meetingId: string): void => {
+    cancelCanonicalResultWork();
     canonicalRunBeforeRecordingRef.current = null;
     setCanonicalResultError(null);
     setMeetingIntelligence((current) => bindMeetingIntelligenceTarget(current, { meetingId }));
@@ -882,6 +1182,7 @@ function App() {
 
   const handleLogout = async (): Promise<void> => {
     setError('');
+    cancelCanonicalResultWork();
     try {
       const s = await window.electronAPI?.auth.logout();
       setLoggedIn(s?.loggedIn ?? false);
@@ -902,7 +1203,6 @@ function App() {
       setRecentMeetingsStatus('idle');
       setRecentMeetingsError(null);
       canonicalRunBeforeRecordingRef.current = null;
-      canonicalResultReadSequenceRef.current += 1;
       setCanonicalResultStatus('idle');
       setCanonicalResultError(null);
       setStatus('Çıkış yapıldı; Keycloak logout/revoke isteği gönderildi.');
@@ -950,6 +1250,7 @@ function App() {
   const handleStart = async (): Promise<void> => {
     setError('');
     setStartPending(true);
+    cancelCanonicalResultWork();
     try {
       if (!recorderConfig?.ready || !recorderConfig.meetingId) {
         throw new Error(recorderConfig?.reason ?? MEETING_ID_MISSING_MESSAGE);
@@ -1464,43 +1765,46 @@ function App() {
               autoSubmitMeetingAi={meetingIntelligence.status === 'waiting'}
               canonicalResultStatus={canonicalResultStatus}
               canonicalResultError={canonicalResultError}
+              canonicalResultAutoRetrying={canonicalResultRetryReason !== 'disabled'}
               onCanonicalResultRetry={
                 meetingIntelligence.meetingId
                   ? () =>
-                      void loadCanonicalMeetingResult(
-                        meetingIntelligence.meetingId!,
-                        true,
-                        canonicalAnalysisRunBaseline(
+                      void loadCanonicalMeetingResult(meetingIntelligence.meetingId!, {
+                        pollUntilReady: true,
+                        previousAnalysisRunId: canonicalAnalysisRunBaseline(
                           meetingIntelligence.result?.analysisRunId ?? null,
                           canonicalRunBeforeRecordingRef.current?.meetingId ===
                             meetingIntelligence.meetingId
                             ? canonicalRunBeforeRecordingRef.current.analysisRunId
                             : null,
                         ),
-                        canonicalRunBeforeRecordingRef.current?.meetingId ===
+                        generatedNotBeforeMs:
+                          canonicalRunBeforeRecordingRef.current?.meetingId ===
                           meetingIntelligence.meetingId
-                          ? canonicalRunBeforeRecordingRef.current.recordingStartedAtMs
-                          : null,
-                      )
+                            ? canonicalRunBeforeRecordingRef.current.recordingStartedAtMs
+                            : null,
+                        resetDurableBackoff: true,
+                      })
                   : undefined
               }
               onMeetingAiSubmitted={() => {
                 if (meetingIntelligence.meetingId) {
-                  void loadCanonicalMeetingResult(
-                    meetingIntelligence.meetingId,
-                    true,
-                    canonicalAnalysisRunBaseline(
+                  void loadCanonicalMeetingResult(meetingIntelligence.meetingId, {
+                    pollUntilReady: true,
+                    previousAnalysisRunId: canonicalAnalysisRunBaseline(
                       meetingIntelligence.result?.analysisRunId ?? null,
                       canonicalRunBeforeRecordingRef.current?.meetingId ===
                         meetingIntelligence.meetingId
                         ? canonicalRunBeforeRecordingRef.current.analysisRunId
                         : null,
                     ),
-                    canonicalRunBeforeRecordingRef.current?.meetingId ===
+                    generatedNotBeforeMs:
+                      canonicalRunBeforeRecordingRef.current?.meetingId ===
                       meetingIntelligence.meetingId
-                      ? canonicalRunBeforeRecordingRef.current.recordingStartedAtMs
-                      : null,
-                  );
+                        ? canonicalRunBeforeRecordingRef.current.recordingStartedAtMs
+                        : null,
+                    resetDurableBackoff: true,
+                  });
                 }
               }}
               onMeetingAiError={(message) =>

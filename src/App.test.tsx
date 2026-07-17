@@ -27,10 +27,13 @@ vi.mock('./audio/live-stt-preflight', async (importOriginal) => {
 
 import { startRecording, testAudioCaptureWorklet } from './audio/capture';
 import { testLiveSttStreamConnection } from './audio/live-stt-preflight';
+import type { MeetingIntelligenceReadOutcome } from '../electron/services/meeting/meeting-client';
 import App, {
+  CANONICAL_RESULT_DURABLE_RETRY_BASE_DELAY_MS,
   CANONICAL_RESULT_FOLLOW_UP_TIMEOUT_MS,
   CANONICAL_RESULT_POLL_DELAYS_MS,
   CANONICAL_RESULT_REQUEST_TIMEOUT_MS,
+  canonicalResultDurableRetryDelayMs,
 } from './App';
 
 interface TestTranscriptGatewayEvent {
@@ -64,19 +67,29 @@ let trayResumeHandler: (() => void) | null = null;
 
 const CANONICAL_MEETING_ID = '33333333-3333-4333-8333-333333333333';
 
-function canonicalMeetingResult() {
+function canonicalMeetingResult(
+  overrides: Partial<{
+    meetingId: string;
+    analysisRunId: string;
+    summary: string;
+    generatedAt: string;
+  }> = {},
+) {
+  const meetingId = overrides.meetingId ?? CANONICAL_MEETING_ID;
+  const analysisRunId = overrides.analysisRunId ?? '55555555-5555-4555-8555-555555555555';
+  const summary = overrides.summary ?? 'Kalıcı toplantı özeti yüklendi.';
   return {
-    analysisRunId: '55555555-5555-4555-8555-555555555555',
-    meetingId: CANONICAL_MEETING_ID,
+    analysisRunId,
+    meetingId,
     sessionId: 'SES-CANONICAL',
     schema_version: '5-adr0043',
     model: 'qwen',
     backend: 'ollama',
-    summary: 'Kalıcı toplantı özeti yüklendi.',
+    summary,
     summaryGroundingStatus: 'verified',
     summary_citations: [
       {
-        claim: 'Kalıcı toplantı özeti yüklendi.',
+        claim: summary,
         source_index: 0,
         start_sec: 1,
         source_hash: 'a'.repeat(64),
@@ -94,7 +107,7 @@ function canonicalMeetingResult() {
         quote_hash: 'd'.repeat(64),
       },
     ],
-    generatedAt: '2026-07-11T20:00:00.000Z',
+    generatedAt: overrides.generatedAt ?? '2026-07-11T20:00:00.000Z',
     persisted: true as const,
     storageMode: 'canonical' as const,
   };
@@ -173,7 +186,7 @@ function installElectronApiMock(recorderConfig: {
         liveSttStreamReason: null,
         ...recorderConfig,
       }),
-      reconcileLifecycle: vi.fn().mockResolvedValue({ ok: true }),
+      reconcileLifecycle: vi.fn().mockResolvedValue({ ok: true, processed: 0, remaining: 0 }),
       permissionStatus: vi.fn(),
       prepareCapture: vi.fn(),
       cancelCapture: vi.fn(),
@@ -1181,6 +1194,335 @@ describe('App canonical Meeting Intelligence read', () => {
     expect(CANONICAL_RESULT_FOLLOW_UP_TIMEOUT_MS).toBe(300_000);
   });
 
+  it('uses bounded jittered exponential delay for durable revalidation', () => {
+    expect(canonicalResultDurableRetryDelayMs(0, 0.5)).toBe(
+      CANONICAL_RESULT_DURABLE_RETRY_BASE_DELAY_MS,
+    );
+    expect(canonicalResultDurableRetryDelayMs(1, 0.5)).toBe(
+      CANONICAL_RESULT_DURABLE_RETRY_BASE_DELAY_MS * 2,
+    );
+    expect(canonicalResultDurableRetryDelayMs(20, 0.5)).toBe(15 * 60_000);
+    expect(canonicalResultDurableRetryDelayMs(0, 0)).toBe(
+      CANONICAL_RESULT_DURABLE_RETRY_BASE_DELAY_MS * 0.8,
+    );
+    expect(canonicalResultDurableRetryDelayMs(0, 1)).toBe(
+      CANONICAL_RESULT_DURABLE_RETRY_BASE_DELAY_MS * 1.2,
+    );
+  });
+
+  it('recovers a canonical result after the bounded five-minute follow-up has expired', async () => {
+    installElectronApiMock({
+      meetingId: CANONICAL_MEETING_ID,
+      deviceId: 'desktop-1',
+      ready: true,
+      reason: null,
+    });
+    vi.useFakeTimers();
+    vi.spyOn(Math, 'random').mockReturnValue(0.5);
+    let readCount = 0;
+    vi.mocked(window.electronAPI!.meeting.getIntelligenceResult).mockImplementation(async () => {
+      readCount += 1;
+      return readCount >= 13
+        ? { status: 'ready', result: canonicalMeetingResult() }
+        : { status: 'not_ready' };
+    });
+
+    render(<App />);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(screen.getByText('Hazırlanıyor')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Sonucu yenile' }));
+    await act(async () => {
+      await Promise.resolve();
+      await vi.advanceTimersByTimeAsync(CANONICAL_RESULT_FOLLOW_UP_TIMEOUT_MS);
+    });
+
+    expect(screen.queryByText('Kalıcı toplantı özeti yüklendi.')).not.toBeInTheDocument();
+    expect(readCount).toBe(12);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(CANONICAL_RESULT_DURABLE_RETRY_BASE_DELAY_MS);
+    });
+
+    expect(screen.getByText('Kalıcı toplantı özeti yüklendi.')).toBeInTheDocument();
+    expect(readCount).toBe(13);
+  });
+
+  it('revalidates the selected meeting on remount and login', async () => {
+    installElectronApiMock({
+      meetingId: CANONICAL_MEETING_ID,
+      deviceId: 'desktop-1',
+      ready: true,
+      reason: null,
+    });
+    vi.mocked(window.electronAPI!.meeting.getIntelligenceResult)
+      .mockResolvedValueOnce({ status: 'not_ready' })
+      .mockResolvedValueOnce({ status: 'ready', result: canonicalMeetingResult() });
+
+    const firstMount = render(<App />);
+    expect(await screen.findByText('Hazırlanıyor')).toBeInTheDocument();
+    firstMount.unmount();
+
+    render(<App />);
+    expect(await screen.findByText('Kalıcı toplantı özeti yüklendi.')).toBeInTheDocument();
+    expect(window.electronAPI?.meeting.getIntelligenceResult).toHaveBeenCalledTimes(2);
+
+    cleanup();
+    vi.mocked(window.electronAPI!.auth.status).mockResolvedValue({
+      loggedIn: false,
+      claims: null,
+    });
+    vi.mocked(window.electronAPI!.auth.login).mockResolvedValue({ loggedIn: true, claims: null });
+    vi.mocked(window.electronAPI!.meeting.getIntelligenceResult)
+      .mockClear()
+      .mockResolvedValue({ status: 'ready', result: canonicalMeetingResult() });
+    render(<App />);
+    expect(await screen.findByRole('button', { name: 'Giriş' })).toBeInTheDocument();
+    expect(window.electronAPI?.meeting.getIntelligenceResult).not.toHaveBeenCalled();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Giriş' }));
+    expect(await screen.findByText('Kalıcı toplantı özeti yüklendi.')).toBeInTheDocument();
+    expect(window.electronAPI?.meeting.getIntelligenceResult).toHaveBeenCalledTimes(1);
+  });
+
+  it('revalidates immediately when the network comes back online', async () => {
+    let online = false;
+    vi.spyOn(window.navigator, 'onLine', 'get').mockImplementation(() => online);
+    installElectronApiMock({
+      meetingId: CANONICAL_MEETING_ID,
+      deviceId: 'desktop-1',
+      ready: true,
+      reason: null,
+    });
+    vi.mocked(window.electronAPI!.meeting.getIntelligenceResult).mockResolvedValue({
+      status: 'ready',
+      result: canonicalMeetingResult(),
+    });
+
+    render(<App />);
+    expect(await screen.findByRole('alert')).toHaveTextContent('Cihaz çevrimdışı');
+    expect(screen.getByText('Geçici bağlantı hatası')).toBeInTheDocument();
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'bağlantı ve pencere yeniden etkin olduğunda otomatik kontrol sürecek',
+    );
+    expect(window.electronAPI?.meeting.getIntelligenceResult).not.toHaveBeenCalled();
+
+    online = true;
+    act(() => window.dispatchEvent(new Event('online')));
+
+    expect(await screen.findByText('Kalıcı toplantı özeti yüklendi.')).toBeInTheDocument();
+    expect(window.electronAPI?.meeting.getIntelligenceResult).toHaveBeenCalledTimes(1);
+  });
+
+  it('revalidates immediately when the window becomes visible again', async () => {
+    let visibilityState: DocumentVisibilityState = 'visible';
+    vi.spyOn(document, 'visibilityState', 'get').mockImplementation(() => visibilityState);
+    installElectronApiMock({
+      meetingId: CANONICAL_MEETING_ID,
+      deviceId: 'desktop-1',
+      ready: true,
+      reason: null,
+    });
+    vi.mocked(window.electronAPI!.meeting.getIntelligenceResult)
+      .mockResolvedValueOnce({ status: 'not_ready' })
+      .mockResolvedValueOnce({ status: 'ready', result: canonicalMeetingResult() });
+
+    render(<App />);
+    expect(await screen.findByText('Hazırlanıyor')).toBeInTheDocument();
+    visibilityState = 'hidden';
+    act(() => document.dispatchEvent(new Event('visibilitychange')));
+    visibilityState = 'visible';
+    act(() => document.dispatchEvent(new Event('visibilitychange')));
+
+    expect(await screen.findByText('Kalıcı toplantı özeti yüklendi.')).toBeInTheDocument();
+    expect(window.electronAPI?.meeting.getIntelligenceResult).toHaveBeenCalledTimes(2);
+  });
+
+  it('lets the user refresh a not-ready canonical result immediately', async () => {
+    installElectronApiMock({
+      meetingId: CANONICAL_MEETING_ID,
+      deviceId: 'desktop-1',
+      ready: true,
+      reason: null,
+    });
+    vi.mocked(window.electronAPI!.meeting.getIntelligenceResult)
+      .mockResolvedValueOnce({ status: 'not_ready' })
+      .mockResolvedValueOnce({ status: 'ready', result: canonicalMeetingResult() });
+
+    render(<App />);
+    expect(await screen.findByText('Hazırlanıyor')).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'Sonucu yenile' }));
+
+    expect(await screen.findByText('Kalıcı toplantı özeti yüklendi.')).toBeInTheDocument();
+    expect(window.electronAPI?.meeting.getIntelligenceResult).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not auto-retry terminal authorization errors', async () => {
+    installElectronApiMock({
+      meetingId: CANONICAL_MEETING_ID,
+      deviceId: 'desktop-1',
+      ready: true,
+      reason: null,
+    });
+    vi.useFakeTimers();
+    vi.mocked(window.electronAPI!.meeting.getIntelligenceResult).mockRejectedValue(
+      new Error('readMeetingIntelligenceResult failed: 403 code=MEETING_FORBIDDEN retryable=false'),
+    );
+
+    render(<App />);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(screen.getByText('İstek hatası')).toBeInTheDocument();
+    expect(screen.getByRole('alert')).toHaveTextContent('otomatik yeniden denenmeyecek');
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60 * 60_000);
+    });
+    expect(window.electronAPI?.meeting.getIntelligenceResult).toHaveBeenCalledTimes(1);
+  });
+
+  it('cancels a stale canonical response when the user switches meetings', async () => {
+    const firstMeetingId = '22222222-2222-4222-8222-222222222222';
+    const selectedMeetingResult = canonicalMeetingResult({
+      meetingId: CANONICAL_MEETING_ID,
+      summary: 'Seçilen toplantının kalıcı sonucu.',
+    });
+    installElectronApiMock({
+      meetingId: firstMeetingId,
+      deviceId: 'desktop-1',
+      ready: true,
+      reason: null,
+    });
+    vi.mocked(window.electronAPI!.meeting.listRecent).mockResolvedValue({
+      meetings: [
+        recentMeeting(firstMeetingId, 'İlk toplantı'),
+        recentMeeting(CANONICAL_MEETING_ID, 'Seçilen toplantı'),
+      ],
+      page: 0,
+      size: 20,
+      totalElements: 2,
+      totalPages: 1,
+    });
+    let resolveFirstMeeting: (outcome: MeetingIntelligenceReadOutcome) => void = () => undefined;
+    const firstMeetingRead = new Promise<MeetingIntelligenceReadOutcome>((resolve) => {
+      resolveFirstMeeting = resolve;
+    });
+    vi.mocked(window.electronAPI!.meeting.getIntelligenceResult).mockImplementation(
+      async ({ meetingId }) => {
+        if (meetingId === firstMeetingId) {
+          return firstMeetingRead;
+        }
+        return { status: 'ready', result: selectedMeetingResult };
+      },
+    );
+
+    render(<App />);
+    const picker = await screen.findByRole('combobox', { name: 'Görüntülenecek toplantı' });
+    await waitFor(() => {
+      expect(window.electronAPI?.meeting.getIntelligenceResult).toHaveBeenCalledWith({
+        meetingId: firstMeetingId,
+      });
+    });
+    await userEvent.selectOptions(picker, CANONICAL_MEETING_ID);
+    expect(await screen.findByText('Seçilen toplantının kalıcı sonucu.')).toBeInTheDocument();
+
+    await act(async () => {
+      resolveFirstMeeting({
+        status: 'ready',
+        result: canonicalMeetingResult({
+          meetingId: firstMeetingId,
+          summary: 'Geç kalan ilk toplantı sonucu.',
+        }),
+      });
+      await Promise.resolve();
+    });
+
+    expect(screen.getByText('Seçilen toplantının kalıcı sonucu.')).toBeInTheDocument();
+    expect(screen.queryByText('Geç kalan ilk toplantı sonucu.')).not.toBeInTheDocument();
+  });
+
+  it('cancels durable canonical timers when recording starts', async () => {
+    installElectronApiMock({
+      meetingId: CANONICAL_MEETING_ID,
+      deviceId: 'desktop-1',
+      ready: true,
+      reason: null,
+    });
+    vi.useFakeTimers();
+    vi.spyOn(Math, 'random').mockReturnValue(0.5);
+    vi.mocked(window.electronAPI!.meeting.getIntelligenceResult).mockResolvedValue({
+      status: 'not_ready',
+    });
+    vi.mocked(startRecording).mockResolvedValue({
+      sessionId: 'SES-CANCEL-DURABLE',
+      transcriptSessionId: 'SES-CANCEL-DURABLE',
+      hasLoopback: false,
+      stop: vi.fn(),
+      onError: vi.fn(),
+      pause: vi.fn(),
+      resume: vi.fn(),
+      isPaused: vi.fn(() => false),
+    });
+
+    render(<App />);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(window.electronAPI?.meeting.getIntelligenceResult).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Kaydet' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Onaylıyorum — Kaydı Başlat' }));
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(screen.getByText(/Kayıt başladı .*SES-CANCEL-DURABLE/)).toBeInTheDocument();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60 * 60_000);
+    });
+    expect(window.electronAPI?.meeting.getIntelligenceResult).toHaveBeenCalledTimes(1);
+  });
+
+  it('cleans up the durable retry and request timers on unmount', async () => {
+    installElectronApiMock({
+      meetingId: CANONICAL_MEETING_ID,
+      deviceId: 'desktop-1',
+      ready: true,
+      reason: null,
+    });
+    vi.useFakeTimers();
+    vi.spyOn(Math, 'random').mockReturnValue(0.5);
+    vi.mocked(window.electronAPI!.meeting.getIntelligenceResult).mockResolvedValue({
+      status: 'not_ready',
+    });
+
+    const mounted = render(<App />);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(vi.getTimerCount()).toBeGreaterThan(0);
+
+    mounted.unmount();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it('fails a stalled canonical bridge read within the per-request deadline', async () => {
     installElectronApiMock({
       meetingId: CANONICAL_MEETING_ID,
@@ -1253,6 +1595,69 @@ describe('App canonical Meeting Intelligence read', () => {
 
     expect(await screen.findByText('Kalıcı toplantı özeti yüklendi.')).toBeInTheDocument();
     expect(window.electronAPI?.meeting.getIntelligenceResult).toHaveBeenCalledTimes(2);
+  });
+
+  it('durably retries a recoverable canonical read error without manual action', async () => {
+    installElectronApiMock({
+      meetingId: CANONICAL_MEETING_ID,
+      deviceId: 'desktop-1',
+      ready: true,
+      reason: null,
+    });
+    vi.useFakeTimers();
+    vi.spyOn(Math, 'random').mockReturnValue(0.5);
+    vi.mocked(window.electronAPI!.meeting.getIntelligenceResult)
+      .mockRejectedValueOnce(new Error('network=UND_ERR_SOCKET'))
+      .mockResolvedValue({ status: 'ready', result: canonicalMeetingResult() });
+
+    render(<App />);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(screen.getByRole('alert')).toHaveTextContent('network=UND_ERR_SOCKET');
+    expect(screen.getByText('Geçici bağlantı hatası')).toBeInTheDocument();
+    expect(window.electronAPI?.meeting.getIntelligenceResult).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(CANONICAL_RESULT_DURABLE_RETRY_BASE_DELAY_MS);
+    });
+
+    expect(screen.getByText('Kalıcı toplantı özeti yüklendi.')).toBeInTheDocument();
+    expect(window.electronAPI?.meeting.getIntelligenceResult).toHaveBeenCalledTimes(2);
+  });
+
+  it('cancels durable canonical retry when the user logs out', async () => {
+    installElectronApiMock({
+      meetingId: CANONICAL_MEETING_ID,
+      deviceId: 'desktop-1',
+      ready: true,
+      reason: null,
+    });
+    vi.useFakeTimers();
+    vi.spyOn(Math, 'random').mockReturnValue(0.5);
+    vi.mocked(window.electronAPI!.meeting.getIntelligenceResult).mockResolvedValue({
+      status: 'not_ready',
+    });
+
+    render(<App />);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(window.electronAPI?.meeting.getIntelligenceResult).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Çıkış' }));
+    await act(async () => {
+      await Promise.resolve();
+      await vi.advanceTimersByTimeAsync(CANONICAL_RESULT_DURABLE_RETRY_BASE_DELAY_MS * 2);
+    });
+
+    expect(window.electronAPI?.auth.logout).toHaveBeenCalledTimes(1);
+    expect(window.electronAPI?.meeting.getIntelligenceResult).toHaveBeenCalledTimes(1);
   });
 
   it('keeps the pre-recording run as baseline and waits for a replacement snapshot', async () => {

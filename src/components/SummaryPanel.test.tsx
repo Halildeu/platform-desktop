@@ -287,12 +287,14 @@ describe('SummaryPanel', () => {
         }}
         canonicalResultStatus="error"
         canonicalResultError="Kalıcı toplantı çıktısı alınamadı: bağlantı kesildi"
+        canonicalResultAutoRetrying
         onCanonicalResultRetry={onRetry}
       />,
     );
 
-    expect(screen.getByText('Bağlantı hatası')).toBeInTheDocument();
+    expect(screen.getByText('Geçici bağlantı hatası')).toBeInTheDocument();
     expect(screen.getByRole('alert')).toHaveTextContent('bağlantı kesildi');
+    expect(screen.getByRole('alert')).toHaveTextContent('otomatik kontrol sürecek');
     await userEvent.click(screen.getByRole('button', { name: 'Tekrar dene' }));
     expect(onRetry).toHaveBeenCalledTimes(1);
   });
