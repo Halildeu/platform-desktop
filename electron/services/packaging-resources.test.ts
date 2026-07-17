@@ -104,7 +104,8 @@ describe('packaged runtime resources', () => {
     expect(workflow).toContain('cosign verify-blob');
     expect(workflow).toContain('--certificate-github-workflow-sha "$GITHUB_SHA"');
     expect(workflow).toContain('smoke-linux-x64:');
-    expect(workflow).toContain('desktop-file-utils xvfb rpm cpio "${packages[0]}"');
+    expect(workflow).toContain('desktop-file-utils xvfb rpm cpio "./${packages[0]}"');
+    expect(workflow).not.toContain('desktop-file-utils xvfb rpm cpio "${packages[0]}"');
     expect(workflow).toContain('MEETING_INTELLIGENCE_RELEASE_SMOKE_READY');
     expect(electronMain).toContain('MEETING_INTELLIGENCE_RELEASE_SMOKE_READY');
     expect(electronMain).toContain("webContents.once('did-finish-load'");
