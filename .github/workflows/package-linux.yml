@@ -146,7 +146,7 @@ jobs:
           packages=(release/Meeting-Intelligence-*-amd64.deb)
           test "${#packages[@]}" -eq 1
           sudo apt-get update
-          sudo apt-get install --yes desktop-file-utils xvfb rpm cpio "${packages[0]}"
+          sudo apt-get install --yes desktop-file-utils xvfb rpm cpio "./${packages[0]}"
           command -v rpm2cpio
           command -v cpio
 
