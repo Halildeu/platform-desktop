@@ -1,6 +1,6 @@
 {
   "name": "platform-desktop",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Meeting Intelligence Desktop Client — Electron + React + TypeScript",
   "author": {
     "name": "Acik Platform Team",
@@ -37,6 +37,7 @@
     "@reduxjs/toolkit": "^2.5.0",
     "dotenv": "^17.4.2",
     "electron-store": "^11.0.2",
+    "electron-updater": "^6.8.9",
     "i18next": "^24.0.0",
     "keycloak-js": "^26.0.0",
     "react": "^19.0.0",
@@ -59,7 +60,6 @@
     "@vitejs/plugin-react": "^4.3.0",
     "electron": "^42.5.0",
     "electron-builder": "^26.15.3",
-    "electron-updater": "^6.3.0",
     "eslint": "^9.0.0",
     "eslint-plugin-react": "^7.37.0",
     "eslint-plugin-react-hooks": "^5.1.0",
@@ -133,6 +133,13 @@
           "MimeType": "x-scheme-handler/meeting-intelligence;"
         }
       }
+    },
+    "rpm": {
+      "afterInstall": "build/linux-rpm-install-state.sh",
+      "afterRemove": "build/linux-rpm-after-remove.tpl",
+      "fpm": [
+        "--rpm-posttrans=build/linux-rpm-install-state.sh"
+      ]
     },
     "publish": {
       "provider": "github",

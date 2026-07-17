@@ -59,6 +59,32 @@ jobs:
             --publish never \
             --config.directories.output="$PACKAGE_DIR"
 
+      - name: Verify packaged runtime dependencies
+        run: |
+          app_asar="$PACKAGE_DIR/linux-unpacked/resources/app.asar"
+          test -f "$app_asar"
+          ./node_modules/.bin/asar list "$app_asar" \
+            | grep -Fx '/node_modules/electron-updater/package.json'
+
+      - name: Verify RPM scriptlets are POSIX-compatible
+        run: |
+          shopt -s nullglob
+          rpms=("$PACKAGE_DIR"/Meeting-Intelligence-*-x86_64.rpm)
+          test "${#rpms[@]}" -eq 1
+          rpm -qp --scripts "${rpms[0]}" > "$RUNNER_TEMP/rpm-scripts.txt"
+          grep -Fq 'postinstall scriptlet (using /bin/sh)' "$RUNNER_TEMP/rpm-scripts.txt"
+          grep -Fq 'if ! { [ -L /proc/self/ns/user ] && unshare --user true; }; then' \
+            "$RUNNER_TEMP/rpm-scripts.txt"
+          grep -Fq 'postuninstall scriptlet (using /bin/sh)' "$RUNNER_TEMP/rpm-scripts.txt"
+          grep -Fq "if [ \"\${1:-0}\" -gt 0 ]; then" "$RUNNER_TEMP/rpm-scripts.txt"
+          grep -Fq 'posttrans scriptlet (using /bin/sh)' "$RUNNER_TEMP/rpm-scripts.txt"
+          test "$(grep -Fc "update-alternatives --install '/usr/bin/platform-desktop'" \
+            "$RUNNER_TEMP/rpm-scripts.txt")" -eq 2
+          if grep -Fq '[[' "$RUNNER_TEMP/rpm-scripts.txt"; then
+            echo '::error::RPM scriptlet contains a Bash-only [[ expression'
+            exit 1
+          fi
+
       - name: Verify tag matches the packaged version
         if: github.ref_type == 'tag'
         run: |
@@ -146,9 +172,9 @@ jobs:
           packages=(release/Meeting-Intelligence-*-amd64.deb)
           test "${#packages[@]}" -eq 1
           sudo apt-get update
-          sudo apt-get install --yes desktop-file-utils xvfb rpm cpio "./${packages[0]}"
-          command -v rpm2cpio
-          command -v cpio
+          sudo apt-get install --yes desktop-file-utils xvfb rpm "./${packages[0]}"
+          command -v rpm
+          command -v rpmbuild
 
       - name: Verify desktop registration
         run: |
@@ -156,20 +182,59 @@ jobs:
           test -f "$desktop_file"
           desktop-file-validate "$desktop_file"
           grep -Fx 'MimeType=x-scheme-handler/meeting-intelligence;' "$desktop_file"
-          grep -E '^Exec=.*meeting-intelligence' "$desktop_file"
+          grep -Fx 'Exec="/opt/Meeting Intelligence/platform-desktop" %U' "$desktop_file"
           gio mime x-scheme-handler/meeting-intelligence \
             | grep -F 'meeting-intelligence.desktop'
-          command -v meeting-intelligence
+          test -x '/opt/Meeting Intelligence/platform-desktop'
 
       - name: Launch deb, AppImage and rpm applications
         run: |
           cleanup_launch() {
-            if test -n "${launch_pid:-}"; then
-              kill -TERM -- "-$launch_pid" 2>/dev/null || true
-              wait "$launch_pid" 2>/dev/null || true
+            local process_group=${launch_pid:-}
+            if test -z "$process_group"; then
+              return
+            fi
+
+            kill -TERM -- "-$process_group" 2>/dev/null || true
+            for _ in $(seq 1 20); do
+              if ! kill -0 -- "-$process_group" 2>/dev/null; then
+                break
+              fi
+              sleep 0.1
+            done
+
+            if kill -0 -- "-$process_group" 2>/dev/null; then
+              kill -KILL -- "-$process_group" 2>/dev/null || true
+              for _ in $(seq 1 20); do
+                if ! kill -0 -- "-$process_group" 2>/dev/null; then
+                  break
+                fi
+                sleep 0.1
+              done
+            fi
+
+            wait "$process_group" 2>/dev/null || true
+            if kill -0 -- "-$process_group" 2>/dev/null; then
+              echo "::error::application process group survived TERM and KILL"
+              return 1
+            fi
+            launch_pid=
+          }
+          cleanup_smoke() {
+            cleanup_launch || true
+            if test -n "${appimage_extract_dir:-}"; then
+              rm -rf -- "$appimage_extract_dir"
+            fi
+            if test -n "${legacy_topdir:-}"; then
+              rm -rf -- "$legacy_topdir"
             fi
           }
-          trap cleanup_launch EXIT
+          trap cleanup_smoke EXIT
+
+          if ! unshare --user true; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+            unshare --user true
+          fi
 
           assert_renderer_ready() {
             local package_kind=$1
@@ -212,11 +277,10 @@ jobs:
             fi
 
             cleanup_launch
-            launch_pid=
             cat "$log_file"
           }
 
-          assert_renderer_ready deb meeting-intelligence
+          assert_renderer_ready deb '/opt/Meeting Intelligence/platform-desktop'
 
           shopt -s nullglob
           appimages=(release/Meeting-Intelligence-*-x86_64.AppImage)
@@ -224,19 +288,119 @@ jobs:
           test "${#appimages[@]}" -eq 1
           test "${#rpms[@]}" -eq 1
           chmod +x "${appimages[0]}"
-          assert_renderer_ready appimage \
-            env APPIMAGE_EXTRACT_AND_RUN=1 "${appimages[0]}"
-
-          mkdir rpm-root
+          appimage_path=$(realpath "${appimages[0]}")
+          appimage_extract_dir=$(mktemp -d)
           (
-            cd rpm-root
-            rpm2cpio "../${rpms[0]}" | cpio -idm --quiet
+            cd "$appimage_extract_dir"
+            "$appimage_path" --appimage-extract >/dev/null
           )
-          mapfile -t rpm_binaries < <(
-            find rpm-root/opt -type f -name meeting-intelligence -perm /111
-          )
-          test "${#rpm_binaries[@]}" -eq 1
-          assert_renderer_ready rpm "${rpm_binaries[0]}"
+          appimage_root="$appimage_extract_dir/squashfs-root"
+          test -x "$appimage_root/AppRun"
+          assert_renderer_ready appimage env \
+            APPIMAGE="$appimage_path" \
+            APPDIR="$appimage_root" \
+            "$appimage_root/AppRun"
+          rm -rf -- "$appimage_extract_dir"
+          appimage_extract_dir=
+
+          sudo dpkg --remove platform-desktop
+          test ! -e '/opt/Meeting Intelligence/platform-desktop'
+          rpm_package_name=$(rpm -qp --queryformat '%{NAME}\n' "${rpms[0]}")
+          test "$rpm_package_name" = platform-desktop
+          legacy_topdir=$(mktemp -d)
+          mkdir -p "$legacy_topdir"/{BUILD,BUILDROOT,RPMS,SOURCES,SPECS,SRPMS}
+          cat > "$legacy_topdir/SPECS/platform-desktop-legacy.spec" <<'SPEC'
+          Name: platform-desktop
+          Version: 0.1.2
+          Release: 1
+          Summary: Legacy upgrade lifecycle fixture
+          License: MIT
+          BuildArch: x86_64
+
+          %description
+          Reproduces the unconditional legacy postun registration cleanup.
+
+          %install
+          mkdir -p "%{buildroot}/opt/Meeting Intelligence"
+          cp /bin/true "%{buildroot}/opt/Meeting Intelligence/platform-desktop"
+
+          %files
+          "/opt/Meeting Intelligence/platform-desktop"
+
+          %post
+          update-alternatives --install '/usr/bin/platform-desktop' 'platform-desktop' '/opt/Meeting Intelligence/platform-desktop' 100
+          mkdir -p /etc/apparmor.d
+          : > /etc/apparmor.d/platform-desktop
+
+          %postun
+          update-alternatives --remove 'platform-desktop' '/opt/Meeting Intelligence/platform-desktop'
+          rm -f /etc/apparmor.d/platform-desktop
+          SPEC
+          rpmbuild --define "_topdir $legacy_topdir" \
+            -bb "$legacy_topdir/SPECS/platform-desktop-legacy.spec"
+          legacy_rpm=$(find "$legacy_topdir/RPMS" -type f -name '*.rpm' -print -quit)
+          test -n "$legacy_rpm"
+          sudo rpm --install --nodeps "$legacy_rpm"
+          sudo rpm -q --queryformat '%{VERSION}\n' platform-desktop | grep -Fx '0.1.2'
+
+          expected_rpm_version=$(rpm -qp --queryformat '%{VERSION}\n' "${rpms[0]}")
+          sudo rpm --upgrade --nodeps "${rpms[0]}"
+          sudo rpm -q --queryformat '%{VERSION}\n' platform-desktop \
+            | grep -Fx "$expected_rpm_version"
+          sudo rpm -q platform-desktop
+          test -x '/opt/Meeting Intelligence/platform-desktop'
+          update-alternatives --query platform-desktop \
+            | grep -Fx 'Value: /opt/Meeting Intelligence/platform-desktop'
+          if apparmor_status --enabled >/dev/null 2>&1 && \
+             apparmor_parser --skip-kernel-load --debug \
+               '/opt/Meeting Intelligence/resources/apparmor-profile' >/dev/null 2>&1; then
+            test -f /etc/apparmor.d/platform-desktop
+          fi
+
+          assert_renderer_ready rpm-upgrade '/opt/Meeting Intelligence/platform-desktop'
+
+          sudo rpm --erase platform-desktop
+          if sudo rpm -q platform-desktop; then
+            echo '::error::RPM package remained installed after upgrade-path erase'
+            exit 1
+          fi
+          test ! -e '/opt/Meeting Intelligence/platform-desktop'
+          test ! -e /usr/bin/platform-desktop
+          test ! -L /usr/bin/platform-desktop
+          test ! -e /etc/apparmor.d/platform-desktop
+
+          sudo rpm --install --nodeps "${rpms[0]}"
+          sudo rpm -q platform-desktop
+          test -x '/opt/Meeting Intelligence/platform-desktop'
+          update-alternatives --query platform-desktop \
+            | grep -Fx 'Value: /opt/Meeting Intelligence/platform-desktop'
+          if apparmor_status --enabled >/dev/null 2>&1 && \
+             apparmor_parser --skip-kernel-load --debug \
+               '/opt/Meeting Intelligence/resources/apparmor-profile' >/dev/null 2>&1; then
+            test -f /etc/apparmor.d/platform-desktop
+          fi
+
+          sudo update-desktop-database /usr/share/applications
+          desktop-file-validate /usr/share/applications/meeting-intelligence.desktop
+          grep -Fx 'Exec="/opt/Meeting Intelligence/platform-desktop" %U' \
+            /usr/share/applications/meeting-intelligence.desktop
+          grep -Fx 'MimeType=x-scheme-handler/meeting-intelligence;' \
+            /usr/share/applications/meeting-intelligence.desktop
+          gio mime x-scheme-handler/meeting-intelligence \
+            | grep -F 'meeting-intelligence.desktop'
+          assert_renderer_ready rpm-install '/opt/Meeting Intelligence/platform-desktop'
+
+          sudo rpm --erase platform-desktop
+          if sudo rpm -q platform-desktop; then
+            echo '::error::RPM package remained installed after erase'
+            exit 1
+          fi
+          test ! -e '/opt/Meeting Intelligence/platform-desktop'
+          test ! -e /usr/bin/platform-desktop
+          test ! -L /usr/bin/platform-desktop
+          test ! -e /etc/apparmor.d/platform-desktop
+          rm -rf -- "$legacy_topdir"
+          legacy_topdir=
 
           trap - EXIT
 
