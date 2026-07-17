@@ -28,6 +28,7 @@ const MAX_PENDING_AUDIO_MS = 120_000;
 const MAX_PENDING_CHUNKS = Math.ceil(MAX_PENDING_AUDIO_MS / CHUNK_MS);
 const CAPTURE_PERMISSION_TIMEOUT_MS = 45_000;
 const CAPTURE_IPC_TIMEOUT_MS = 15_000;
+const RECORDER_START_IPC_TIMEOUT_MS = 60_000;
 const LOOPBACK_CAPTURE_TIMEOUT_MS = 5_000;
 const WINDOWS_USER_AGENT_RE = /\bWindows NT\b/i;
 
@@ -216,13 +217,30 @@ function localSessionId(): string {
 
 function canContinueDirectOnlyAfterRecorderStartupError(message: string): boolean {
   const normalized = message.toLocaleLowerCase('tr-TR');
+  const hasUnconfirmedGatewayMutation =
+    message.includes('AUDIO_GATEWAY_CONSENT_UNCONFIRMED') ||
+    message.includes('AUDIO_GATEWAY_SESSION_START_UNCONFIRMED');
   const isLocalContractError =
     normalized.includes('consent required') ||
     normalized.includes('invalid format') ||
     normalized.includes('is required') ||
     normalized.includes('audio capture setup failed') ||
-    normalized.includes('recording session already active');
-  if (isLocalContractError) {
+    normalized.includes('recording session already active') ||
+    normalized.includes('syncrecordinglifecycle') ||
+    normalized.includes('canonical lifecycle') ||
+    normalized.includes('meeting-service');
+  const isPreparationTimeout =
+    normalized.includes('izin hazırlığı zaman aşımına uğradı') ||
+    normalized.includes('izin hazirligi zaman asimina ugradi');
+  const isAmbiguousStartTimeout =
+    normalized.includes('audio gateway oturumu zaman aşımına uğradı') ||
+    normalized.includes('audio gateway oturumu zaman asimina ugradi');
+  if (
+    hasUnconfirmedGatewayMutation ||
+    isLocalContractError ||
+    isPreparationTimeout ||
+    isAmbiguousStartTimeout
+  ) {
     return false;
   }
   return (
@@ -350,7 +368,7 @@ export async function startRecording(
     try {
       session = await withTimeout(
         api.audio.start(meetingId, deviceId),
-        CAPTURE_IPC_TIMEOUT_MS,
+        RECORDER_START_IPC_TIMEOUT_MS,
         'Audio gateway oturumu zaman aşımına uğradı.',
         (lateSession) => {
           void api.audio.abort(lateSession.captureId).catch(() => undefined);

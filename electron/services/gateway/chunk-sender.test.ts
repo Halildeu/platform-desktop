@@ -38,6 +38,28 @@ describe('ChunkSender (seq state machine)', () => {
     expect(sender.nextSeq()).toBe(0);
   });
 
+  it('retries an ambiguous start timeout with the same idempotency key', async () => {
+    const idempotencyKeys: string[] = [];
+    const fetchMock = vi.fn(async (url: string, opts?: RequestInit) => {
+      if (!url.endsWith('/sessions')) {
+        return { ok: true };
+      }
+      idempotencyKeys.push((opts?.headers as Record<string, string>)['Idempotency-Key']);
+      if (idempotencyKeys.length === 1) {
+        throw Object.assign(new Error('startSession timed out after 15000ms'), {
+          name: 'TimeoutError',
+        });
+      }
+      return { ok: true, json: async () => ({ sessionId: 'SES-recovered' }) };
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(sender.start(meetingId, 'dev1')).resolves.toBe('SES-recovered');
+    expect(idempotencyKeys).toHaveLength(2);
+    expect(idempotencyKeys[0]).toBe(idempotencyKeys[1]);
+    expect(sender.getState()).toBe('active');
+  });
+
   it('send: seq 0,1,2 strict-contiguous artar', async () => {
     mockFetch();
     await sender.start(meetingId, 'dev1');

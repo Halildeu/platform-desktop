@@ -54,13 +54,21 @@ import {
 const MEETING_ID_MISSING_MESSAGE =
   'Geçerli meetingId bulunamadı; kayıt başlatılamaz. (meetingId kaynağı henüz belirlenmedi)';
 const RECORDER_MEETING_ID_UNSET_MARKER = 'RECORDER_MEETING_ID tanimli degil';
-const RECORDER_START_TIMEOUT_MS = 45_000;
+// This guard must exceed capture.ts's bounded permission, worklet, loopback and
+// main-process startup budget so it cannot orphan a still-running IPC request.
+const RECORDER_START_TIMEOUT_MS = 150_000;
 const TRANSCRIPT_CLIENT_CLOCK_SKEW_MS = 30_000;
 const MAX_PENDING_LIVE_TRANSCRIPT_EVENTS = 50;
 const ACTIVE_AUDIO_RMS = 0.0008;
 const LIVE_STT_PREFLIGHT_MAX_ATTEMPTS = 3;
 const LIVE_STT_PREFLIGHT_RETRY_DELAY_MS = 180;
-const CANONICAL_RESULT_POLL_DELAYS_MS = [0, 500, 1_000, 2_000, 4_000, 8_000, 15_000] as const;
+// Canonical analysis can legitimately trail the attended recording by minutes.
+// Keep the user-visible state honest while a bounded five-minute follow-up runs.
+export const CANONICAL_RESULT_POLL_DELAYS_MS = [
+  0, 500, 1_000, 2_000, 4_000, 8_000, 15_000, 30_000, 60_000, 60_000, 60_000, 60_000,
+] as const;
+export const CANONICAL_RESULT_FOLLOW_UP_TIMEOUT_MS = 300_000;
+export const CANONICAL_RESULT_REQUEST_TIMEOUT_MS = 25_000;
 
 interface RecorderRuntimeConfig {
   meetingId: string | null;
@@ -196,6 +204,28 @@ async function startRecordingWithTimeout(
       clearTimeout(timeoutId);
     }
   }
+}
+
+function withCanonicalResultRequestTimeout<T>(
+  operation: Promise<T>,
+  timeoutMs: number,
+): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timeoutId = window.setTimeout(
+      () => reject(new Error('Kalıcı toplantı çıktısı isteği zaman aşımına uğradı')),
+      timeoutMs,
+    );
+    operation.then(
+      (value) => {
+        window.clearTimeout(timeoutId);
+        resolve(value);
+      },
+      (error: unknown) => {
+        window.clearTimeout(timeoutId);
+        reject(error instanceof Error ? error : new Error(String(error)));
+      },
+    );
+  });
 }
 
 function transcriptStatusFromGateway(status: string): TranscriptSegmentStatus {
@@ -407,23 +437,41 @@ function App() {
       setCanonicalResultError(null);
 
       const delays = pollUntilReady ? CANONICAL_RESULT_POLL_DELAYS_MS : ([0] as const);
+      const followUpDeadlineMs = Date.now() + CANONICAL_RESULT_FOLLOW_UP_TIMEOUT_MS;
       try {
         for (const delayMs of delays) {
           if (delayMs > 0) {
+            const remainingBeforeDelayMs = followUpDeadlineMs - Date.now();
+            if (remainingBeforeDelayMs <= 0) {
+              break;
+            }
             await new Promise<void>((resolve) => {
-              window.setTimeout(resolve, delayMs);
+              window.setTimeout(resolve, Math.min(delayMs, remainingBeforeDelayMs));
             });
           }
           if (canonicalResultReadSequenceRef.current !== readSequence) {
             return;
           }
 
-          const outcome = await window.electronAPI?.meeting.getIntelligenceResult({ meetingId });
+          const remainingBeforeReadMs = followUpDeadlineMs - Date.now();
+          if (pollUntilReady && remainingBeforeReadMs <= 0) {
+            break;
+          }
+
+          const resultRead = window.electronAPI?.meeting.getIntelligenceResult({ meetingId });
+          if (!resultRead) {
+            throw new Error('Electron meeting result bridge yanıt vermedi');
+          }
+          const requestTimeoutMs = pollUntilReady
+            ? Math.min(CANONICAL_RESULT_REQUEST_TIMEOUT_MS, remainingBeforeReadMs)
+            : CANONICAL_RESULT_REQUEST_TIMEOUT_MS;
+          const outcome = await withCanonicalResultRequestTimeout(resultRead, requestTimeoutMs);
           if (!outcome) {
             throw new Error('Electron meeting result bridge yanıt vermedi');
           }
           if (outcome.status === 'ready') {
             if (!isNewCanonicalAnalysisRun(outcome.result, previousAnalysisRunId)) {
+              setCanonicalResultStatus('not_ready');
               continue;
             }
             const result = meetingIntelligenceResultFromCanonicalResponse(outcome.result);
@@ -446,6 +494,7 @@ function App() {
             setCanonicalResultStatus('ready');
             return;
           }
+          setCanonicalResultStatus('not_ready');
         }
 
         if (
@@ -629,6 +678,13 @@ function App() {
       setRecentMeetingsError(null);
       return;
     }
+    void window.electronAPI?.audio.reconcileLifecycle().catch((error) => {
+      setError(
+        `Bekleyen kayıt durumu meeting-service ile eşitlenemedi: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    });
     void loadRecentMeetings();
   }, [loadRecentMeetings, loggedIn]);
 

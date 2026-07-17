@@ -1,8 +1,10 @@
-import { desktopFetch } from '../net/desktop-fetch.js';
+import { desktopFetch, withDesktopFetchDeadline } from '../net/desktop-fetch.js';
 
 const API = '/api/v1/admin/meetings';
 const CREATE_CONTRACT_MAX_ATTEMPTS = 3;
 const CREATE_CONTRACT_RETRY_DELAY_MS = 250;
+const RECORDING_LIFECYCLE_ATTEMPT_TIMEOUT_MS = 4_000;
+const INTELLIGENCE_RESULT_ATTEMPT_TIMEOUT_MS = 8_000;
 const RECENT_MEETINGS_DEFAULT_SIZE = 20;
 const RECENT_MEETINGS_MAX_SIZE = 50;
 const RETRYABLE_HTTP_STATUS = new Set([502, 503, 504]);
@@ -57,6 +59,26 @@ export interface CreateMeetingContractArgs {
   scheduledStart?: string;
   scheduledEnd?: string;
 }
+
+export interface RecordingLifecycleSyncArgs {
+  meetingId: string;
+  externalSessionId: string;
+  startedAt: string;
+  endedAt?: string | null;
+}
+
+export interface RecordingLifecycleResponse {
+  meetingId: string;
+  sessionId: string;
+  externalSessionId: string;
+  meetingStatus: string;
+  transcriptStatus: string;
+  startedAt: string;
+  endedAt: string | null;
+}
+
+const RECORDING_MEETING_STATUSES = new Set(['IN_PROGRESS', 'COMPLETED']);
+const TRANSCRIPT_STATUSES = new Set(['PENDING', 'PROCESSING', 'COMPLETED', 'FAILED']);
 
 export interface MeetingAiAnalyzeSegment {
   text: string;
@@ -177,6 +199,13 @@ export function meetingIntelligenceResultUrl(cfg: MeetingClientConfig, meetingId
   return `${meetingsUrl(cfg)}/${meetingId}/intelligence/result`;
 }
 
+export function recordingLifecycleUrl(cfg: MeetingClientConfig, meetingId: string): string {
+  if (!MEETING_ID_PATTERN.test(meetingId)) {
+    throw new Error('meetingId must be a canonical UUID');
+  }
+  return `${meetingsUrl(cfg)}/${meetingId}/recording-lifecycle`;
+}
+
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => {
     setTimeout(resolve, ms);
@@ -203,10 +232,28 @@ function isRetryableNetworkError(error: unknown): boolean {
   if (code && RETRYABLE_NETWORK_CODES.has(code)) {
     return true;
   }
+  if (
+    error &&
+    typeof error === 'object' &&
+    ((error as { name?: unknown }).name === 'AbortError' ||
+      (error as { name?: unknown }).name === 'TimeoutError')
+  ) {
+    return true;
+  }
   return error instanceof TypeError && error.message === 'fetch failed';
 }
 
 function retryableNetworkLabel(error: unknown): string {
+  if (
+    error &&
+    typeof error === 'object' &&
+    typeof (error as { name?: unknown }).name === 'string'
+  ) {
+    const name = (error as { name: string }).name;
+    if (name === 'AbortError' || name === 'TimeoutError') {
+      return 'REQUEST_TIMEOUT';
+    }
+  }
   return errorCode(error) ?? 'FETCH_FAILED';
 }
 
@@ -214,9 +261,9 @@ async function retryDelay(attempt: number): Promise<void> {
   await delay(CREATE_CONTRACT_RETRY_DELAY_MS * attempt);
 }
 
-async function discardResponseBody(res: Response): Promise<void> {
+function discardResponseBody(res: Response): void {
   try {
-    await res.body?.cancel();
+    void res.body?.cancel().catch(() => undefined);
   } catch {
     // Retry remains authoritative; a best-effort body close must not mask it.
   }
@@ -342,6 +389,66 @@ function parseMeetingContract(value: unknown): MeetingContract {
     ),
     createdAt: optionalCanonicalIsoInstant(record.createdAt, 'meeting-service response createdAt'),
     updatedAt: optionalCanonicalIsoInstant(record.updatedAt, 'meeting-service response updatedAt'),
+  };
+}
+
+function parseRecordingLifecycleResponse(
+  value: unknown,
+  expected: RecordingLifecycleSyncArgs,
+): RecordingLifecycleResponse {
+  const label = 'recording lifecycle response';
+  const record = requiredRecord(value, label);
+  const meetingId = requiredCanonicalUuid(record.meetingId, `${label}.meetingId`);
+  if (meetingId !== expected.meetingId) {
+    throw new Error(`${label} meetingId does not match request`);
+  }
+  const externalSessionId = boundedString(
+    record.externalSessionId,
+    `${label}.externalSessionId`,
+    128,
+  );
+  if (externalSessionId !== expected.externalSessionId) {
+    throw new Error(`${label} externalSessionId does not match request`);
+  }
+
+  const meetingStatus = boundedString(record.meetingStatus, `${label}.meetingStatus`, 64);
+  if (!RECORDING_MEETING_STATUSES.has(meetingStatus)) {
+    throw new Error(`${label}.meetingStatus is invalid`);
+  }
+  const transcriptStatus = boundedString(record.transcriptStatus, `${label}.transcriptStatus`, 64);
+  if (!TRANSCRIPT_STATUSES.has(transcriptStatus)) {
+    throw new Error(`${label}.transcriptStatus is invalid`);
+  }
+  const startedAt = canonicalIsoInstant(record.startedAt, `${label}.startedAt`);
+  if (Date.parse(startedAt) !== Date.parse(expected.startedAt)) {
+    throw new Error(`${label}.startedAt does not match request`);
+  }
+  const endedAt = optionalCanonicalIsoInstant(record.endedAt, `${label}.endedAt`);
+  if (expected.endedAt === null) {
+    if (endedAt !== null || meetingStatus !== 'IN_PROGRESS') {
+      throw new Error(`${label} does not confirm an active recording`);
+    }
+  } else {
+    if (
+      endedAt === null ||
+      Date.parse(endedAt) !== Date.parse(expected.endedAt ?? '') ||
+      meetingStatus !== 'COMPLETED'
+    ) {
+      throw new Error(`${label} does not confirm the requested finish`);
+    }
+    if (transcriptStatus !== 'PROCESSING' && transcriptStatus !== 'COMPLETED') {
+      throw new Error(`${label} does not confirm transcript processing`);
+    }
+  }
+
+  return {
+    meetingId,
+    sessionId: requiredCanonicalUuid(record.sessionId, `${label}.sessionId`),
+    externalSessionId,
+    meetingStatus,
+    transcriptStatus,
+    startedAt,
+    endedAt,
   };
 }
 
@@ -668,7 +775,7 @@ export async function createMeetingContract(
 
     if (!res.ok) {
       if (attempt < CREATE_CONTRACT_MAX_ATTEMPTS && RETRYABLE_HTTP_STATUS.has(res.status)) {
-        await discardResponseBody(res);
+        discardResponseBody(res);
         await retryDelay(attempt);
         continue;
       }
@@ -678,6 +785,85 @@ export async function createMeetingContract(
   }
 
   throw new Error('createMeetingContract failed: retry loop exhausted');
+}
+
+export async function syncRecordingLifecycle(
+  cfg: MeetingClientConfig,
+  jwt: string,
+  args: RecordingLifecycleSyncArgs,
+): Promise<RecordingLifecycleResponse> {
+  const startedAt = canonicalIsoInstant(args.startedAt, 'recording lifecycle startedAt');
+  const endedAt = optionalCanonicalIsoInstant(args.endedAt, 'recording lifecycle endedAt');
+  if (endedAt && Date.parse(endedAt) < Date.parse(startedAt)) {
+    throw new Error('recording lifecycle endedAt must not be before startedAt');
+  }
+  const externalSessionId = boundedString(
+    args.externalSessionId,
+    'recording lifecycle externalSessionId',
+    128,
+  );
+  if (!/^[A-Za-z0-9._:-]+$/.test(externalSessionId)) {
+    throw new Error('recording lifecycle externalSessionId has invalid format');
+  }
+  const normalizedArgs = {
+    ...args,
+    externalSessionId,
+    startedAt,
+    endedAt,
+  };
+  const requestInit = {
+    method: 'PUT',
+    headers: {
+      Authorization: `Bearer ${jwt}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ externalSessionId, startedAt, endedAt }),
+  };
+
+  for (let attempt = 1; attempt <= CREATE_CONTRACT_MAX_ATTEMPTS; attempt += 1) {
+    try {
+      return await withDesktopFetchDeadline(
+        recordingLifecycleUrl(cfg, args.meetingId),
+        requestInit,
+        RECORDING_LIFECYCLE_ATTEMPT_TIMEOUT_MS,
+        'syncRecordingLifecycle',
+        async (response) => {
+          if (!response.ok) {
+            if (
+              attempt < CREATE_CONTRACT_MAX_ATTEMPTS &&
+              RETRYABLE_HTTP_STATUS.has(response.status)
+            ) {
+              discardResponseBody(response);
+              throw Object.assign(new Error('retryable lifecycle response'), {
+                code: 'RETRYABLE_LIFECYCLE_RESPONSE',
+              });
+            }
+            throw new Error(await httpErrorMessage(response, 'syncRecordingLifecycle'));
+          }
+          return parseRecordingLifecycleResponse(await response.json(), normalizedArgs);
+        },
+      );
+    } catch (error) {
+      const retryableLifecycleResponse = errorCode(error) === 'RETRYABLE_LIFECYCLE_RESPONSE';
+      if (
+        attempt < CREATE_CONTRACT_MAX_ATTEMPTS &&
+        (isRetryableNetworkError(error) || retryableLifecycleResponse)
+      ) {
+        await retryDelay(attempt);
+        continue;
+      }
+      if (isRetryableNetworkError(error)) {
+        throw new Error(
+          `syncRecordingLifecycle failed before response after ${attempt} attempts: network=${retryableNetworkLabel(
+            error,
+          )}`,
+        );
+      }
+      throw error instanceof Error ? error : new Error(String(error));
+    }
+  }
+
+  throw new Error('syncRecordingLifecycle failed: retry loop exhausted');
 }
 
 export async function listRecentMeetings(
@@ -715,7 +901,7 @@ export async function listRecentMeetings(
 
     if (!res.ok) {
       if (attempt < CREATE_CONTRACT_MAX_ATTEMPTS && RETRYABLE_HTTP_STATUS.has(res.status)) {
-        await discardResponseBody(res);
+        discardResponseBody(res);
         await retryDelay(attempt);
         continue;
       }
@@ -768,7 +954,7 @@ export async function analyzeMeetingIntelligence(
 
     if (!res.ok) {
       if (attempt < CREATE_CONTRACT_MAX_ATTEMPTS && RETRYABLE_HTTP_STATUS.has(res.status)) {
-        await discardResponseBody(res);
+        discardResponseBody(res);
         await retryDelay(attempt);
         continue;
       }
@@ -796,11 +982,44 @@ export async function readMeetingIntelligenceResult(
   };
 
   for (let attempt = 1; attempt <= CREATE_CONTRACT_MAX_ATTEMPTS; attempt += 1) {
-    let res: Response;
     try {
-      res = await desktopFetch(meetingIntelligenceResultUrl(cfg, meetingId), requestInit);
+      return await withDesktopFetchDeadline(
+        meetingIntelligenceResultUrl(cfg, meetingId),
+        requestInit,
+        INTELLIGENCE_RESULT_ATTEMPT_TIMEOUT_MS,
+        'readMeetingIntelligenceResult',
+        async (response) => {
+          if (response.status === 404) {
+            const metadata = await safeHttpErrorMetadata(response);
+            if (metadata.code === 'ANALYSIS_RESULT_NOT_FOUND') {
+              return { status: 'not_ready' };
+            }
+            throw new Error(`readMeetingIntelligenceResult failed: 404${metadata.suffix}`);
+          }
+          if (!response.ok) {
+            if (
+              attempt < CREATE_CONTRACT_MAX_ATTEMPTS &&
+              RETRYABLE_HTTP_STATUS.has(response.status)
+            ) {
+              discardResponseBody(response);
+              throw Object.assign(new Error('retryable intelligence result response'), {
+                code: 'RETRYABLE_INTELLIGENCE_RESULT_RESPONSE',
+              });
+            }
+            throw new Error(await httpErrorMessage(response, 'readMeetingIntelligenceResult'));
+          }
+          return {
+            status: 'ready',
+            result: parseMeetingIntelligenceCanonicalResponse(await response.json(), meetingId),
+          };
+        },
+      );
     } catch (error) {
-      if (attempt < CREATE_CONTRACT_MAX_ATTEMPTS && isRetryableNetworkError(error)) {
+      const retryableResponse = errorCode(error) === 'RETRYABLE_INTELLIGENCE_RESULT_RESPONSE';
+      if (
+        attempt < CREATE_CONTRACT_MAX_ATTEMPTS &&
+        (isRetryableNetworkError(error) || retryableResponse)
+      ) {
         await retryDelay(attempt);
         continue;
       }
@@ -813,27 +1032,6 @@ export async function readMeetingIntelligenceResult(
       }
       throw error instanceof Error ? error : new Error(String(error));
     }
-
-    if (res.status === 404) {
-      const metadata = await safeHttpErrorMetadata(res);
-      if (metadata.code === 'ANALYSIS_RESULT_NOT_FOUND') {
-        return { status: 'not_ready' };
-      }
-      throw new Error(`readMeetingIntelligenceResult failed: 404${metadata.suffix}`);
-    }
-    if (!res.ok) {
-      if (attempt < CREATE_CONTRACT_MAX_ATTEMPTS && RETRYABLE_HTTP_STATUS.has(res.status)) {
-        await discardResponseBody(res);
-        await retryDelay(attempt);
-        continue;
-      }
-      throw new Error(await httpErrorMessage(res, 'readMeetingIntelligenceResult'));
-    }
-
-    return {
-      status: 'ready',
-      result: parseMeetingIntelligenceCanonicalResponse(await res.json(), meetingId),
-    };
   }
 
   throw new Error('readMeetingIntelligenceResult failed: retry loop exhausted');

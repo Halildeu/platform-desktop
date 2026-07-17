@@ -27,7 +27,11 @@ vi.mock('./audio/live-stt-preflight', async (importOriginal) => {
 
 import { startRecording, testAudioCaptureWorklet } from './audio/capture';
 import { testLiveSttStreamConnection } from './audio/live-stt-preflight';
-import App from './App';
+import App, {
+  CANONICAL_RESULT_FOLLOW_UP_TIMEOUT_MS,
+  CANONICAL_RESULT_POLL_DELAYS_MS,
+  CANONICAL_RESULT_REQUEST_TIMEOUT_MS,
+} from './App';
 
 interface TestTranscriptGatewayEvent {
   eventId: string;
@@ -169,6 +173,7 @@ function installElectronApiMock(recorderConfig: {
         liveSttStreamReason: null,
         ...recorderConfig,
       }),
+      reconcileLifecycle: vi.fn().mockResolvedValue({ ok: true }),
       permissionStatus: vi.fn(),
       prepareCapture: vi.fn(),
       cancelCapture: vi.fn(),
@@ -679,13 +684,13 @@ describe('App recorder readiness', () => {
     );
 
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(45_000);
+      await vi.advanceTimersByTimeAsync(150_000);
       await Promise.resolve();
     });
     vi.useRealTimers();
 
     const timeoutErrors = screen.getAllByText(
-      'Kayıt başlatılamadı: Recorder başlatma 45 sn içinde yanıt vermedi; izin/gateway zinciri kontrol edilmeli.',
+      'Kayıt başlatılamadı: Recorder başlatma 150 sn içinde yanıt vermedi; izin/gateway zinciri kontrol edilmeli.',
     );
     expect(timeoutErrors.length).toBeGreaterThan(0);
     expect(screen.getByRole('button', { name: 'Kaydet' })).toBeEnabled();
@@ -1152,6 +1157,49 @@ describe('App recorder readiness', () => {
 });
 
 describe('App canonical Meeting Intelligence read', () => {
+  it('keeps a bounded canonical follow-up open beyond the former thirty-second window', () => {
+    const totalDelayMs = CANONICAL_RESULT_POLL_DELAYS_MS.reduce<number>(
+      (total, delay) => total + delay,
+      0,
+    );
+
+    expect(totalDelayMs).toBeGreaterThan(30_500);
+    expect(totalDelayMs).toBeLessThanOrEqual(301_000);
+    expect(CANONICAL_RESULT_POLL_DELAYS_MS).toContain(60_000);
+    expect(CANONICAL_RESULT_FOLLOW_UP_TIMEOUT_MS).toBe(300_000);
+  });
+
+  it('fails a stalled canonical bridge read within the per-request deadline', async () => {
+    installElectronApiMock({
+      meetingId: CANONICAL_MEETING_ID,
+      deviceId: 'desktop-1',
+      ready: true,
+      reason: null,
+    });
+    vi.mocked(window.electronAPI!.meeting.getIntelligenceResult).mockReturnValue(
+      new Promise(() => undefined),
+    );
+    vi.useFakeTimers();
+
+    render(<App />);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(window.electronAPI?.meeting.getIntelligenceResult).toHaveBeenCalledWith({
+      meetingId: CANONICAL_MEETING_ID,
+    });
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(CANONICAL_RESULT_REQUEST_TIMEOUT_MS);
+    });
+
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'Kalıcı toplantı çıktısı isteği zaman aşımına uğradı',
+    );
+  });
+
   it('hydrates the product panel from the one persisted canonical snapshot', async () => {
     installElectronApiMock({
       meetingId: CANONICAL_MEETING_ID,

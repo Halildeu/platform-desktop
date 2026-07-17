@@ -15,6 +15,8 @@ import {
 import { expiresAtFromExpiresIn, type TokenSet } from './token-utils.js';
 import { desktopFetch } from '../net/desktop-fetch.js';
 
+const TOKEN_HTTP_TIMEOUT_MS = 10_000;
+
 /** Loopback redirect URI (RFC 8252): http://127.0.0.1:<port>/callback */
 export function loopbackRedirectUri(port: number): string {
   return `http://127.0.0.1:${port}/callback`;
@@ -78,6 +80,7 @@ export async function exchangeCodeForTokens(
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: body.toString(),
+    signal: AbortSignal.timeout(TOKEN_HTTP_TIMEOUT_MS),
   });
   if (!res.ok) {
     throw new Error(`token exchange failed: ${res.status}`);
@@ -99,6 +102,7 @@ export async function refreshAccessToken(
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: body.toString(),
+    signal: AbortSignal.timeout(TOKEN_HTTP_TIMEOUT_MS),
   });
   if (!res.ok) {
     throw new Error(`token refresh failed: ${res.status}`);
@@ -116,6 +120,7 @@ export async function revokeRefreshToken(cfg: KeycloakConfig, refreshToken: stri
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: body.toString(),
+    signal: AbortSignal.timeout(TOKEN_HTTP_TIMEOUT_MS),
   });
   if (!res.ok) {
     throw new Error(`token revoke failed: ${res.status}`);

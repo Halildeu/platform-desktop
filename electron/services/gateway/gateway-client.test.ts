@@ -24,6 +24,7 @@ const captureId = '33333333-3333-4333-8333-333333333333';
 const consentTextHash = 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
@@ -175,6 +176,35 @@ describe('gateway-client HTTP fetch wrapper', () => {
       sampleRateHz: 16000,
       channels: 1,
     });
+  });
+
+  it('keeps the start deadline active while the response body is read', async () => {
+    vi.useFakeTimers();
+    let requestSignal: AbortSignal | null = null;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockImplementation((_url: string, init?: RequestInit) => {
+        requestSignal = init?.signal as AbortSignal;
+        return Promise.resolve({
+          ok: true,
+          json: () =>
+            new Promise((_resolve, reject) => {
+              requestSignal?.addEventListener(
+                'abort',
+                () => reject(Object.assign(new Error('aborted'), { name: 'AbortError' })),
+                { once: true },
+              );
+            }),
+        });
+      }),
+    );
+
+    const pending = startSession(cfg, 'JWT', { meetingId, deviceId: 'dev1', language: 'tr' }, 'IK');
+    const rejection = expect(pending).rejects.toThrow('startSession timed out after 15000ms');
+    await vi.advanceTimersByTimeAsync(15_000);
+
+    await rejection;
+    expect(requestSignal?.aborted).toBe(true);
   });
 
   it('sendChunk posts byte body with strict sequence headers', async () => {

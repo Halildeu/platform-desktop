@@ -15,6 +15,11 @@ import {
 } from './gateway-client.js';
 
 export type SessionState = 'idle' | 'active' | 'finished';
+const START_MAX_ATTEMPTS = 2;
+
+function isAmbiguousStartTimeout(error: unknown): boolean {
+  return error instanceof Error && error.name === 'TimeoutError';
+}
 
 export class ChunkSender {
   private seq = -1;
@@ -41,12 +46,26 @@ export class ChunkSender {
     if (this.state === 'active') {
       throw new Error('session already active');
     }
-    const info = await startSession(
-      this.cfg,
-      await this.getJwt(),
-      { meetingId, deviceId, language },
-      newIdempotencyKey(),
-    );
+    const idempotencyKey = newIdempotencyKey();
+    let info: Awaited<ReturnType<typeof startSession>> | null = null;
+    for (let attempt = 1; attempt <= START_MAX_ATTEMPTS; attempt += 1) {
+      try {
+        info = await startSession(
+          this.cfg,
+          await this.getJwt(),
+          { meetingId, deviceId, language },
+          idempotencyKey,
+        );
+        break;
+      } catch (error) {
+        if (attempt === START_MAX_ATTEMPTS || !isAmbiguousStartTimeout(error)) {
+          throw error;
+        }
+      }
+    }
+    if (!info) {
+      throw new Error('session start could not be confirmed');
+    }
     this.sessionId = info.sessionId;
     this.seq = -1;
     this.failed = null;

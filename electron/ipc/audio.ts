@@ -11,11 +11,18 @@ import { randomUUID } from 'node:crypto';
 
 import { ChunkSender } from '../services/gateway/chunk-sender.js';
 import {
+  finishSession,
   loadGatewayConfig,
+  newIdempotencyKey,
   recordConsent,
   type TranscriptGatewayEvent,
 } from '../services/gateway/gateway-client.js';
 import { TranscriptEventSubscription } from '../services/gateway/transcript-event-subscription.js';
+import { loadMeetingConfig, syncRecordingLifecycle } from '../services/meeting/meeting-client.js';
+import {
+  RecordingLifecycleOutbox,
+  type PendingRecordingLifecycle,
+} from '../services/meeting/recording-lifecycle-outbox.js';
 import {
   beginCapturePermissionLease,
   clearCapturePermissionLease,
@@ -29,11 +36,18 @@ import { getValidAccessToken } from './auth.js';
 
 const MAX_CHUNK_BYTES = 16_000 * 2 * 2; // 2s @ 16kHz PCM16 mono.
 const ID_PATTERN = /^[A-Za-z0-9._:-]{1,128}$/;
+const MEETING_ID_PATTERN =
+  /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
 const CONSENT_VERSION_PATTERN = /^[A-Za-z0-9._:-]{1,64}$/;
 const CONSENT_HASH_PATTERN = /^sha256:[a-f0-9]{64}$/;
 const LOCALE_PATTERN = /^[a-z]{2}(-[A-Z]{2})?$/;
 const STALE_ACTIVE_NO_CHUNK_MS = 45_000;
 const STALE_ACTIVE_NO_PROGRESS_MS = 15_000;
+const GATEWAY_FINISH_MAX_ATTEMPTS = 3;
+const GATEWAY_FINISH_RETRY_DELAY_MS = 150;
+const RECONCILIATION_BATCH_SIZE = 4;
+const CONSENT_UNCONFIRMED_CODE = 'AUDIO_GATEWAY_CONSENT_UNCONFIRMED';
+const SESSION_START_UNCONFIRMED_CODE = 'AUDIO_GATEWAY_SESSION_START_UNCONFIRMED';
 
 interface ConsentRecord {
   acceptedAt: string;
@@ -44,6 +58,11 @@ interface ConsentRecord {
 
 interface ActiveRecording {
   captureId: string;
+  meetingId: string;
+  externalSessionId: string;
+  canonicalStartedAt: string;
+  canonicalEndedAt: string | null;
+  gatewayFinished: boolean;
   sender: ChunkSender;
   transcriptSubscription: TranscriptEventSubscription;
   startedAtMs: number;
@@ -52,10 +71,17 @@ interface ActiveRecording {
   consent: ConsentRecord;
 }
 
+function unconfirmedGatewayMutation(code: string, error: unknown): Error {
+  const reason = error instanceof Error ? error.message : String(error);
+  return new Error(`${code}: ${reason}`);
+}
+
 let active: ActiveRecording | null = null;
 let starting = false;
 let finishing = false;
+let reconcilingLifecycle = false;
 let pendingConsent: ConsentRecord | null = null;
+const lifecycleOutbox = new RecordingLifecycleOutbox();
 
 function requireText(value: unknown, label: string): string {
   if (typeof value !== 'string' || value.trim() === '') {
@@ -70,6 +96,14 @@ function requireIdentifier(value: unknown, label: string): string {
     throw new Error(`${label} has invalid format`);
   }
   return text;
+}
+
+function requireMeetingId(value: unknown): string {
+  const meetingId = requireText(value, 'meetingId');
+  if (!MEETING_ID_PATTERN.test(meetingId)) {
+    throw new Error('meetingId must be a canonical UUID');
+  }
+  return meetingId;
 }
 
 function requireConsentHash(value: unknown): string {
@@ -161,21 +195,171 @@ function activeRecordingIsStale(recording: ActiveRecording, nowMs = Date.now()):
   return nowMs - lastProgressMs > thresholdMs;
 }
 
-async function disposeActiveRecording(recording: ActiveRecording): Promise<void> {
-  try {
-    if (recording.sender.getState() === 'active') {
-      await recording.sender.finish();
+async function finishGatewaySessionWithRetry(externalSessionId: string): Promise<void> {
+  let lastError: unknown = null;
+  for (let attempt = 1; attempt <= GATEWAY_FINISH_MAX_ATTEMPTS; attempt += 1) {
+    try {
+      await finishSession(
+        loadGatewayConfig(),
+        await getValidAccessToken(),
+        externalSessionId,
+        newIdempotencyKey(),
+      );
+      return;
+    } catch (error) {
+      lastError = error;
+      if (attempt < GATEWAY_FINISH_MAX_ATTEMPTS) {
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, GATEWAY_FINISH_RETRY_DELAY_MS);
+        });
+      }
     }
+  }
+  throw lastError instanceof Error ? lastError : new Error('gateway finish could not be confirmed');
+}
+
+async function syncPendingLifecycle(record: PendingRecordingLifecycle): Promise<void> {
+  let canonicalError: unknown = null;
+  let gatewayError: unknown = null;
+  try {
+    await syncRecordingLifecycle(loadMeetingConfig(), await getValidAccessToken(), record);
+  } catch (error) {
+    canonicalError = error;
+  }
+  let confirmed = record;
+  if (confirmed.endedAt !== null && confirmed.gatewayFinishPending) {
+    try {
+      await finishGatewaySessionWithRetry(confirmed.externalSessionId);
+      confirmed = lifecycleOutbox.markGatewayFinished(confirmed);
+    } catch (error) {
+      gatewayError = error;
+    }
+  }
+  if (canonicalError) {
+    throw canonicalError;
+  }
+  if (gatewayError) {
+    throw gatewayError;
+  }
+  if (confirmed.endedAt === null || confirmed.gatewayFinishPending) {
+    throw new Error('recording lifecycle is not fully finished');
+  }
+  lifecycleOutbox.remove(confirmed);
+}
+
+async function closeGatewayAfterOutboxFailure(
+  sender: ChunkSender,
+  externalSessionId: string,
+): Promise<void> {
+  try {
+    await sender.finish();
   } catch {
-    // Best-effort temizlik; stale renderer state'i uygulamayi kilitlememeli.
+    await finishGatewaySessionWithRetry(externalSessionId);
+  }
+}
+
+async function flushPendingRecordingLifecycles(): Promise<void> {
+  let processed = 0;
+  let firstError: unknown = null;
+  for (const pending of lifecycleOutbox.list()) {
+    if (
+      !pending.endedAt &&
+      active?.meetingId === pending.meetingId &&
+      active.externalSessionId === pending.externalSessionId
+    ) {
+      continue;
+    }
+    if (processed >= RECONCILIATION_BATCH_SIZE) {
+      break;
+    }
+    processed += 1;
+    try {
+      const finished = pending.endedAt
+        ? pending
+        : lifecycleOutbox.markEnded(pending, new Date().toISOString());
+      await syncPendingLifecycle(finished);
+    } catch (error) {
+      firstError ??= error;
+    }
+  }
+  if (firstError) {
+    throw firstError;
+  }
+}
+
+async function finishActiveRecording(recording: ActiveRecording): Promise<void> {
+  let gatewayError: unknown = null;
+  let canonicalError: unknown = null;
+  recording.canonicalEndedAt ??= new Date().toISOString();
+  let durableError: unknown = null;
+  let pending: PendingRecordingLifecycle = {
+    meetingId: recording.meetingId,
+    externalSessionId: recording.externalSessionId,
+    startedAt: recording.canonicalStartedAt,
+    endedAt: recording.canonicalEndedAt,
+    gatewayFinishPending: !recording.gatewayFinished,
+  };
+  let persisted = false;
+  try {
+    pending = lifecycleOutbox.markEnded(pending, recording.canonicalEndedAt);
+    persisted = true;
+  } catch (error) {
+    durableError = error;
+  }
+  try {
+    if (!recording.gatewayFinished) {
+      await recording.sender.finish();
+      recording.gatewayFinished = true;
+    }
+  } catch (error) {
+    gatewayError = error;
+  }
+  if (recording.gatewayFinished && persisted) {
+    try {
+      pending = lifecycleOutbox.markGatewayFinished(pending);
+    } catch (error) {
+      durableError ??= error;
+    }
+  }
+  try {
+    if (persisted) {
+      await syncPendingLifecycle(pending);
+      recording.gatewayFinished = true;
+    } else {
+      await syncRecordingLifecycle(loadMeetingConfig(), await getValidAccessToken(), pending);
+      if (!recording.gatewayFinished) {
+        await finishGatewaySessionWithRetry(recording.externalSessionId);
+        recording.gatewayFinished = true;
+      }
+      lifecycleOutbox.remove(pending);
+      durableError = null;
+    }
+  } catch (error) {
+    canonicalError = error;
   } finally {
     recording.transcriptSubscription.stop();
     if (active?.captureId === recording.captureId) {
       active = null;
     }
-    setRecordingActive(false);
-    clearCapturePermissionLease();
+    if (!active) {
+      setRecordingActive(false);
+      clearCapturePermissionLease();
+    }
   }
+
+  if (canonicalError) {
+    throw canonicalError;
+  }
+  if (durableError) {
+    throw durableError;
+  }
+  if (gatewayError && !recording.gatewayFinished) {
+    throw gatewayError;
+  }
+}
+
+async function disposeActiveRecording(recording: ActiveRecording): Promise<void> {
+  await finishActiveRecording(recording);
 }
 
 async function ensureNoActiveRecording(): Promise<void> {
@@ -185,7 +369,14 @@ async function ensureNoActiveRecording(): Promise<void> {
   const recording = active;
   const state = recording.sender.getState();
   if (state !== 'active' || activeRecordingIsStale(recording)) {
-    await disposeActiveRecording(recording);
+    active = null;
+    setRecordingActive(false);
+    clearCapturePermissionLease();
+    void disposeActiveRecording(recording).catch((error) => {
+      console.warn('Stale recording lifecycle cleanup remains queued', {
+        error: error instanceof Error ? error.message : 'unknown error',
+      });
+    });
     return;
   }
   throw new Error('recording session already active');
@@ -229,11 +420,28 @@ export function registerAudioIpc(): void {
     if (!recording || recording.rendererWebContentsId !== event.sender.id) {
       return;
     }
-    void disposeActiveRecording(recording);
+    void disposeActiveRecording(recording).catch((error) => {
+      console.warn('Recording lifecycle cleanup remains queued', {
+        error: error instanceof Error ? error.message : 'unknown error',
+      });
+    });
   });
 
   ipcMain.handle('audio:recorder-config', async (): Promise<RecorderRuntimeConfig> => {
     return loadRecorderRuntimeConfig();
+  });
+
+  ipcMain.handle('audio:reconcile-lifecycle', async (): Promise<{ ok: boolean }> => {
+    if (starting || finishing || reconcilingLifecycle) {
+      throw new Error('recording lifecycle reconciliation is busy');
+    }
+    reconcilingLifecycle = true;
+    try {
+      await flushPendingRecordingLifecycles();
+      return { ok: true };
+    } finally {
+      reconcilingLifecycle = false;
+    }
   });
 
   ipcMain.handle(
@@ -299,19 +507,80 @@ export function registerAudioIpc(): void {
           throw new Error('consent required before recording');
         }
         pendingConsent = null;
-        const normalizedMeetingId = requireIdentifier(meetingId, 'meetingId');
+        const normalizedMeetingId = requireMeetingId(meetingId);
         const normalizedDeviceId = requireIdentifier(deviceId, 'deviceId');
         const captureId = randomUUID();
         const cfg = loadGatewayConfig();
-        await recordConsent(cfg, await getValidAccessToken(), {
-          meetingId: normalizedMeetingId,
-          captureId,
-          consentVersion: consent.consentVersion,
-          consentTextHash: consent.consentTextHash,
-          locale: consent.locale,
-        });
+        try {
+          await recordConsent(cfg, await getValidAccessToken(), {
+            meetingId: normalizedMeetingId,
+            captureId,
+            consentVersion: consent.consentVersion,
+            consentTextHash: consent.consentTextHash,
+            locale: consent.locale,
+          });
+        } catch (error) {
+          throw unconfirmedGatewayMutation(CONSENT_UNCONFIRMED_CODE, error);
+        }
         const sender = new ChunkSender(cfg, () => getValidAccessToken());
-        const sessionId = await sender.start(normalizedMeetingId, normalizedDeviceId);
+        let sessionId: string;
+        try {
+          sessionId = await sender.start(normalizedMeetingId, normalizedDeviceId);
+        } catch (error) {
+          throw unconfirmedGatewayMutation(SESSION_START_UNCONFIRMED_CODE, error);
+        }
+        const canonicalStartedAt = new Date().toISOString();
+        let pendingLifecycle: PendingRecordingLifecycle;
+        try {
+          pendingLifecycle = lifecycleOutbox.upsert({
+            meetingId: normalizedMeetingId,
+            externalSessionId: sessionId,
+            startedAt: canonicalStartedAt,
+            endedAt: null,
+            gatewayFinishPending: true,
+          });
+        } catch (error) {
+          void closeGatewayAfterOutboxFailure(sender, sessionId).catch((cleanupError) => {
+            console.warn('Gateway cleanup after durable lifecycle failure could not be confirmed', {
+              error: cleanupError instanceof Error ? cleanupError.message : 'unknown error',
+            });
+          });
+          throw error;
+        }
+        try {
+          await syncRecordingLifecycle(
+            loadMeetingConfig(),
+            await getValidAccessToken(),
+            pendingLifecycle,
+          );
+        } catch (error) {
+          let pendingFinish = pendingLifecycle;
+          try {
+            pendingFinish = lifecycleOutbox.markEnded(pendingLifecycle, new Date().toISOString());
+          } catch (durableError) {
+            console.warn('Canonical start failure could not be marked ended in the durable queue', {
+              error: durableError instanceof Error ? durableError.message : 'unknown error',
+            });
+          }
+
+          // Do not let bounded gateway cleanup delay the canonical error past the
+          // renderer IPC timeout. The durable entry remains authoritative and the
+          // explicit reconciliation path will retry both canonical and gateway
+          // finalization after a crash or an ambiguous response.
+          void sender
+            .finish()
+            .then(() => {
+              try {
+                lifecycleOutbox.markGatewayFinished(pendingFinish);
+              } catch (durableError) {
+                console.warn('Gateway close confirmation remains queued', {
+                  error: durableError instanceof Error ? durableError.message : 'unknown error',
+                });
+              }
+            })
+            .catch(() => undefined);
+          throw error;
+        }
         const send = rendererSend(event);
         const transcriptSubscription = new TranscriptEventSubscription({
           cfg,
@@ -324,6 +593,11 @@ export function registerAudioIpc(): void {
         transcriptSubscription.start();
         active = {
           captureId,
+          meetingId: normalizedMeetingId,
+          externalSessionId: sessionId,
+          canonicalStartedAt,
+          canonicalEndedAt: null,
+          gatewayFinished: false,
           sender,
           transcriptSubscription,
           startedAtMs: Date.now(),
@@ -360,14 +634,9 @@ export function registerAudioIpc(): void {
     const recording = requireActive(captureId);
     finishing = true;
     try {
-      await recording.sender.finish();
+      await finishActiveRecording(recording);
     } finally {
-      recording.transcriptSubscription.stop();
       finishing = false;
-      if (active?.captureId === recording.captureId) {
-        active = null;
-        setRecordingActive(false);
-      }
     }
     return { ok: true };
   });

@@ -18,3 +18,42 @@ const dispatcher = new Agent({
 export function desktopFetch(input: string | URL, init: RequestInit = {}): Promise<Response> {
   return fetch(input, { ...init, dispatcher } as unknown as RequestInit);
 }
+
+export async function withDesktopFetchDeadline<T>(
+  input: string | URL,
+  init: RequestInit,
+  timeoutMs: number,
+  label: string,
+  consume: (response: Response) => Promise<T>,
+): Promise<T> {
+  const controller = new AbortController();
+  let timedOut = false;
+  const timeoutId = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, timeoutMs);
+  const callerSignal = init.signal;
+  const abortFromCaller = (): void => controller.abort();
+  if (callerSignal) {
+    if (callerSignal.aborted) {
+      controller.abort();
+    } else {
+      callerSignal.addEventListener('abort', abortFromCaller, { once: true });
+    }
+  }
+
+  try {
+    const response = await desktopFetch(input, { ...init, signal: controller.signal });
+    return await consume(response);
+  } catch (error) {
+    if (timedOut) {
+      throw Object.assign(new Error(`${label} timed out after ${timeoutMs}ms`), {
+        name: 'TimeoutError',
+      });
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeoutId);
+    callerSignal?.removeEventListener('abort', abortFromCaller);
+  }
+}

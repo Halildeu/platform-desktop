@@ -12,7 +12,7 @@
 
 import { randomBytes } from 'node:crypto';
 
-import { desktopFetch } from '../net/desktop-fetch.js';
+import { desktopFetch, withDesktopFetchDeadline } from '../net/desktop-fetch.js';
 
 const API = '/api/v1/audio-gateway';
 const HTTP_TIMEOUT_MS = 15_000;
@@ -97,32 +97,14 @@ export function newIdempotencyKey(): string {
   return randomBytes(16).toString('hex');
 }
 
-async function fetchWithTimeout(
+async function fetchWithTimeout<T>(
   input: string,
   init: RequestInit,
   label: string,
+  consume: (response: Response) => Promise<T>,
   timeoutMs: number = HTTP_TIMEOUT_MS,
-): Promise<Response> {
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
-  if (init.signal) {
-    if (init.signal.aborted) {
-      controller.abort();
-    } else {
-      init.signal.addEventListener('abort', () => controller.abort(), { once: true });
-    }
-  }
-  try {
-    return await desktopFetch(input, { ...init, signal: controller.signal });
-  } catch (err) {
-    const name = err instanceof Error ? err.name : '';
-    if (name === 'AbortError' || name === 'TimeoutError') {
-      throw new Error(`${label} timed out after ${timeoutMs}ms`);
-    }
-    throw err;
-  } finally {
-    clearTimeout(timeoutId);
-  }
+): Promise<T> {
+  return withDesktopFetchDeadline(input, init, timeoutMs, label, consume);
 }
 
 /** Chunk admission header'ları (contract-v1: seq + started-at + byte-length + format/rate/channels). */
@@ -262,7 +244,7 @@ export async function recordConsent(
   jwt: string,
   args: RecordConsentArgs,
 ): Promise<RecordConsentInfo> {
-  const res = await fetchWithTimeout(
+  return fetchWithTimeout(
     consentsUrl(cfg),
     {
       method: 'POST',
@@ -279,11 +261,13 @@ export async function recordConsent(
       }),
     },
     'recordConsent',
+    async (res) => {
+      if (!res.ok) {
+        throw new Error(await httpErrorMessage(res, 'recordConsent'));
+      }
+      return (await res.json()) as RecordConsentInfo;
+    },
   );
-  if (!res.ok) {
-    throw new Error(await httpErrorMessage(res, 'recordConsent'));
-  }
-  return (await res.json()) as RecordConsentInfo;
 }
 
 /** POST /sessions — oturum başlat (WAV/PCM16 16kHz mono). */
@@ -293,7 +277,7 @@ export async function startSession(
   args: StartSessionArgs,
   idempotencyKey: string = newIdempotencyKey(),
 ): Promise<SessionInfo> {
-  const res = await fetchWithTimeout(
+  return fetchWithTimeout(
     sessionsUrl(cfg),
     {
       method: 'POST',
@@ -312,11 +296,13 @@ export async function startSession(
       }),
     },
     'startSession',
+    async (res) => {
+      if (!res.ok) {
+        throw new Error(await httpErrorMessage(res, 'startSession'));
+      }
+      return (await res.json()) as SessionInfo;
+    },
   );
-  if (!res.ok) {
-    throw new Error(await httpErrorMessage(res, 'startSession'));
-  }
-  return (await res.json()) as SessionInfo;
 }
 
 /** POST /sessions/{id}/chunks — sıralı PCM16 chunk gönder. */
@@ -327,7 +313,7 @@ export async function sendChunk(
   chunk: { seq: number; bytes: Uint8Array; startedAtMs: number },
   idempotencyKey: string = newIdempotencyKey(),
 ): Promise<void> {
-  const res = await fetchWithTimeout(
+  await fetchWithTimeout(
     chunksUrl(cfg, sessionId),
     {
       method: 'POST',
@@ -341,10 +327,12 @@ export async function sendChunk(
       body: chunk.bytes,
     },
     'sendChunk',
+    async (res) => {
+      if (!res.ok) {
+        throw new Error(`${await httpErrorMessage(res, 'sendChunk')} (seq=${chunk.seq})`);
+      }
+    },
   );
-  if (!res.ok) {
-    throw new Error(`${await httpErrorMessage(res, 'sendChunk')} (seq=${chunk.seq})`);
-  }
 }
 
 /** POST /sessions/{id}/finish — oturumu terminal yap. */
@@ -354,7 +342,7 @@ export async function finishSession(
   sessionId: string,
   idempotencyKey: string = newIdempotencyKey(),
 ): Promise<void> {
-  const res = await fetchWithTimeout(
+  await fetchWithTimeout(
     finishUrl(cfg, sessionId),
     {
       method: 'POST',
@@ -364,10 +352,12 @@ export async function finishSession(
       },
     },
     'finishSession',
+    async (res) => {
+      if (!res.ok) {
+        throw new Error(await httpErrorMessage(res, 'finishSession'));
+      }
+    },
   );
-  if (!res.ok) {
-    throw new Error(await httpErrorMessage(res, 'finishSession'));
-  }
 }
 
 /** GET /sessions/{id}/transcript-events — cursor-paged live transcript delivery. */
@@ -377,7 +367,7 @@ export async function readTranscriptEvents(
   sessionId: string,
   args: { after?: string | null; limit?: number; signal?: AbortSignal } = {},
 ): Promise<TranscriptEventsPage> {
-  const res = await fetchWithTimeout(
+  return fetchWithTimeout(
     transcriptEventsUrl(cfg, sessionId, { after: args.after, limit: args.limit }),
     {
       method: 'GET',
@@ -388,12 +378,14 @@ export async function readTranscriptEvents(
       signal: args.signal,
     },
     'readTranscriptEvents',
+    async (res) => {
+      if (!res.ok) {
+        throw new Error(await httpErrorMessage(res, 'readTranscriptEvents'));
+      }
+      return (await res.json()) as TranscriptEventsPage;
+    },
     TRANSCRIPT_EVENTS_HTTP_TIMEOUT_MS,
   );
-  if (!res.ok) {
-    throw new Error(await httpErrorMessage(res, 'readTranscriptEvents'));
-  }
-  return (await res.json()) as TranscriptEventsPage;
 }
 
 /** GET /sessions/{id}/transcript-events/stream — SSE live transcript delivery. */
