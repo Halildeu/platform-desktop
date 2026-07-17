@@ -69,6 +69,7 @@ export interface SummaryPanelProps {
   autoSubmitMeetingAi?: boolean;
   canonicalResultStatus?: CanonicalResultLoadStatus;
   canonicalResultError?: string | null;
+  canonicalResultAutoRetrying?: boolean;
   onCanonicalResultRetry?: () => void;
   onMeetingAiSubmitted?: () => void;
   onMeetingAiError?: (message: string) => void;
@@ -565,6 +566,7 @@ export function SummaryPanel({
   autoSubmitMeetingAi = false,
   canonicalResultStatus = 'idle',
   canonicalResultError = null,
+  canonicalResultAutoRetrying = false,
   onCanonicalResultRetry,
   onMeetingAiSubmitted,
   onMeetingAiError,
@@ -959,7 +961,11 @@ export function SummaryPanel({
         <span
           className={`state-pill ${canonicalResultStateClass(canonicalResultStatus, visibleIntelligence.status)}`}
         >
-          {canonicalResultStatusLabel(canonicalResultStatus, visibleIntelligence.status)}
+          {canonicalResultStatusLabel(
+            canonicalResultStatus,
+            visibleIntelligence.status,
+            canonicalResultAutoRetrying,
+          )}
         </span>
       </div>
 
@@ -969,6 +975,11 @@ export function SummaryPanel({
       {canonicalResultStatus === 'error' && canonicalResultError ? (
         <div className="canonical-result-error" role="alert">
           <p className="inline-error">{canonicalResultError}</p>
+          <p>
+            {canonicalResultAutoRetrying
+              ? 'Geçici hata; bağlantı ve pencere yeniden etkin olduğunda otomatik kontrol sürecek.'
+              : 'Bu hata otomatik yeniden denenmeyecek. Yetki veya istek ayrıntısını düzeltip yeniden deneyin.'}
+          </p>
           {onCanonicalResultRetry ? (
             <button className="secondary-action" type="button" onClick={onCanonicalResultRetry}>
               Tekrar dene
@@ -979,6 +990,9 @@ export function SummaryPanel({
       {canonicalResultStatus === 'not_ready' ? (
         <div className="canonical-result-pending" role="status">
           <p>Kalıcı sonuç henüz hazır değil. Önceki snapshot varsa ekranda tutulur.</p>
+          {canonicalResultAutoRetrying ? (
+            <p>Arka planda düşük sıklıkta ve kontrollü olarak yeniden okunacak.</p>
+          ) : null}
           {onCanonicalResultRetry ? (
             <button className="secondary-action" type="button" onClick={onCanonicalResultRetry}>
               Sonucu yenile
@@ -1741,6 +1755,7 @@ function formatCitations(citations: IntelligenceCitation[]): string {
 function canonicalResultStatusLabel(
   canonicalStatus: CanonicalResultLoadStatus,
   intelligenceStatus: MeetingIntelligenceState['status'],
+  autoRetrying: boolean,
 ): string {
   if (canonicalStatus === 'loading') {
     return 'Yükleniyor';
@@ -1749,7 +1764,7 @@ function canonicalResultStatusLabel(
     return 'Hazırlanıyor';
   }
   if (canonicalStatus === 'error') {
-    return 'Bağlantı hatası';
+    return autoRetrying ? 'Geçici bağlantı hatası' : 'İstek hatası';
   }
   if (canonicalStatus === 'ready') {
     return 'Kalıcı sonuç';
