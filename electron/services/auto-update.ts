@@ -1,9 +1,9 @@
 /**
  * Auto-update — #11. Thin wrapper around electron-updater; GitHub Releases
- * publish target already configured (package.json build.publish). Signature/
- * hash verification is electron-updater's own built-in behavior (it refuses
- * an update whose signature doesn't match the published latest.yml/-mac.yml/
- * -linux.yml hash) — not re-implemented here.
+ * publish target already configured (package.json build.publish). On Linux,
+ * electron-updater binds the downloaded AppImage to latest-linux.yml with its
+ * SHA-512 digest. Sigstore provenance is a separate release-intake gate; the
+ * AppImageUpdater does not natively verify the .sigstore.json bundle.
  *
  * Staged rollout (5% -> 25% -> 100%) is a release-metadata concern
  * (electron-builder writes `stagingPercentage` into the published

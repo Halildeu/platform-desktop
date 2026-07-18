@@ -34,6 +34,7 @@ import {
   notifyRecordingStarted,
 } from './services/notifications.js';
 import { TrayManager } from './services/tray-manager.js';
+import { writeReleaseSmokeEvidence } from './services/release-smoke-evidence.js';
 import { resolveWindowBounds, type WindowBounds } from './services/window-bounds.js';
 import { WindowStateStore } from './services/window-state-store.js';
 
@@ -119,6 +120,18 @@ function createMainWindow(): void {
       );
       if (rendererMounted === true) {
         process.stdout.write(`${RELEASE_SMOKE_READY}\n`);
+        try {
+          writeReleaseSmokeEvidence({
+            enabled: true,
+            evidencePath: process.env.MEETING_INTELLIGENCE_RELEASE_SMOKE_EVIDENCE,
+            runNonce: process.env.MEETING_INTELLIGENCE_RELEASE_SMOKE_NONCE,
+            version: app.getVersion(),
+            pid: process.pid,
+            appImagePath: process.env.APPIMAGE,
+          });
+        } catch {
+          process.stderr.write('MEETING_INTELLIGENCE_RELEASE_SMOKE_EVIDENCE_ERROR\n');
+        }
       }
     }
   });
