@@ -257,16 +257,27 @@ function serveDirectory(directoryInput) {
   });
 }
 
-function createAppAdapter({ version, scenarioDirectory }) {
+function createAppAdapter({ version, feedUrl, scenarioDirectory }) {
   const userDataPath = join(scenarioDirectory, 'user-data');
   const baseCachePath = join(scenarioDirectory, 'cache');
+  const appUpdateConfigPath = join(scenarioDirectory, 'app-update.yml');
   mkdirSync(userDataPath, { recursive: true });
   mkdirSync(baseCachePath, { recursive: true });
+  writeFileSync(
+    appUpdateConfigPath,
+    [
+      'provider: generic',
+      `url: ${JSON.stringify(feedUrl)}`,
+      'updaterCacheDirName: platform-desktop-linux-update-acceptance-updater',
+      '',
+    ].join('\n'),
+    { mode: 0o600 },
+  );
   return {
     version,
     name: 'platform-desktop-linux-update-acceptance',
     isPackaged: true,
-    appUpdateConfigPath: join(scenarioDirectory, 'unused-app-update.yml'),
+    appUpdateConfigPath,
     userDataPath,
     baseCachePath,
     whenReady: async () => undefined,
@@ -278,7 +289,11 @@ function createAppAdapter({ version, scenarioDirectory }) {
 
 function createUpdater({ currentAppImage, currentVersion, feedUrl, scenarioDirectory, userId }) {
   process.env.APPIMAGE = currentAppImage;
-  const appAdapter = createAppAdapter({ version: currentVersion, scenarioDirectory });
+  const appAdapter = createAppAdapter({
+    version: currentVersion,
+    feedUrl,
+    scenarioDirectory,
+  });
   if (userId) {
     writeFileSync(join(appAdapter.userDataPath, '.updaterId'), userId, { mode: 0o600 });
   }
