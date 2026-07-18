@@ -1,0 +1,244 @@
+name: Linux auto-update acceptance
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - '.github/workflows/linux-auto-update-acceptance.yml'
+      - 'electron/main.ts'
+      - 'electron/services/auto-update.ts'
+      - 'electron/services/linux-auto-update-contract.test.ts'
+      - 'electron/services/release-smoke-evidence.*'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'scripts/linux-auto-update-*'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: linux-auto-update-acceptance-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  appimage-updater-acceptance:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    permissions:
+      contents: read
+    env:
+      BASELINE_RELEASE_ID: '355459539'
+      BASELINE_TAG: v0.1.3
+      BASELINE_VERSION: 0.1.3
+      BASELINE_SHA: 0854a63ed2f45a7bf34a1948b65453063b74585b
+      BASELINE_APPIMAGE_ASSET_ID: '479920937'
+      BASELINE_APPIMAGE_BUNDLE_ASSET_ID: '479921071'
+      BASELINE_METADATA_ASSET_ID: '479921063'
+      BASELINE_METADATA_BUNDLE_ASSET_ID: '479921081'
+      BASELINE_SUMS_ASSET_ID: '479921085'
+      BASELINE_APPIMAGE_SHA256: 690840524a8de6431b89ce6a0212f0244a853eb5423a1be35902313260baa830
+      BASELINE_APPIMAGE_BUNDLE_SHA256: 74d93e10cfdaa11b0ffdbf01df2c9b7d4433a453ae69a4eef7bb80332f8e03b5
+      BASELINE_METADATA_SHA256: 6231c542e7579038d6aa7ebe46840eb5de87218ccefc762622279a6c0b73eaf0
+      BASELINE_METADATA_BUNDLE_SHA256: 223335aff1b1165740fdb0079a55e7f72c9cf721e5b0c5af520ac11ec0af4920
+      BASELINE_SUMS_SHA256: 903098d8f079ccadf2c53429a83e69406344e693323a7619ace4af5e17c54db2
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - name: Initialize the isolated acceptance workspace
+        run: echo "ACCEPTANCE_ROOT=$RUNNER_TEMP/platform-desktop-linux-update-acceptance" >> "$GITHUB_ENV"
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@d7543c93d881b35a8faa02e8e3605f69b7a1ce62 # v3.10.0
+
+      - name: Install runtime dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends --yes x11-utils xvfb
+          npm ci
+
+      - name: Download the pinned immutable Linux baseline
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          baseline_dir="$ACCEPTANCE_ROOT/baseline"
+          mkdir -p "$baseline_dir"
+          release_json="$ACCEPTANCE_ROOT/release.json"
+          gh api "repos/$GITHUB_REPOSITORY/releases/$BASELINE_RELEASE_ID" > "$release_json"
+          jq -e \
+            --arg tag "$BASELINE_TAG" \
+            --arg sha "$BASELINE_SHA" \
+            '.id == 355459539 and .immutable == true and .tag_name == $tag and .target_commitish == $sha' \
+            "$release_json" >/dev/null
+
+          download_asset() {
+            local asset_id=$1
+            local expected_name=$2
+            local expected_digest=$3
+            jq -e \
+              --argjson id "$asset_id" \
+              --arg name "$expected_name" \
+              --arg digest "sha256:$expected_digest" \
+              '.assets[] | select(.id == $id and .name == $name and .digest == $digest)' \
+              "$release_json" >/dev/null
+            gh api \
+              -H 'Accept: application/octet-stream' \
+              "repos/$GITHUB_REPOSITORY/releases/assets/$asset_id" \
+              > "$baseline_dir/$expected_name"
+            printf '%s  %s\n' "$expected_digest" "$baseline_dir/$expected_name" \
+              | sha256sum --check --strict
+          }
+
+          download_asset \
+            "$BASELINE_APPIMAGE_ASSET_ID" \
+            'Meeting-Intelligence-0.1.3-x86_64.AppImage' \
+            "$BASELINE_APPIMAGE_SHA256"
+          download_asset \
+            "$BASELINE_APPIMAGE_BUNDLE_ASSET_ID" \
+            'Meeting-Intelligence-0.1.3-x86_64.AppImage.sigstore.json' \
+            "$BASELINE_APPIMAGE_BUNDLE_SHA256"
+          download_asset \
+            "$BASELINE_METADATA_ASSET_ID" \
+            'latest-linux.yml' \
+            "$BASELINE_METADATA_SHA256"
+          download_asset \
+            "$BASELINE_METADATA_BUNDLE_ASSET_ID" \
+            'latest-linux.yml.sigstore.json' \
+            "$BASELINE_METADATA_BUNDLE_SHA256"
+          download_asset \
+            "$BASELINE_SUMS_ASSET_ID" \
+            'SHA256SUMS-linux-x64.txt' \
+            "$BASELINE_SUMS_SHA256"
+          chmod 755 "$baseline_dir/Meeting-Intelligence-0.1.3-x86_64.AppImage"
+
+      - name: Verify baseline hashes, metadata, and signed provenance
+        run: |
+          set -euo pipefail
+          baseline_dir="$ACCEPTANCE_ROOT/baseline"
+          appimage='Meeting-Intelligence-0.1.3-x86_64.AppImage'
+          metadata='latest-linux.yml'
+          grep -E "  ($appimage|$metadata)$" "$baseline_dir/SHA256SUMS-linux-x64.txt" \
+            | (cd "$baseline_dir" && sha256sum --check --strict)
+          node scripts/linux-auto-update-contract.mjs verify-metadata \
+            --artifact "$baseline_dir/$appimage" \
+            --metadata "$baseline_dir/$metadata" \
+            --version "$BASELINE_VERSION"
+
+          verify_release_signature() {
+            local artifact=$1
+            cosign verify-blob \
+              --bundle "$baseline_dir/$artifact.sigstore.json" \
+              --certificate-identity "https://github.com/$GITHUB_REPOSITORY/.github/workflows/package-linux.yml@refs/tags/$BASELINE_TAG" \
+              --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+              --certificate-github-workflow-repository "$GITHUB_REPOSITORY" \
+              --certificate-github-workflow-ref "refs/tags/$BASELINE_TAG" \
+              --certificate-github-workflow-sha "$BASELINE_SHA" \
+              --certificate-github-workflow-trigger push \
+              "$baseline_dir/$artifact"
+          }
+          verify_release_signature "$appimage"
+          verify_release_signature "$metadata"
+
+          tampered="$ACCEPTANCE_ROOT/tampered-baseline.AppImage"
+          cp "$baseline_dir/$appimage" "$tampered"
+          printf 'intentional-signature-corruption' >> "$tampered"
+          if cosign verify-blob \
+            --bundle "$baseline_dir/$appimage.sigstore.json" \
+            --certificate-identity "https://github.com/$GITHUB_REPOSITORY/.github/workflows/package-linux.yml@refs/tags/$BASELINE_TAG" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            --certificate-github-workflow-repository "$GITHUB_REPOSITORY" \
+            --certificate-github-workflow-ref "refs/tags/$BASELINE_TAG" \
+            --certificate-github-workflow-sha "$BASELINE_SHA" \
+            --certificate-github-workflow-trigger push \
+            "$tampered" >"$RUNNER_TEMP/tampered-signature.log" 2>&1; then
+            echo '::error::tampered AppImage unexpectedly passed Sigstore verification'
+            exit 1
+          fi
+          rm -f "$tampered" "$RUNNER_TEMP/tampered-signature.log"
+          chmod -R a-w "$baseline_dir"
+
+      - name: Build the candidate AppImage
+        run: |
+          set -euo pipefail
+          candidate_version=$(node -p "require('./package.json').version")
+          node -e \
+            "if (!require('semver').gt(process.argv[1], process.argv[2])) process.exit(1)" \
+            "$candidate_version" "$BASELINE_VERSION"
+          echo "CANDIDATE_VERSION=$candidate_version" >> "$GITHUB_ENV"
+          npm run build
+          npx electron-builder \
+            --linux AppImage \
+            --x64 \
+            --publish never \
+            --config.directories.output="$ACCEPTANCE_ROOT/candidate"
+          candidate_appimage=$(find "$ACCEPTANCE_ROOT/candidate" \
+            -maxdepth 1 -type f \
+            -name "Meeting-Intelligence-$candidate_version-x86_64.AppImage" \
+            -print -quit)
+          test -n "$candidate_appimage"
+          chmod 755 "$candidate_appimage"
+          echo "CANDIDATE_APPIMAGE=$candidate_appimage" >> "$GITHUB_ENV"
+
+      - name: Verify 5%-25%-100% immutable rollout metadata
+        run: |
+          node scripts/linux-auto-update-contract.mjs create-snapshots \
+            --artifact "$CANDIDATE_APPIMAGE" \
+            --version "$CANDIDATE_VERSION" \
+            --output "$ACCEPTANCE_ROOT/contract-rollout"
+
+      - name: Allow the Electron sandbox on the hosted runner
+        run: |
+          if ! unshare --user true; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+            unshare --user true
+          fi
+
+      - name: Rehearse check, download, install, restart, staged rollout, and rollback
+        run: |
+          set -euo pipefail
+          Xvfb :99 -screen 0 1280x800x24 >"$RUNNER_TEMP/xvfb.log" 2>&1 &
+          xvfb_pid=$!
+          cleanup_xvfb() {
+            kill "$xvfb_pid" 2>/dev/null || true
+            wait "$xvfb_pid" 2>/dev/null || true
+          }
+          trap cleanup_xvfb EXIT
+          export DISPLAY=:99
+          for _ in $(seq 1 20); do
+            if xdpyinfo >/dev/null 2>&1; then
+              break
+            fi
+            sleep 0.25
+          done
+          xdpyinfo >/dev/null
+
+          node scripts/linux-auto-update-runtime.mjs \
+            --baseline "$ACCEPTANCE_ROOT/baseline/Meeting-Intelligence-0.1.3-x86_64.AppImage" \
+            --baseline-version "$BASELINE_VERSION" \
+            --candidate "$CANDIDATE_APPIMAGE" \
+            --candidate-version "$CANDIDATE_VERSION" \
+            --workspace "$ACCEPTANCE_ROOT/runtime" \
+            --evidence "$ACCEPTANCE_ROOT/evidence/linux-auto-update-acceptance.json"
+
+          cleanup_xvfb
+          trap - EXIT
+
+      - name: Upload redacted acceptance evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: linux-auto-update-acceptance-${{ github.run_id }}-${{ github.run_attempt }}
+          if-no-files-found: error
+          retention-days: 30
+          path: |
+            ${{ env.ACCEPTANCE_ROOT }}/evidence/linux-auto-update-acceptance.json
+            ${{ env.ACCEPTANCE_ROOT }}/contract-rollout/**/latest-linux.yml
+            ${{ env.ACCEPTANCE_ROOT }}/runtime/rollout-snapshots/**/latest-linux.yml
+            ${{ env.ACCEPTANCE_ROOT }}/runtime/stage-universal/feed/latest-linux.yml
