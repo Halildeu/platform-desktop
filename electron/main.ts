@@ -15,7 +15,16 @@
 
 import 'dotenv/config'; // .env → process.env (Keycloak/gateway config), en başta
 
-import { app, BrowserWindow, desktopCapturer, ipcMain, screen, session, shell } from 'electron';
+import {
+  app,
+  BrowserWindow,
+  desktopCapturer,
+  ipcMain,
+  screen,
+  session,
+  shell,
+  systemPreferences,
+} from 'electron';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -163,9 +172,33 @@ function createMainWindow(): void {
 // IPC handlers (sample — extend in electron/ipc/*)
 ipcMain.handle('app:version', () => app.getVersion());
 
-ipcMain.handle('audio:permission-status', async () => {
-  // macOS TCC / Windows / Linux permission check (extend per-platform)
-  return { granted: true };
+function microphonePermissionStatus(): {
+  status: 'granted' | 'denied' | 'restricted' | 'not-determined' | 'unknown';
+  granted: boolean;
+  canRequest: boolean;
+} {
+  if (process.platform !== 'darwin') {
+    // Windows and Linux use Chromium's getUserMedia permission flow. Claiming
+    // "granted" before that prompt would make the product surface dishonest.
+    return { status: 'unknown', granted: false, canRequest: true };
+  }
+
+  const status = systemPreferences.getMediaAccessStatus('microphone');
+  return {
+    status,
+    granted: status === 'granted',
+    canRequest: status === 'not-determined',
+  };
+}
+
+ipcMain.handle('audio:permission-status', () => microphonePermissionStatus());
+ipcMain.handle('audio:request-permission', async () => {
+  const current = microphonePermissionStatus();
+  if (process.platform !== 'darwin' || current.status !== 'not-determined') {
+    return current;
+  }
+  await systemPreferences.askForMediaAccess('microphone');
+  return microphonePermissionStatus();
 });
 
 ipcMain.handle('app:get-auto-launch', () => isAutoLaunchEnabled());

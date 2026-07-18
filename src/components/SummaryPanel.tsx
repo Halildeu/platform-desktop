@@ -583,13 +583,19 @@ export function SummaryPanel({
   const [shareRecipients, setShareRecipients] = useState('');
   const autoSubmitKeyRef = useRef<string | null>(null);
   const shareDialogRef = useRef<HTMLDivElement>(null);
-  const transcriptSourceSegments = transcriptSegments(transcript);
+  const transcriptMeetingMismatch = Boolean(
+    intelligence.meetingId &&
+    transcript?.meetingId &&
+    intelligence.meetingId !== transcript.meetingId,
+  );
+  const boundTranscript = transcriptMeetingMismatch ? undefined : transcript;
+  const transcriptSourceSegments = transcriptSegments(boundTranscript);
   const hasTranscriptSource = transcriptSourceSegments.length > 0;
-  const transcriptReadiness = transcript
-    ? analyzeTranscriptSourceReadiness(transcript)
+  const transcriptReadiness = boundTranscript
+    ? analyzeTranscriptSourceReadiness(boundTranscript)
     : analyzeTranscriptSourceReadiness(initialTranscriptSessionFallback);
-  const meetingAiGate = transcript
-    ? buildMeetingAiSourceGate(transcript, transcriptReadiness)
+  const meetingAiGate = boundTranscript
+    ? buildMeetingAiSourceGate(boundTranscript, transcriptReadiness)
     : buildMeetingAiSourceGate(initialTranscriptSessionFallback, transcriptReadiness);
   const latestTranscriptSegment =
     transcriptSourceSegments.length > 0
@@ -616,10 +622,10 @@ export function SummaryPanel({
       }
     : null;
   const outputFreshness = result
-    ? buildOutputFreshness(result, transcript, transcriptSourceSegments)
+    ? buildOutputFreshness(result, boundTranscript, transcriptSourceSegments)
     : null;
   const outputSourceEvidence = buildOutputSourceEvidence(
-    transcript,
+    boundTranscript,
     transcriptReadiness,
     transcriptSourceSegments.length,
     outputFreshness,
@@ -655,11 +661,11 @@ export function SummaryPanel({
   const canRefreshStaleOutput =
     outputFreshness?.status === 'source_changed' && meetingAiGate.can_submit;
   const autoSubmitKey =
-    transcript && meetingAiGate.can_submit
+    boundTranscript && meetingAiGate.can_submit
       ? [
-          transcript.meetingId ?? '',
-          transcript.sessionId ?? '',
-          transcript.finishedAtMs ?? '',
+          boundTranscript.meetingId ?? '',
+          boundTranscript.sessionId ?? '',
+          boundTranscript.finishedAtMs ?? '',
           transcriptSourceSegments.length,
           latestTranscriptKey,
         ].join('|')
@@ -766,10 +772,10 @@ export function SummaryPanel({
   const runTranscriptExport = async (kind: 'copy' | 'markdown' | 'text'): Promise<void> => {
     setMessage(null);
     try {
-      if (!transcript) {
+      if (!boundTranscript) {
         throw new Error('Transcript source is not ready');
       }
-      const bundle = buildTranscriptSourceExport(transcript);
+      const bundle = buildTranscriptSourceExport(boundTranscript);
       if (kind === 'copy') {
         await exportAdapter.copyText(bundle.text);
         setMessage('Transkript panoya kopyalandı.');
@@ -788,10 +794,10 @@ export function SummaryPanel({
   const runMeetingAiPackageExport = async (kind: 'copy' | 'json'): Promise<void> => {
     setMessage(null);
     try {
-      if (!transcript) {
+      if (!boundTranscript) {
         throw new Error('Transcript source is not ready');
       }
-      const bundle = buildMeetingAiSourcePackage(transcript, Date.now(), {
+      const bundle = buildMeetingAiSourcePackage(boundTranscript, Date.now(), {
         consentVersion: CONSENT_VERSION,
         consentTextHash: CONSENT_TEXT_HASH,
         consentLocale: CONSENT_LOCALE,
@@ -812,10 +818,10 @@ export function SummaryPanel({
     setMessage(null);
     setIsSubmittingMeetingAi(true);
     try {
-      if (!transcript) {
+      if (!boundTranscript) {
         throw new Error('Transcript source is not ready');
       }
-      const bundle = buildMeetingAiSourcePackage(transcript, Date.now(), {
+      const bundle = buildMeetingAiSourcePackage(boundTranscript, Date.now(), {
         consentVersion: CONSENT_VERSION,
         consentTextHash: CONSENT_TEXT_HASH,
         consentLocale: CONSENT_LOCALE,
@@ -840,7 +846,7 @@ export function SummaryPanel({
     } finally {
       setIsSubmittingMeetingAi(false);
     }
-  }, [meetingAiSubmitAdapter, onMeetingAiError, onMeetingAiSubmitted, transcript]);
+  }, [boundTranscript, meetingAiSubmitAdapter, onMeetingAiError, onMeetingAiSubmitted]);
 
   useEffect(() => {
     if (
@@ -968,6 +974,12 @@ export function SummaryPanel({
           )}
         </span>
       </div>
+      {transcriptMeetingMismatch ? (
+        <p className="source-warning" role="status">
+          Bu toplantının kalıcı transkripti henüz yüklenmedi; önceki toplantının transkripti bu
+          sonuçla birleştirilmiyor veya dışa aktarılmıyor.
+        </p>
+      ) : null}
 
       {visibleIntelligence.error ? (
         <p className="inline-error">{visibleIntelligence.error}</p>

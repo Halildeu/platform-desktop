@@ -350,6 +350,37 @@ describe('SummaryPanel', () => {
     ).toBeGreaterThanOrEqual(1);
   });
 
+  it('never binds a transcript from another meeting to a persisted result', async () => {
+    const adapter: ExportAdapter = {
+      copyText: vi.fn().mockResolvedValue(undefined),
+      downloadText: vi.fn(),
+      print: vi.fn(),
+    };
+    const mismatchedTranscript = {
+      ...transcriptState(),
+      meetingId: '33333333-3333-4333-8333-333333333333',
+    };
+
+    render(
+      <SummaryPanel
+        intelligence={readyState()}
+        transcript={mismatchedTranscript}
+        exportAdapter={adapter}
+      />,
+    );
+
+    expect(
+      screen.getByText(/önceki toplantının transkripti bu sonuçla birleştirilmiyor/),
+    ).toBeInTheDocument();
+    const freshness = screen.getByLabelText('Çıktı güncelliği');
+    expect(within(freshness).getByText('Kaynak yok')).toBeInTheDocument();
+    expect(
+      screen.queryByText('"Toplantı notu kaynak transcript olarak hazır."'),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Transkript kopyala' })).not.toBeInTheDocument();
+    expect(adapter.copyText).not.toHaveBeenCalled();
+  });
+
   it('renders safe output quality fallbacks and confidence bands', () => {
     const base = readyState();
     if (!base.result) {

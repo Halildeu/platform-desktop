@@ -13,6 +13,7 @@
 
 import {
   connectLiveSttStream,
+  type LiveSttStopResult,
   type LiveSttTranscriptEvent,
   type LiveSttStreamConnection,
   type LiveSttStreamStatusEvent,
@@ -106,6 +107,7 @@ export interface Recorder {
   gatewayActive?: boolean;
   gatewayError?: string | null;
   stop: () => Promise<void>;
+  getStopResult?: () => RecorderStopResult | null;
   /** #37: drop captured frames while paused — no gateway chunk is sent and the
    * live-STT stream is silent, so the gateway sequence tracker never advances
    * during a pause and no fabricated gap audio is emitted on resume. */
@@ -113,6 +115,10 @@ export interface Recorder {
   resume: () => void;
   isPaused: () => boolean;
   onError: (handler: (err: Error) => void) => void;
+}
+
+export interface RecorderStopResult {
+  liveStt: LiveSttStopResult | null;
 }
 
 export interface StartRecordingOptions {
@@ -422,14 +428,23 @@ export async function startRecording(
   let uploadTail: Promise<void> = Promise.resolve();
   let errorHandler: ((err: Error) => void) | null = null;
   let lastAudioActivityEventAtMs = 0;
+  let captureResourcesRelease: Promise<void> | null = null;
 
-  const stopCapture = (): void => {
+  const releaseCaptureResources = (): Promise<void> => {
+    if (captureResourcesRelease) {
+      return captureResourcesRelease;
+    }
     captureNode.port.onmessage = null;
     captureNode.disconnect();
     sink.disconnect();
-    liveStream?.close();
     stopAllTracks(micStream, loopbackStream);
-    void audioContext.close();
+    captureResourcesRelease = audioContext.close();
+    return captureResourcesRelease;
+  };
+
+  const stopCapture = (): void => {
+    void releaseCaptureResources().catch(() => undefined);
+    liveStream?.close();
     if (captureId) {
       void api.audio.abort(captureId).catch(() => {});
     }
@@ -501,33 +516,16 @@ export async function startRecording(
 
   let stopped = false;
   let paused = false;
+  let stopPromise: Promise<void> | null = null;
+  let stopResult: RecorderStopResult | null = null;
 
-  return {
-    sessionId,
-    transcriptSessionId: session?.transcriptSessionId ?? null,
-    hasLoopback: loopback !== null,
-    gatewayActive: captureId !== null,
-    gatewayError: recorderStartupError,
-    pause: (): void => {
-      if (stopped) {
-        return;
-      }
-      paused = true;
-    },
-    resume: (): void => {
-      if (stopped) {
-        return;
-      }
-      paused = false;
-    },
-    isPaused: (): boolean => paused,
-    onError: (handler: (err: Error) => void): void => {
-      errorHandler = handler;
-    },
-    stop: async (): Promise<void> => {
-      if (stopped) return;
-      stopped = true;
+  const stop = (): Promise<void> => {
+    if (stopPromise) {
+      return stopPromise;
+    }
 
+    stopped = true;
+    stopPromise = (async (): Promise<void> => {
       captureNode.port.onmessage = null;
 
       if (!uploadError) {
@@ -546,26 +544,73 @@ export async function startRecording(
         }
       }
 
+      if (uploadError) {
+        liveStream?.close();
+      }
+      const liveSttStop = uploadError || !liveStream ? null : liveStream.stop();
+      const captureRelease = releaseCaptureResources();
+
       await uploadTail;
       const finalError = uploadError;
+      let gatewayFinishError: unknown = null;
+      let captureReleaseError: unknown = null;
 
-      if (!uploadError) {
-        captureNode.disconnect();
-        sink.disconnect();
-        liveStream?.close();
-        stopAllTracks(micStream, loopbackStream);
-        await audioContext.close();
+      try {
+        await captureRelease;
+      } catch (error) {
+        captureReleaseError = error;
       }
 
       if (finalError) {
         if (captureId) {
           await api.audio.abort(captureId).catch(() => {});
         }
+      } else if (captureId) {
+        try {
+          await api.audio.finish(captureId);
+        } catch (error) {
+          gatewayFinishError = error;
+        }
+      }
+
+      const liveStt = liveSttStop ? await liveSttStop : null;
+      stopResult = { liveStt };
+      if (finalError) {
         throw finalError;
       }
-      if (captureId) {
-        await api.audio.finish(captureId);
+      if (gatewayFinishError) {
+        throw gatewayFinishError;
       }
+      if (captureReleaseError) {
+        throw captureReleaseError;
+      }
+    })();
+    return stopPromise;
+  };
+
+  return {
+    sessionId,
+    transcriptSessionId: session?.transcriptSessionId ?? null,
+    hasLoopback: loopback !== null,
+    gatewayActive: captureId !== null,
+    gatewayError: recorderStartupError,
+    getStopResult: (): RecorderStopResult | null => stopResult,
+    pause: (): void => {
+      if (stopped) {
+        return;
+      }
+      paused = true;
     },
+    resume: (): void => {
+      if (stopped) {
+        return;
+      }
+      paused = false;
+    },
+    isPaused: (): boolean => paused,
+    onError: (handler: (err: Error) => void): void => {
+      errorHandler = handler;
+    },
+    stop,
   };
 }

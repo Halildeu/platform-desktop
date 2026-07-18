@@ -53,6 +53,7 @@ interface TestTranscriptGatewayEvent {
   text: string;
   textLength: number;
   status: string;
+  correlationId?: string | null;
 }
 
 interface TestTranscriptGatewayError {
@@ -130,6 +131,7 @@ function installElectronApiMock(recorderConfig: {
   deviceId: string;
   ready: boolean;
   reason: string | null;
+  gatewayLiveStreamEnabled?: boolean;
   liveSttStreamUrl?: string | null;
   liveSttStreamReason?: string | null;
 }): void {
@@ -182,12 +184,22 @@ function installElectronApiMock(recorderConfig: {
     },
     audio: {
       recorderConfig: vi.fn().mockResolvedValue({
+        gatewayLiveStreamEnabled: false,
         liveSttStreamUrl: null,
         liveSttStreamReason: null,
         ...recorderConfig,
       }),
       reconcileLifecycle: vi.fn().mockResolvedValue({ ok: true, processed: 0, remaining: 0 }),
-      permissionStatus: vi.fn(),
+      permissionStatus: vi.fn().mockResolvedValue({
+        status: 'granted',
+        granted: true,
+        canRequest: false,
+      }),
+      requestPermission: vi.fn().mockResolvedValue({
+        status: 'granted',
+        granted: true,
+        canRequest: false,
+      }),
       prepareCapture: vi.fn(),
       cancelCapture: vi.fn(),
       consent: vi.fn(),
@@ -714,6 +726,31 @@ describe('App recorder readiness', () => {
     expect(screen.getByRole('button', { name: 'Kaydet' })).toBeEnabled();
   });
 
+  it('mikrofon izni reddedildiyse ses yakalamayi baslatmaz', async () => {
+    installElectronApiMock({
+      meetingId: '22222222-2222-4222-8222-222222222222',
+      deviceId: 'desktop-1',
+      ready: true,
+      reason: null,
+    });
+    vi.mocked(window.electronAPI!.audio.permissionStatus).mockResolvedValue({
+      status: 'denied',
+      granted: false,
+      canRequest: false,
+    });
+
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Kaydet' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Onaylıyorum — Kaydı Başlat' }));
+
+    const permissionErrors = await screen.findAllByText(
+      'Kayıt başlatılamadı: Mikrofon izni verilmedi. Sistem Ayarları > Gizlilik ve Güvenlik > Mikrofon bölümünden Meeting Intelligence erişimini açın.',
+    );
+    expect(permissionErrors.length).toBeGreaterThan(0);
+    expect(startRecording).not.toHaveBeenCalled();
+  });
+
   it('gateway transcript eventlerini canli transcript zaman cizelgesine yazar', async () => {
     installElectronApiMock({
       meetingId: '22222222-2222-4222-8222-222222222222',
@@ -830,6 +867,55 @@ describe('App recorder readiness', () => {
     expect(await screen.findByText('Merhaba nasılsın')).toBeInTheDocument();
     expect(screen.queryByText('Merhaba')).not.toBeInTheDocument();
     expect(screen.getAllByRole('article')).toHaveLength(1);
+  });
+
+  it('yetkili Gateway canlı eventini direct URL olmadan görünür ve aktif yapar', async () => {
+    installElectronApiMock({
+      meetingId: '22222222-2222-4222-8222-222222222222',
+      deviceId: 'desktop-1',
+      ready: true,
+      reason: null,
+      gatewayLiveStreamEnabled: true,
+      liveSttStreamUrl: null,
+      liveSttStreamReason: null,
+    });
+    vi.mocked(startRecording).mockResolvedValue({
+      sessionId: 'SES-1',
+      transcriptSessionId: 'SES-1',
+      hasLoopback: false,
+      stop: vi.fn(),
+      onError: vi.fn(),
+      pause: vi.fn(),
+      resume: vi.fn(),
+      isPaused: vi.fn(() => false),
+    });
+
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Kaydet' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Onaylıyorum — Kaydı Başlat' }));
+
+    await screen.findByText('Kayıt başladı (yalnız mikrofon, oturum SES-1)');
+    expect(vi.mocked(startRecording).mock.calls[0]?.[2]?.liveSttStreamUrl).toBeNull();
+    expect(screen.getByText('Gateway canlı bekleniyor')).toBeInTheDocument();
+
+    act(() => {
+      transcriptEventHandler?.({
+        eventId: 'live-SES-1-0',
+        sessionId: 'SES-1',
+        meetingId: '22222222-2222-4222-8222-222222222222',
+        chunkSeq: 0,
+        chunkStartedAtMs: 1781820000000,
+        text: 'Gateway canlı metni',
+        textLength: 20,
+        status: 'DRAFT',
+        correlationId: 'gateway-live',
+      });
+    });
+
+    expect(await screen.findByText('Gateway canlı metni')).toBeInTheDocument();
+    expect(screen.getByText('Gateway canlı')).toBeInTheDocument();
+    expect(screen.getByText('Kelime akışı aktif')).toBeInTheDocument();
   });
 
   it('direct live STT partial eventleri ayni satiri kelime kelime gunceller', async () => {
@@ -1789,6 +1875,7 @@ describe('App recent meeting result navigation', () => {
     await userEvent.selectOptions(picker, CANONICAL_MEETING_ID);
 
     expect(await screen.findByText('Kalıcı toplantı özeti yüklendi.')).toBeInTheDocument();
+    expect(screen.getByText('Transkript akışı bekleniyor')).toBeInTheDocument();
     expect(
       screen.getByText('Geçmiş çıktı açık; aktif kayıt hedefi değişmedi.'),
     ).toBeInTheDocument();

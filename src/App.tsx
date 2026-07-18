@@ -77,6 +77,7 @@ export const CANONICAL_RESULT_DURABLE_RETRY_MAX_DELAY_MS = 15 * 60_000;
 export const CANONICAL_RESULT_DURABLE_RETRY_JITTER_RATIO = 0.2;
 const LIFECYCLE_RECONCILIATION_MAX_ATTEMPTS = 6;
 const LIFECYCLE_RECONCILIATION_BASE_DELAY_MS = 1_000;
+const GATEWAY_LIVE_CORRELATION_ID = 'gateway-live';
 
 type CanonicalResultRetryReason = 'disabled' | 'not_ready' | 'recoverable_error';
 
@@ -92,6 +93,7 @@ interface RecorderRuntimeConfig {
   deviceId: string;
   ready: boolean;
   reason: string | null;
+  gatewayLiveStreamEnabled: boolean;
   liveSttStreamUrl: string | null;
   liveSttStreamReason: string | null;
 }
@@ -529,7 +531,6 @@ function App() {
   const stopInFlightRef = useRef(false);
   const contractPendingRef = useRef(false);
   const liveStreamHasEventsRef = useRef(false);
-  const directStreamConfiguredRef = useRef(false);
   const transcriptSessionIdRef = useRef<string | null>(null);
   const pendingLiveTranscriptEventsRef = useRef<LiveSttTranscriptEvent[]>([]);
   const recentMeetingsReadSequenceRef = useRef(0);
@@ -912,12 +913,8 @@ function App() {
   );
 
   useEffect(() => {
-    directStreamConfiguredRef.current = Boolean(recorderConfig?.liveSttStreamUrl);
-  }, [recorderConfig?.liveSttStreamUrl]);
-
-  useEffect(() => {
     setLiveStreamPreflight(initialLiveSttPreflightState);
-  }, [recorderConfig?.liveSttStreamUrl]);
+  }, [recorderConfig?.gatewayLiveStreamEnabled, recorderConfig?.liveSttStreamUrl]);
 
   useEffect(() => {
     if (
@@ -981,6 +978,7 @@ function App() {
           deviceId: 'desktop-1',
           ready: false,
           reason: 'Recorder runtime config okunamadi.',
+          gatewayLiveStreamEnabled: false,
           liveSttStreamUrl: null,
           liveSttStreamReason: null,
         };
@@ -1045,12 +1043,25 @@ function App() {
 
   useEffect(() => {
     const offTranscriptEvent = window.electronAPI?.audio.onTranscriptEvent?.((event) => {
+      const isGatewayLiveEvent = event.correlationId === GATEWAY_LIVE_CORRELATION_ID;
+      if (isGatewayLiveEvent) {
+        liveStreamHasEventsRef.current = true;
+        setLiveStreamReady(true);
+        setLiveStreamActive(true);
+        setLiveStreamStatus({ status: 'ready' });
+      }
       setTranscriptSession((current) => {
         const gatewaySessionId = current.gatewaySessionId ?? current.sessionId;
         if (!gatewaySessionId || event.sessionId !== gatewaySessionId) {
           return current;
         }
-        if (!shouldApplyGatewayTranscriptEvent(current, event, liveStreamHasEventsRef.current)) {
+        if (
+          !shouldApplyGatewayTranscriptEvent(
+            current,
+            event,
+            isGatewayLiveEvent ? false : liveStreamHasEventsRef.current,
+          )
+        ) {
           return current;
         }
         return upsertTranscriptSegment(current, {
@@ -1111,6 +1122,7 @@ function App() {
       deviceId: recorderConfig?.deviceId ?? 'desktop-1',
       ready: true,
       reason: null,
+      gatewayLiveStreamEnabled: recorderConfig?.gatewayLiveStreamEnabled ?? false,
       liveSttStreamUrl: recorderConfig?.liveSttStreamUrl ?? null,
       liveSttStreamReason: recorderConfig?.liveSttStreamReason ?? null,
     };
@@ -1147,6 +1159,15 @@ function App() {
     cancelCanonicalResultWork();
     canonicalRunBeforeRecordingRef.current = null;
     setCanonicalResultError(null);
+    setTranscriptSession((current) => {
+      if (current.meetingId === meetingId) {
+        return current;
+      }
+      return markTranscriptReady(initialTranscriptSession(), {
+        meetingId,
+        deviceId: recorderConfig?.deviceId ?? current.deviceId ?? 'desktop-1',
+      });
+    });
     setMeetingIntelligence((current) => bindMeetingIntelligenceTarget(current, { meetingId }));
   };
 
@@ -1255,12 +1276,32 @@ function App() {
       if (!recorderConfig?.ready || !recorderConfig.meetingId) {
         throw new Error(recorderConfig?.reason ?? MEETING_ID_MISSING_MESSAGE);
       }
+      let microphonePermission = await window.electronAPI?.audio.permissionStatus();
+      if (microphonePermission?.status === 'not-determined') {
+        microphonePermission = await window.electronAPI?.audio.requestPermission();
+      }
+      if (
+        microphonePermission?.status === 'denied' ||
+        microphonePermission?.status === 'restricted'
+      ) {
+        throw new Error(
+          'Mikrofon izni verilmedi. Sistem Ayarları > Gizlilik ve Güvenlik > Mikrofon bölümünden Meeting Intelligence erişimini açın.',
+        );
+      }
       const capturePreflight = await handleAudioCapturePreflight();
       if (!capturePreflight.ok) {
         throw new Error(capturePreflight.message);
       }
       const liveSttStreamUrlForSession = recorderConfig.liveSttStreamUrl;
-      if (recorderConfig.liveSttStreamUrl) {
+      if (recorderConfig.gatewayLiveStreamEnabled) {
+        setLiveStreamPreflight({
+          status: 'checking',
+          message: 'Yetkili Gateway canlı akışı oturumla bağlanıyor...',
+          checkedAtMs: null,
+          elapsedMs: null,
+          stage: null,
+        });
+      } else if (recorderConfig.liveSttStreamUrl) {
         setLiveStreamPreflight({
           status: 'checking',
           message: 'Direct STT kayıt sırasında bağlanacak...',
@@ -1280,7 +1321,6 @@ function App() {
         recordingStartedAtMs: Date.now(),
       };
       liveStreamHasEventsRef.current = false;
-      directStreamConfiguredRef.current = Boolean(liveSttStreamUrlForSession);
       setLiveStreamActive(false);
       setLiveStreamReady(false);
       setLiveStreamStatus(null);
@@ -1429,6 +1469,27 @@ function App() {
 
   const handleLiveStreamPreflight = async (): Promise<StartupPreflightOutcome> => {
     const captureCheck = handleAudioCapturePreflight();
+
+    if (recorderConfig?.gatewayLiveStreamEnabled) {
+      const message =
+        'Gateway canlı akış yapılandırması bulundu; oturum ve yetki kayıt başlatılırken doğrulanacak.';
+      const captureOutcome = await captureCheck;
+      setLiveStreamPreflight({
+        status: captureOutcome.ok ? 'ready' : 'error',
+        message,
+        checkedAtMs: Date.now(),
+        elapsedMs: null,
+        stage: null,
+      });
+      return {
+        ok: captureOutcome.ok,
+        message: captureOutcome.ok ? message : captureOutcome.message,
+        captureOk: captureOutcome.ok,
+        captureMessage: captureOutcome.message,
+        streamOk: true,
+        streamMessage: message,
+      };
+    }
 
     const streamUrl = recorderConfig?.liveSttStreamUrl;
     if (!streamUrl) {
@@ -1744,7 +1805,14 @@ function App() {
             <TranscriptPanel
               session={transcriptSession}
               stream={{
-                directConfigured: Boolean(recorderConfig?.liveSttStreamUrl),
+                directConfigured: Boolean(
+                  recorderConfig?.gatewayLiveStreamEnabled || recorderConfig?.liveSttStreamUrl,
+                ),
+                mode: recorderConfig?.gatewayLiveStreamEnabled
+                  ? 'gateway-live'
+                  : recorderConfig?.liveSttStreamUrl
+                    ? 'direct-live'
+                    : 'gateway-events',
                 directReady: liveStreamReady,
                 directStatus: liveStreamStatus,
                 directActive: liveStreamActive,

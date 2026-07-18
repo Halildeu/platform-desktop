@@ -163,6 +163,7 @@ function installElectronApiMock(): void {
       recorderConfig: vi.fn(),
       reconcileLifecycle: vi.fn(),
       permissionStatus: vi.fn(),
+      requestPermission: vi.fn(),
       prepareCapture: vi.fn().mockResolvedValue({ ok: true, expiresAtMs: Date.now() + 1000 }),
       cancelCapture: vi.fn().mockResolvedValue({ ok: true }),
       consent: vi.fn(),
@@ -378,6 +379,139 @@ describe('startRecording', () => {
     expect(window.electronAPI?.audio.sendChunk).not.toHaveBeenCalled();
 
     await recorder.stop();
+  });
+
+  it('preserves a late Direct-STT final but reports degraded without terminal drained', async () => {
+    installElectronApiMock();
+    setUserAgent('Mozilla/5.0 (Macintosh; Intel Mac OS X 15_5)');
+    const { micTrack } = installBrowserAudioMocks();
+    vi.stubGlobal('WebSocket', FakeWebSocket);
+    const events = vi.fn();
+
+    const recorder = await startRecording('meeting-1', 'desktop-1', {
+      liveSttStreamUrl: 'ws://127.0.0.1:18220/ws/stream',
+      onLiveTranscriptEvent: events,
+    });
+    const captureNode = FakeAudioWorkletNode.lastInstance;
+    const ws = FakeWebSocket.instances[0];
+    ws?.open();
+    ws?.message({ type: 'ready' });
+    captureNode?.port.onmessage?.({
+      data: new Float32Array(48_000).fill(0.01),
+    } as MessageEvent<Float32Array>);
+    vi.useFakeTimers();
+
+    const firstStop = recorder.stop();
+    const secondStop = recorder.stop();
+    expect(secondStop).toBe(firstStop);
+    expect(micTrack.stop).toHaveBeenCalledTimes(1);
+    expect(ws?.readyState).toBe(FakeWebSocket.OPEN);
+
+    ws?.message({
+      type: 'final',
+      seq: 0,
+      text: 'Stop sonrası korunan final.',
+      elapsed_ms: 400,
+      rms: 0.04,
+    });
+    await vi.advanceTimersByTimeAsync(1_250);
+
+    await expect(firstStop).resolves.toBeUndefined();
+    expect(recorder.getStopResult?.()).toEqual({
+      liveStt: {
+        state: 'degraded',
+        reason: 'quiet',
+        acknowledged: false,
+      },
+    });
+    expect(events).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: 'stream:0',
+        status: 'final',
+        text: 'Stop sonrası korunan final.',
+      }),
+    );
+    expect(window.electronAPI?.audio.finish).toHaveBeenCalledTimes(1);
+  });
+
+  it('reports a bounded Direct-STT stop timeout as degraded while gateway finish succeeds', async () => {
+    installElectronApiMock();
+    setUserAgent('Mozilla/5.0 (Macintosh; Intel Mac OS X 15_5)');
+    const { micTrack } = installBrowserAudioMocks();
+    vi.stubGlobal('WebSocket', FakeWebSocket);
+    const statuses = vi.fn();
+    const errors = vi.fn();
+
+    const recorder = await startRecording('meeting-1', 'desktop-1', {
+      liveSttStreamUrl: 'ws://127.0.0.1:18220/ws/stream',
+      onLiveStreamStatus: statuses,
+      onLiveTranscriptError: errors,
+    });
+    const captureNode = FakeAudioWorkletNode.lastInstance;
+    const ws = FakeWebSocket.instances[0];
+    ws?.open();
+    ws?.message({ type: 'ready' });
+    captureNode?.port.onmessage?.({
+      data: new Float32Array(48_000).fill(0.01),
+    } as MessageEvent<Float32Array>);
+    vi.useFakeTimers();
+
+    const stopPromise = recorder.stop();
+    expect(micTrack.stop).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(8_000);
+
+    await expect(stopPromise).resolves.toBeUndefined();
+    expect(recorder.getStopResult?.()).toEqual({
+      liveStt: {
+        state: 'degraded',
+        reason: 'timeout',
+        acknowledged: false,
+      },
+    });
+    expect(window.electronAPI?.audio.finish).toHaveBeenCalledTimes(1);
+    expect(statuses).toHaveBeenCalledWith({
+      status: 'degraded',
+      reason: 'Direct STT stop drain zaman aşımına uğradı; geç final doğrulanamadı.',
+    });
+    expect(errors).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: 'Direct STT stop drain zaman aşımına uğradı; geç final doğrulanamadı.',
+      }),
+    );
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('finishes the gateway when the Direct-STT socket closes during stop drain', async () => {
+    installElectronApiMock();
+    setUserAgent('Mozilla/5.0 (Macintosh; Intel Mac OS X 15_5)');
+    installBrowserAudioMocks();
+    vi.stubGlobal('WebSocket', FakeWebSocket);
+
+    const recorder = await startRecording('meeting-1', 'desktop-1', {
+      liveSttStreamUrl: 'ws://127.0.0.1:18220/ws/stream',
+    });
+    const captureNode = FakeAudioWorkletNode.lastInstance;
+    const ws = FakeWebSocket.instances[0];
+    ws?.open();
+    ws?.message({ type: 'ready' });
+    captureNode?.port.onmessage?.({
+      data: new Float32Array(48_000).fill(0.01),
+    } as MessageEvent<Float32Array>);
+    vi.useFakeTimers();
+
+    const stopPromise = recorder.stop();
+    ws?.close();
+
+    await expect(stopPromise).resolves.toBeUndefined();
+    expect(recorder.getStopResult?.()).toEqual({
+      liveStt: {
+        state: 'degraded',
+        reason: 'socket-close',
+        acknowledged: false,
+      },
+    });
+    expect(window.electronAPI?.audio.finish).toHaveBeenCalledTimes(1);
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it('keeps microphone recording alive when Direct-STT stream construction fails', async () => {

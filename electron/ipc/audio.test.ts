@@ -33,6 +33,16 @@ const mocks = vi.hoisted(() => {
     transcriptSubscriptionCtor: vi.fn(),
     transcriptSubscriptionStart: vi.fn(),
     transcriptSubscriptionStop: vi.fn(),
+    gatewayLiveStreamCtor: vi.fn(),
+    gatewayLiveStreamStart: vi.fn(async () => undefined),
+    gatewayLiveStreamSend: vi.fn(() => true),
+    gatewayLiveStreamStop: vi.fn(async () => ({
+      state: 'drained',
+      reason: 'eof-ack',
+      acknowledged: true,
+    })),
+    gatewayLiveStreamClose: vi.fn(),
+    loadRecorderRuntimeConfig: vi.fn(),
     pendingLifecycles: [] as Array<{
       meetingId: string;
       externalSessionId: string;
@@ -127,6 +137,19 @@ vi.mock('../services/gateway/transcript-event-subscription', () => ({
   },
 }));
 
+vi.mock('../services/gateway/gateway-live-stream', () => ({
+  GatewayLiveStream: class MockGatewayLiveStream {
+    constructor(args: unknown) {
+      mocks.gatewayLiveStreamCtor(args);
+    }
+
+    start = mocks.gatewayLiveStreamStart;
+    sendAfterRestAccepted = mocks.gatewayLiveStreamSend;
+    stop = mocks.gatewayLiveStreamStop;
+    close = mocks.gatewayLiveStreamClose;
+  },
+}));
+
 vi.mock('../services/display-media-lease', () => ({
   beginCapturePermissionLease: mocks.beginCapturePermissionLease,
   clearCapturePermissionLease: mocks.clearCapturePermissionLease,
@@ -134,14 +157,7 @@ vi.mock('../services/display-media-lease', () => ({
 }));
 
 vi.mock('../services/recorder-runtime-config', () => ({
-  loadRecorderRuntimeConfig: vi.fn(() => ({
-    meetingId: '22222222-2222-4222-8222-222222222222',
-    deviceId: 'dev1',
-    ready: true,
-    reason: null,
-    liveSttStreamUrl: null,
-    liveSttStreamReason: null,
-  })),
+  loadRecorderRuntimeConfig: mocks.loadRecorderRuntimeConfig,
 }));
 
 vi.mock('./auth', () => ({
@@ -193,6 +209,27 @@ async function registerFreshAudioIpc(): Promise<void> {
   mocks.transcriptSubscriptionCtor.mockClear();
   mocks.transcriptSubscriptionStart.mockClear();
   mocks.transcriptSubscriptionStop.mockClear();
+  mocks.gatewayLiveStreamCtor.mockClear();
+  mocks.gatewayLiveStreamStart.mockReset();
+  mocks.gatewayLiveStreamStart.mockResolvedValue(undefined);
+  mocks.gatewayLiveStreamSend.mockClear();
+  mocks.gatewayLiveStreamStop.mockReset();
+  mocks.gatewayLiveStreamStop.mockResolvedValue({
+    state: 'drained',
+    reason: 'eof-ack',
+    acknowledged: true,
+  });
+  mocks.gatewayLiveStreamClose.mockClear();
+  mocks.loadRecorderRuntimeConfig.mockReset();
+  mocks.loadRecorderRuntimeConfig.mockReturnValue({
+    meetingId: '22222222-2222-4222-8222-222222222222',
+    deviceId: 'dev1',
+    ready: true,
+    reason: null,
+    liveSttStreamUrl: null,
+    liveSttStreamReason: null,
+    gatewayLiveStreamEnabled: false,
+  });
   mocks.pendingLifecycles = [];
   mocks.outboxList.mockReset();
   mocks.outboxList.mockImplementation(() => [...mocks.pendingLifecycles]);
@@ -587,6 +624,67 @@ describe('audio IPC recorder consent gate', () => {
     ).resolves.toEqual({ seq: 0 });
 
     expect(mocks.senderSend).toHaveBeenCalledWith(bytes, 1781820000000);
+  });
+
+  it('opens the authenticated gateway live transport before capture and shares REST sequence ownership', async () => {
+    mocks.loadRecorderRuntimeConfig.mockReturnValue({
+      meetingId,
+      deviceId,
+      ready: true,
+      reason: null,
+      liveSttStreamUrl: null,
+      liveSttStreamReason: null,
+      gatewayLiveStreamEnabled: true,
+    });
+    const rendererSend = vi.fn();
+    await acceptConsent();
+    const started = (await startHandler()(
+      { sender: { id: 7, send: rendererSend } },
+      meetingId,
+      deviceId,
+    )) as { captureId: string };
+
+    expect(mocks.gatewayLiveStreamCtor).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cfg: { baseUrl: 'https://gw.example.com' },
+        sessionId: 'SES-1',
+        getJwt: expect.any(Function),
+        onEvent: expect.any(Function),
+        onError: expect.any(Function),
+      }),
+    );
+    expect(mocks.gatewayLiveStreamStart).toHaveBeenCalledTimes(1);
+
+    const bytes = new Uint8Array([0, 0]);
+    await chunkHandler()({}, { captureId: started.captureId, bytes, startedAtMs: 1781820000000 });
+    expect(mocks.gatewayLiveStreamSend).toHaveBeenCalledWith(bytes, 0, 1781820000000);
+
+    const callbacks = mocks.gatewayLiveStreamCtor.mock.calls[0][0] as {
+      onEvent: (event: unknown) => void;
+    };
+    callbacks.onEvent({
+      type: 'final',
+      seq: 4,
+      text: 'son kelimeler',
+      elapsed_ms: 500,
+    });
+    expect(rendererSend).toHaveBeenCalledWith(
+      'audio:transcript-event',
+      expect.objectContaining({
+        sessionId: 'SES-1',
+        meetingId,
+        status: 'FINAL',
+        text: 'son kelimeler',
+        correlationId: 'gateway-live',
+      }),
+    );
+
+    await finishHandler()({}, started.captureId);
+    expect(mocks.gatewayLiveStreamStop).toHaveBeenCalledTimes(1);
+    expect(mocks.gatewayLiveStreamStop.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.senderFinish.mock.invocationCallOrder[0],
+    );
+    expect(mocks.gatewayLiveStreamClose).toHaveBeenCalledTimes(1);
   });
 
   it('rejects chunks larger than the bounded two-second PCM16 contract', async () => {

@@ -79,6 +79,31 @@ describe('packaged runtime resources', () => {
     );
   });
 
+  it('ships the strict non-secret public runtime config outside app.asar', () => {
+    const packageJson = readPackageJson();
+
+    expect(packageJson.build?.extraResources).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          from: 'build/config',
+          to: 'config',
+          filter: ['public-runtime-config.json'],
+        }),
+      ]),
+    );
+
+    const runtimeConfig = readFileSync(
+      new URL('../../build/config/public-runtime-config.json', import.meta.url),
+      'utf8',
+    );
+    expect(runtimeConfig).toContain('"environment": "test"');
+    expect(runtimeConfig).toContain('"gatewayBaseUrl": "https://testai.acik.com"');
+    expect(runtimeConfig).toContain('"gatewayLiveStreamEnabled": true');
+    expect(runtimeConfig).toContain('"liveSttStreamUrl": null');
+    expect(runtimeConfig).not.toMatch(/secret|password|token|credential|private.?key|api.?key/i);
+    expect(runtimeConfig).not.toContain('RECORDER_MEETING_ID');
+  });
+
   it('declares macOS privacy usage strings for audio and system-audio capture', () => {
     const extendInfo = readPackageJson().build?.mac?.extendInfo;
 

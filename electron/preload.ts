@@ -78,13 +78,22 @@ const electronAPI = {
       deviceId: string;
       ready: boolean;
       reason: string | null;
+      gatewayLiveStreamEnabled: boolean;
       liveSttStreamUrl: string | null;
       liveSttStreamReason: string | null;
     }> => ipcRenderer.invoke('audio:recorder-config'),
     reconcileLifecycle: (): Promise<{ ok: boolean; processed: number; remaining: number }> =>
       ipcRenderer.invoke('audio:reconcile-lifecycle'),
-    permissionStatus: (): Promise<{ granted: boolean }> =>
-      ipcRenderer.invoke('audio:permission-status'),
+    permissionStatus: (): Promise<{
+      status: 'granted' | 'denied' | 'restricted' | 'not-determined' | 'unknown';
+      granted: boolean;
+      canRequest: boolean;
+    }> => ipcRenderer.invoke('audio:permission-status'),
+    requestPermission: (): Promise<{
+      status: 'granted' | 'denied' | 'restricted' | 'not-determined' | 'unknown';
+      granted: boolean;
+      canRequest: boolean;
+    }> => ipcRenderer.invoke('audio:request-permission'),
     prepareCapture: (): Promise<{ ok: boolean; expiresAtMs: number }> =>
       ipcRenderer.invoke('audio:prepare-capture'),
     cancelCapture: (): Promise<{ ok: boolean }> => ipcRenderer.invoke('audio:cancel-capture'),
