@@ -36,10 +36,36 @@ import {
 
 const require = createRequire(import.meta.url);
 const { extractFile } = require('@electron/asar');
+const { configureRequestOptions, configureRequestUrl } = require('builder-util-runtime');
 const { NodeHttpExecutor } = require('builder-util/out/nodeHttpExecutor.js');
 const { AppImageUpdater } = require('electron-updater/out/AppImageUpdater.js');
 const electronVersion = require('electron/package.json').version;
 const electronUpdaterVersion = require('electron-updater/package.json').version;
+
+export class AcceptanceHttpExecutor extends NodeHttpExecutor {
+  async download(url, destination, options) {
+    return options.cancellationToken.createPromise((resolvePromise, reject, onCancel) => {
+      const requestOptions = {
+        headers: options.headers || undefined,
+        redirect: 'manual',
+      };
+      configureRequestUrl(url, requestOptions);
+      configureRequestOptions(requestOptions);
+      this.doDownload(
+        requestOptions,
+        {
+          destination,
+          options,
+          onCancel,
+          callback: (error) =>
+            error == null ? resolvePromise(destination) : reject(error),
+          responseHandler: null,
+        },
+        0,
+      );
+    });
+  }
+}
 
 const COHORTS = Object.freeze({
   fiveIn: '00000000-0000-4000-8000-00000ccccccc',
@@ -298,7 +324,7 @@ function createUpdater({ currentAppImage, currentVersion, feedUrl, scenarioDirec
     writeFileSync(join(appAdapter.userDataPath, '.updaterId'), userId, { mode: 0o600 });
   }
   const updater = new AppImageUpdater(null, appAdapter);
-  updater.httpExecutor = new NodeHttpExecutor();
+  updater.httpExecutor = new AcceptanceHttpExecutor();
   updater.setFeedURL({ provider: 'generic', url: feedUrl, useMultipleRangeRequest: false });
   updater.logger = null;
   updater.autoDownload = false;
