@@ -57,8 +57,7 @@ export class AcceptanceHttpExecutor extends NodeHttpExecutor {
           destination,
           options,
           onCancel,
-          callback: (error) =>
-            error == null ? resolvePromise(destination) : reject(error),
+          callback: (error) => (error == null ? resolvePromise(destination) : reject(error)),
           responseHandler: null,
         },
         0,

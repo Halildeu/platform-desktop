@@ -41,9 +41,13 @@ describe('AcceptanceHttpExecutor', () => {
       const destination = join(directory, 'candidate.AppImage');
       const executor = new AcceptanceHttpExecutor();
 
-      await executor.download(new URL(`http://127.0.0.1:${address.port}/candidate.AppImage`), destination, {
-        cancellationToken: new CancellationToken(),
-      });
+      await executor.download(
+        new URL(`http://127.0.0.1:${address.port}/candidate.AppImage`),
+        destination,
+        {
+          cancellationToken: new CancellationToken(),
+        },
+      );
 
       await expect(readFile(destination)).resolves.toEqual(payload);
     } finally {
