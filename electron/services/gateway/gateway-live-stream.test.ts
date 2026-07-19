@@ -4,6 +4,7 @@ import { GATEWAY_LIVE_AUDIO_FRAME_HEADER_BYTES, GatewayLiveStream } from './gate
 
 class FakeSocket {
   readyState = 0;
+  bufferedAmount = 0;
   onopen: (() => void) | null = null;
   onmessage: ((event: { data: unknown }) => void) | null = null;
   onerror: (() => void) | null = null;
@@ -106,6 +107,7 @@ describe('GatewayLiveStream', () => {
     sockets[0].message(JSON.stringify({ type: 'ready', supports_eof: true }));
     await started;
     stream.sendAfterRestAccepted(new Uint8Array([0, 0]), 0, 1);
+    sockets[0].message(JSON.stringify({ type: 'audio_ack', chunk_seq: 0 }));
 
     const stopped = stream.stop();
     expect(sockets[0].sent.at(-1)).toBe(JSON.stringify({ type: 'eof' }));
@@ -147,6 +149,7 @@ describe('GatewayLiveStream', () => {
     sockets[0].message(JSON.stringify({ type: 'ready', supports_eof: true }));
     await started;
     stream.sendAfterRestAccepted(new Uint8Array([0, 0]), 0, 1);
+    sockets[0].message(JSON.stringify({ type: 'audio_ack', chunk_seq: 0 }));
 
     const stopped = stream.stop();
     sockets[0].message(JSON.stringify({ type: 'eof_ack' }));
@@ -158,7 +161,7 @@ describe('GatewayLiveStream', () => {
     });
   });
 
-  it('reconnects from the REST sequence baseline without replaying skipped chunks', async () => {
+  it('replays unacknowledged REST-accepted frames after reconnect, including handshake audio', async () => {
     vi.useFakeTimers();
     const sockets: FakeSocket[] = [];
     const stream = new GatewayLiveStream({
@@ -180,19 +183,131 @@ describe('GatewayLiveStream', () => {
     sockets[0].message(JSON.stringify({ type: 'ready' }));
     await started;
     expect(stream.sendAfterRestAccepted(new Uint8Array([0, 0]), 0, 1)).toBe(true);
+    sockets[0].message(JSON.stringify({ type: 'audio_ack', chunk_seq: 0 }));
 
+    const staleClose = sockets[0].onclose;
     sockets[0].failClose();
     expect(stream.sendAfterRestAccepted(new Uint8Array([0, 0]), 1, 2)).toBe(false);
     await vi.advanceTimersByTimeAsync(250);
     await vi.runAllTicks();
     expect(sockets).toHaveLength(2);
     sockets[1].open();
+    expect(stream.sendAfterRestAccepted(new Uint8Array([0, 0]), 2, 3)).toBe(false);
     sockets[1].message(JSON.stringify({ type: 'ready' }));
     await vi.runAllTicks();
 
-    expect(stream.sendAfterRestAccepted(new Uint8Array([0, 0]), 2, 3)).toBe(true);
-    const frame = sockets[1].sent[0] as ArrayBuffer;
-    expect(new DataView(frame).getBigInt64(1, false)).toBe(2n);
+    const replayedSequences = sockets[1].sent.map((frame) =>
+      Number(new DataView(frame as ArrayBuffer).getBigInt64(1, false)),
+    );
+    expect(replayedSequences).toEqual([1, 2]);
+    sockets[1].message(JSON.stringify({ type: 'audio_ack', chunk_seq: 1 }));
+    sockets[1].message(JSON.stringify({ type: 'audio_ack', chunk_seq: 2 }));
+
+    staleClose?.();
+    expect(stream.sendAfterRestAccepted(new Uint8Array([0, 0]), 3, 4)).toBe(true);
+    expect(new DataView(sockets[1].sent[2] as ArrayBuffer).getBigInt64(1, false)).toBe(3n);
+    stream.close();
+  });
+
+  it('holds frames while the socket is backpressured and flushes below the low watermark', async () => {
+    vi.useFakeTimers();
+    const sockets: FakeSocket[] = [];
+    const stream = new GatewayLiveStream({
+      cfg: { baseUrl: 'https://testai.acik.com' },
+      sessionId: 'SES-1',
+      getJwt: async () => 'JWT',
+      onEvent: vi.fn(),
+      onError: vi.fn(),
+      socketFactory: () => {
+        const socket = new FakeSocket();
+        sockets.push(socket);
+        return socket;
+      },
+    });
+
+    const started = stream.start();
+    await vi.runAllTicks();
+    sockets[0].open();
+    sockets[0].message(JSON.stringify({ type: 'ready' }));
+    await started;
+    sockets[0].bufferedAmount = 512 * 1024;
+
+    expect(stream.sendAfterRestAccepted(new Uint8Array([0, 0]), 0, 1)).toBe(false);
+    expect(sockets[0].sent).toEqual([]);
+    sockets[0].bufferedAmount = 128 * 1024;
+    await vi.advanceTimersByTimeAsync(25);
+    expect(sockets[0].sent).toHaveLength(1);
+    stream.close();
+  });
+
+  it('fails live delivery visibly when the bounded replay buffer is exhausted', async () => {
+    const sockets: FakeSocket[] = [];
+    const onError = vi.fn();
+    const stream = new GatewayLiveStream({
+      cfg: { baseUrl: 'https://testai.acik.com' },
+      sessionId: 'SES-1',
+      getJwt: async () => 'JWT',
+      onEvent: vi.fn(),
+      onError,
+      socketFactory: () => {
+        const socket = new FakeSocket();
+        sockets.push(socket);
+        return socket;
+      },
+    });
+
+    const started = stream.start();
+    await waitForSocket(sockets, 1);
+    sockets[0].open();
+    sockets[0].message(JSON.stringify({ type: 'ready' }));
+    await started;
+
+    for (let sequence = 0; sequence < 32; sequence += 1) {
+      expect(stream.sendAfterRestAccepted(new Uint8Array([0, 0]), sequence, sequence + 1)).toBe(
+        true,
+      );
+    }
+    expect(stream.sendAfterRestAccepted(new Uint8Array([0, 0]), 32, 33)).toBe(false);
+    expect(onError).toHaveBeenCalledWith(
+      expect.objectContaining({ message: expect.stringContaining('replay buffer is full') }),
+    );
+    await expect(stream.stop()).resolves.toEqual({
+      state: 'degraded',
+      reason: 'buffer-overflow',
+      acknowledged: false,
+    });
+  });
+
+  it('treats an upstream error event as a reconnectable socket failure', async () => {
+    vi.useFakeTimers();
+    const sockets: FakeSocket[] = [];
+    const onError = vi.fn();
+    const stream = new GatewayLiveStream({
+      cfg: { baseUrl: 'https://testai.acik.com' },
+      sessionId: 'SES-1',
+      getJwt: async () => 'JWT',
+      onEvent: vi.fn(),
+      onError,
+      socketFactory: () => {
+        const socket = new FakeSocket();
+        sockets.push(socket);
+        return socket;
+      },
+    });
+
+    const started = stream.start();
+    await vi.runAllTicks();
+    sockets[0].open();
+    sockets[0].message(JSON.stringify({ type: 'ready' }));
+    await started;
+    sockets[0].message(JSON.stringify({ type: 'error', msg: 'upstream reset' }));
+
+    await vi.advanceTimersByTimeAsync(250);
+    await vi.runAllTicks();
+    expect(sockets).toHaveLength(2);
+    expect(onError).toHaveBeenCalledWith(
+      expect.objectContaining({ message: 'gateway live STT error: upstream reset' }),
+    );
     stream.close();
   });
 
@@ -250,6 +365,7 @@ describe('GatewayLiveStream', () => {
     sockets[0].message(JSON.stringify({ type: 'ready' }));
     await started;
     stream.sendAfterRestAccepted(new Uint8Array([0, 0]), 0, 1);
+    sockets[0].message(JSON.stringify({ type: 'audio_ack', chunk_seq: 0 }));
 
     const stopped = stream.stop();
     await vi.advanceTimersByTimeAsync(1_250);

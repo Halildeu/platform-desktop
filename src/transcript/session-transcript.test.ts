@@ -8,6 +8,7 @@ import {
   finishTranscriptSession,
   initialTranscriptSession,
   markTranscriptBlocked,
+  markTranscriptProcessing,
   markTranscriptReady,
   markTranscriptSegmentReviewed,
   markTranscriptWaitingForContract,
@@ -357,6 +358,20 @@ describe('session transcript state', () => {
     expect(blocked.lifecycle).toBe('blocked');
     expect(blocked.error).toBe('RECORDER_MEETING_ID yok');
     expect(blocked.segments).toEqual([]);
+  });
+
+  it('keeps a degraded live drain in processing without erasing the warning', () => {
+    const processing = markTranscriptProcessing(
+      initialTranscriptSession(),
+      1781820000999,
+      'Canlı transkriptin son onayı alınamadı.',
+    );
+
+    expect(processing).toMatchObject({
+      lifecycle: 'processing',
+      finishedAtMs: 1781820000999,
+      error: 'Canlı transkriptin son onayı alınamadı.',
+    });
   });
 
   it('treats missing meeting contract as a neutral waiting state', () => {

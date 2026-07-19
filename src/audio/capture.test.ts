@@ -173,7 +173,7 @@ function installElectronApiMock(): void {
         captureId: 'CAP-1',
       }),
       sendChunk: vi.fn(),
-      finish: vi.fn().mockResolvedValue({ ok: true }),
+      finish: vi.fn().mockResolvedValue({ ok: true, liveTranscript: null }),
       abort: vi.fn().mockResolvedValue({ ok: true }),
       rendererUnloaded: vi.fn(),
       onTranscriptEvent: vi.fn(() => vi.fn()),
@@ -418,6 +418,7 @@ describe('startRecording', () => {
 
     await expect(firstStop).resolves.toBeUndefined();
     expect(recorder.getStopResult?.()).toEqual({
+      gatewayLive: null,
       liveStt: {
         state: 'degraded',
         reason: 'quiet',
@@ -462,6 +463,7 @@ describe('startRecording', () => {
 
     await expect(stopPromise).resolves.toBeUndefined();
     expect(recorder.getStopResult?.()).toEqual({
+      gatewayLive: null,
       liveStt: {
         state: 'degraded',
         reason: 'timeout',
@@ -504,6 +506,7 @@ describe('startRecording', () => {
 
     await expect(stopPromise).resolves.toBeUndefined();
     expect(recorder.getStopResult?.()).toEqual({
+      gatewayLive: null,
       liveStt: {
         state: 'degraded',
         reason: 'socket-close',

@@ -8,6 +8,7 @@
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron';
 
 import type { AuthStatus } from './ipc/auth.js';
+import type { AudioFinishResult } from './ipc/audio.js';
 import type {
   MeetingIntelligenceReadOutcome,
   RecentMeetingsPage,
@@ -46,7 +47,7 @@ const electronAPI = {
     // renderer'da kalır (App.tsx); tray sadece yansıtır + kısayol sunar.
     setRecordingActive: (
       active: boolean,
-      outcome?: 'finished' | 'error',
+      outcome?: 'finished' | 'degraded' | 'error',
       errorMessage?: string,
     ): void => {
       ipcRenderer.send('tray:set-recording-active', active, outcome, errorMessage);
@@ -113,7 +114,7 @@ const electronAPI = {
       bytes: Uint8Array;
       startedAtMs: number;
     }): Promise<{ seq: number }> => ipcRenderer.invoke('audio:chunk', payload),
-    finish: (captureId: string): Promise<{ ok: boolean }> =>
+    finish: (captureId: string): Promise<AudioFinishResult> =>
       ipcRenderer.invoke('audio:finish', captureId),
     abort: (captureId: string): Promise<{ ok: boolean }> =>
       ipcRenderer.invoke('audio:abort', captureId),

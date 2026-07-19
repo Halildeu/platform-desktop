@@ -686,6 +686,54 @@ describe('App recorder readiness', () => {
     expect(String(deactivations[0][2])).toContain('Kayıt durdurulamadı');
   });
 
+  it('canli transkript drain degrade olursa kalici kaydi basari diye gizlemez', async () => {
+    installElectronApiMock({
+      meetingId: '22222222-2222-4222-8222-222222222222',
+      deviceId: 'desktop-1',
+      ready: true,
+      reason: null,
+    });
+    mockReadyCaptureWorklet();
+    vi.mocked(startRecording).mockResolvedValue({
+      sessionId: 'SES-DEGRADED-1',
+      transcriptSessionId: 'SES-DEGRADED-1',
+      hasLoopback: false,
+      stop: vi.fn().mockResolvedValue(undefined),
+      getStopResult: vi.fn(() => ({
+        gatewayLive: {
+          state: 'degraded' as const,
+          reason: 'timeout' as const,
+          acknowledged: false,
+        },
+        liveStt: null,
+      })),
+      onError: vi.fn(),
+      pause: vi.fn(),
+      resume: vi.fn(),
+      isPaused: vi.fn(() => false),
+    });
+
+    render(<App />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Kaydet' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Onaylıyorum — Kaydı Başlat' }));
+    await screen.findByText('Kayıt başladı (yalnız mikrofon, oturum SES-DEGRADED-1)');
+    fireEvent.click(screen.getByRole('button', { name: 'Bitir' }));
+
+    expect(
+      (await screen.findAllByText(/Kayıt gönderildi; canlı transkriptin son onayı alınamadı/))
+        .length,
+    ).toBeGreaterThan(0);
+    expect(screen.queryByText('Kayıt tamamlandı, gönderildi.')).not.toBeInTheDocument();
+    const trayMock = vi.mocked(window.electronAPI!.tray.setRecordingActive);
+    await waitFor(() =>
+      expect(trayMock).toHaveBeenCalledWith(
+        false,
+        'degraded',
+        expect.stringContaining('Kalıcı sonuç işleniyor'),
+      ),
+    );
+  });
+
   it('kayit baslatma cevapsiz kalirsa butonu serbest birakir', async () => {
     installElectronApiMock({
       meetingId: '22222222-2222-4222-8222-222222222222',

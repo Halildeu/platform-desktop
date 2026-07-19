@@ -25,6 +25,7 @@ import {
 import {
   GatewayLiveStream,
   type GatewayLiveServerEvent,
+  type GatewayLiveStreamStopResult,
 } from '../services/gateway/gateway-live-stream.js';
 import { TranscriptEventSubscription } from '../services/gateway/transcript-event-subscription.js';
 import { loadMeetingConfig, syncRecordingLifecycle } from '../services/meeting/meeting-client.js';
@@ -87,6 +88,11 @@ interface ActiveRecording {
   rendererSend: RendererSend | null;
 }
 
+export interface AudioFinishResult {
+  ok: true;
+  liveTranscript: GatewayLiveStreamStopResult | null;
+}
+
 function unconfirmedGatewayMutation(code: string, error: unknown): Error {
   const reason = error instanceof Error ? error.message : String(error);
   return new Error(`${code}: ${reason}`);
@@ -97,7 +103,7 @@ let starting = false;
 let finishing = false;
 let reconcilingLifecycle = false;
 let lifecycleReconciliationInFlight: Promise<LifecycleReconciliationResult> | null = null;
-let finishInFlight: { captureId: string; operation: Promise<void> } | null = null;
+let finishInFlight: { captureId: string; operation: Promise<AudioFinishResult> } | null = null;
 let pendingConsent: ConsentRecord | null = null;
 const lifecycleOutbox = new RecordingLifecycleOutbox();
 const startOutbox = new RecordingStartOutbox();
@@ -428,10 +434,11 @@ async function flushPendingRecordingLifecycles(): Promise<LifecycleReconciliatio
   return { ok: firstError === null && remaining === 0, processed, remaining };
 }
 
-async function finishActiveRecording(recording: ActiveRecording): Promise<void> {
+async function finishActiveRecording(recording: ActiveRecording): Promise<AudioFinishResult> {
   let gatewayError: unknown = null;
   let canonicalError: unknown = null;
   let liveStreamDrainError: Error | null = null;
+  let liveTranscript: GatewayLiveStreamStopResult | null = null;
   recording.canonicalEndedAt ??= new Date().toISOString();
   let durableError: unknown = null;
   let pending: PendingRecordingLifecycle = {
@@ -450,10 +457,10 @@ async function finishActiveRecording(recording: ActiveRecording): Promise<void> 
   try {
     if (!durableError) {
       if (recording.liveStream) {
-        const liveStop = await recording.liveStream.stop();
-        if (liveStop.state === 'degraded') {
+        liveTranscript = await recording.liveStream.stop();
+        if (liveTranscript.state === 'degraded') {
           liveStreamDrainError = new Error(
-            `Canlı transkript son onayı alınamadı (${liveStop.reason}); kalıcı Gateway akışı işlenmeye devam ediyor.`,
+            `Canlı transkript son onayı alınamadı (${liveTranscript.reason}); kalıcı Gateway akışı işlenmeye devam ediyor.`,
           );
           emitTranscriptError(
             recording.rendererSend,
@@ -506,9 +513,10 @@ async function finishActiveRecording(recording: ActiveRecording): Promise<void> 
   if (gatewayError && !recording.gatewayFinished) {
     throw gatewayError;
   }
+  return { ok: true, liveTranscript };
 }
 
-async function disposeActiveRecording(recording: ActiveRecording): Promise<void> {
+async function disposeActiveRecording(recording: ActiveRecording): Promise<AudioFinishResult> {
   if (finishInFlight?.captureId === recording.captureId) {
     return finishInFlight.operation;
   }
@@ -527,7 +535,7 @@ async function disposeActiveRecording(recording: ActiveRecording): Promise<void>
         // active capture. Its durable entries remain queued for the next pass.
       }
     }
-    await finishActiveRecording(recording);
+    return finishActiveRecording(recording);
   })().finally(() => {
     if (finishInFlight?.captureId === recording.captureId) {
       finishInFlight = null;
@@ -881,10 +889,9 @@ export function registerAudioIpc(): void {
     return { seq };
   });
 
-  ipcMain.handle('audio:finish', async (_e, captureId: unknown): Promise<{ ok: boolean }> => {
+  ipcMain.handle('audio:finish', async (_e, captureId: unknown): Promise<AudioFinishResult> => {
     const recording = requireActive(captureId);
-    await disposeActiveRecording(recording);
-    return { ok: true };
+    return disposeActiveRecording(recording);
   });
 
   ipcMain.handle('audio:abort', async (_e, captureId: unknown): Promise<{ ok: boolean }> => {

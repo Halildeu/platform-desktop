@@ -382,6 +382,19 @@ export function finishTranscriptSession(
   };
 }
 
+export function markTranscriptProcessing(
+  state: TranscriptSessionState,
+  finishedAtMs: number,
+  warning: string,
+): TranscriptSessionState {
+  return {
+    ...state,
+    lifecycle: 'processing',
+    finishedAtMs,
+    error: warning,
+  };
+}
+
 export function failTranscriptSession(
   state: TranscriptSessionState,
   error: string,

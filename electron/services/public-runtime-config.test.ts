@@ -96,7 +96,7 @@ describe('public-runtime-config', () => {
     expect(raw).not.toContain('RECORDER_MEETING_ID');
   });
 
-  it('applies env > user > system > packaged precedence to the gateway stream gate', () => {
+  it('keeps gateway stream authority at env > system > packaged while user config stays local', () => {
     const root = tempRoot();
     const paths = configPaths(root);
     writeDocument(paths.packaged as string, fullDocument());
@@ -108,7 +108,7 @@ describe('public-runtime-config', () => {
     writeDocument(paths.user as string, {
       schemaVersion: 1,
       environment: 'test',
-      services: { gatewayLiveStreamEnabled: false },
+      recorder: { deviceId: 'user-device' },
     });
 
     const packaged = resolvePublicRuntimeEnvironment(
@@ -123,8 +123,10 @@ describe('public-runtime-config', () => {
     expect(system.sources.gatewayLiveStreamEnabled).toBe('system');
 
     const managed = resolvePublicRuntimeEnvironment({}, { paths });
-    expect(managed.env.GATEWAY_LIVE_STREAM_ENABLED).toBe('false');
-    expect(managed.sources.gatewayLiveStreamEnabled).toBe('user');
+    expect(managed.env.GATEWAY_LIVE_STREAM_ENABLED).toBe('true');
+    expect(managed.sources.gatewayLiveStreamEnabled).toBe('system');
+    expect(managed.env.RECORDER_DEVICE_ID).toBe('user-device');
+    expect(managed.sources.recorderDeviceId).toBe('user');
 
     const environment = resolvePublicRuntimeEnvironment(
       { GATEWAY_LIVE_STREAM_ENABLED: 'true' },
@@ -134,7 +136,7 @@ describe('public-runtime-config', () => {
     expect(environment.sources.gatewayLiveStreamEnabled).toBe('env');
   });
 
-  it('applies field precedence env > user > system > packaged', () => {
+  it('applies field precedence without letting user config redirect trusted endpoints', () => {
     const root = tempRoot();
     const paths = configPaths(root);
     writeDocument(paths.packaged as string, fullDocument());
@@ -150,11 +152,7 @@ describe('public-runtime-config', () => {
     writeDocument(paths.user as string, {
       schemaVersion: 1,
       environment: 'test',
-      keycloak: {
-        baseUrl: 'https://user-auth.example.com/',
-        realm: 'user-realm',
-      },
-      services: { gatewayBaseUrl: 'https://user-gateway.example.com' },
+      recorder: { deviceId: 'user-device' },
     });
 
     const resolved = resolvePublicRuntimeEnvironment(
@@ -163,29 +161,29 @@ describe('public-runtime-config', () => {
     );
 
     expect(resolved.env).toMatchObject({
-      KEYCLOAK_BASE_URL: 'https://user-auth.example.com',
-      KEYCLOAK_REALM: 'user-realm',
+      KEYCLOAK_BASE_URL: 'https://packaged.example.com',
+      KEYCLOAK_REALM: 'system-realm',
       KEYCLOAK_CLIENT_ID: 'packaged-client',
       KEYCLOAK_SCOPE: 'openid profile email',
       GATEWAY_BASE_URL: 'https://env-gateway.example.com/',
       MEETING_BASE_URL: 'https://system-meeting.example.com',
-      RECORDER_DEVICE_ID: 'packaged-device',
+      RECORDER_DEVICE_ID: 'user-device',
     });
     expect(resolved.sources).toMatchObject({
-      keycloakBaseUrl: 'user',
-      keycloakRealm: 'user',
+      keycloakBaseUrl: 'packaged',
+      keycloakRealm: 'system',
       keycloakClientId: 'packaged',
       gatewayBaseUrl: 'env',
       meetingBaseUrl: 'system',
-      recorderDeviceId: 'packaged',
+      recorderDeviceId: 'user',
     });
   });
 
-  it('accepts a public WSS managed endpoint and keeps it out of lower layers', () => {
+  it('accepts a public WSS system-managed endpoint and keeps it out of lower layers', () => {
     const root = tempRoot();
     const paths = configPaths(root);
     writeDocument(paths.packaged as string, fullDocument());
-    writeDocument(paths.user as string, {
+    writeDocument(paths.system as string, {
       schemaVersion: 1,
       environment: 'test',
       services: { liveSttStreamUrl: 'wss://stream.example.com/ws/stream' },
@@ -194,7 +192,24 @@ describe('public-runtime-config', () => {
     const resolved = resolvePublicRuntimeEnvironment({}, { paths });
 
     expect(resolved.env.LIVE_STT_STREAM_URL).toBe('wss://stream.example.com/ws/stream');
-    expect(resolved.sources.liveSttStreamUrl).toBe('user');
+    expect(resolved.sources.liveSttStreamUrl).toBe('system');
+  });
+
+  it('rejects user attempts to override identity or service authority', () => {
+    const root = tempRoot();
+    const paths = configPaths(root);
+    writeDocument(paths.packaged as string, fullDocument());
+    writeDocument(paths.user as string, {
+      schemaVersion: 1,
+      environment: 'test',
+      services: { gatewayBaseUrl: 'https://attacker.example.com' },
+    });
+
+    expect(() => resolvePublicRuntimeEnvironment({}, { paths })).toThrow(
+      expect.objectContaining({
+        message: expect.stringContaining('root has unknown field: services'),
+      }),
+    );
   });
 
   it('hydrates only missing process env fields so gateway env consumers keep working', () => {
@@ -245,7 +260,7 @@ describe('public-runtime-config', () => {
       services: { unsupportedEndpoint: 'https://unknown.example.com' },
     });
     expect(() => resolvePublicRuntimeEnvironment({}, { paths })).toThrow(
-      'services has unknown field: unsupportedEndpoint',
+      'root has unknown field: services',
     );
   });
 
@@ -263,7 +278,7 @@ describe('public-runtime-config', () => {
     );
 
     rmSync(paths.system as string);
-    writeDocument(paths.user as string, {
+    writeDocument(paths.system as string, {
       schemaVersion: 1,
       environment: 'test',
       services: { liveSttStreamUrl: 'ws://stt.example.com/ws/stream' },
@@ -323,11 +338,13 @@ describe('public-runtime-config', () => {
       },
       'services.meetingBaseUrl must not contain credentials, query, or fragment',
     ],
-  ])('rejects invalid strict-schema %s values', (_label, userDocument, message) => {
+  ])('rejects invalid strict-schema %s values', (_label, document, message) => {
     const root = tempRoot();
     const paths = configPaths(root);
     writeDocument(paths.packaged as string, fullDocument());
-    writeDocument(paths.user as string, userDocument);
+    const record = document as Record<string, unknown>;
+    const managedPath = record.keycloak || record.services ? paths.system : paths.user;
+    writeDocument(managedPath as string, document);
 
     expect(() => resolvePublicRuntimeEnvironment({}, { paths })).toThrow(message);
   });
@@ -355,7 +372,7 @@ describe('public-runtime-config', () => {
     (packaged.services as Record<string, unknown>).liveSttStreamUrl =
       'wss://packaged-stream.example.com/ws/stream';
     writeDocument(paths.packaged as string, packaged);
-    writeDocument(paths.user as string, {
+    writeDocument(paths.system as string, {
       schemaVersion: 1,
       environment: 'test',
       services: { liveSttStreamUrl: null },
@@ -363,7 +380,7 @@ describe('public-runtime-config', () => {
 
     const resolved = resolvePublicRuntimeEnvironment({}, { paths });
     expect(resolved.env.LIVE_STT_STREAM_URL).toBeUndefined();
-    expect(resolved.sources.liveSttStreamUrl).toBe('user');
+    expect(resolved.sources.liveSttStreamUrl).toBe('system');
   });
 
   it('fails with a stable diagnostic when the required packaged config is absent', () => {

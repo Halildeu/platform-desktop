@@ -709,7 +709,10 @@ describe('audio IPC recorder consent gate', () => {
     await acceptConsent();
     const started = (await startHandler()({}, meetingId, deviceId)) as { captureId: string };
 
-    await expect(finishHandler()({}, started.captureId)).resolves.toEqual({ ok: true });
+    await expect(finishHandler()({}, started.captureId)).resolves.toEqual({
+      ok: true,
+      liveTranscript: null,
+    });
 
     expect(mocks.senderFinish).toHaveBeenCalledTimes(1);
     expect(mocks.syncRecordingLifecycle).toHaveBeenCalledTimes(2);
@@ -790,7 +793,10 @@ describe('audio IPC recorder consent gate', () => {
     const started = (await startHandler()({}, meetingId, deviceId)) as { captureId: string };
     mocks.senderFinish.mockRejectedValueOnce(new Error('finishSession response lost'));
 
-    await expect(finishHandler()({}, started.captureId)).resolves.toEqual({ ok: true });
+    await expect(finishHandler()({}, started.captureId)).resolves.toEqual({
+      ok: true,
+      liveTranscript: null,
+    });
 
     expect(mocks.syncRecordingLifecycle).toHaveBeenCalledTimes(2);
     expect(mocks.finishSession).toHaveBeenCalledWith(

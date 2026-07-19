@@ -119,6 +119,21 @@ export interface Recorder {
 
 export interface RecorderStopResult {
   liveStt: LiveSttStopResult | null;
+  gatewayLive: {
+    state: 'drained' | 'degraded';
+    reason:
+      | 'drained'
+      | 'no-audio'
+      | 'final-ack'
+      | 'eof-ack'
+      | 'quiet'
+      | 'timeout'
+      | 'socket-close'
+      | 'socket-error'
+      | 'buffer-overflow'
+      | 'unavailable';
+    acknowledged: boolean;
+  } | null;
 }
 
 export interface StartRecordingOptions {
@@ -553,6 +568,7 @@ export async function startRecording(
       await uploadTail;
       const finalError = uploadError;
       let gatewayFinishError: unknown = null;
+      let gatewayLive: RecorderStopResult['gatewayLive'] = null;
       let captureReleaseError: unknown = null;
 
       try {
@@ -567,14 +583,15 @@ export async function startRecording(
         }
       } else if (captureId) {
         try {
-          await api.audio.finish(captureId);
+          const finishResult = await api.audio.finish(captureId);
+          gatewayLive = finishResult.liveTranscript;
         } catch (error) {
           gatewayFinishError = error;
         }
       }
 
       const liveStt = liveSttStop ? await liveSttStop : null;
-      stopResult = { liveStt };
+      stopResult = { liveStt, gatewayLive };
       if (finalError) {
         throw finalError;
       }

@@ -1,0 +1,84 @@
+name: Packaged public config parity
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/package-resource-parity.yml'
+      - 'build/config/**'
+      - 'electron/**'
+      - 'src/**'
+      - 'package.json'
+      - 'package-lock.json'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  macos-resource-parity:
+    runs-on: macos-14
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - name: Build unsigned macOS application directory
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+        run: |
+          npm run build
+          npx electron-builder --mac --arm64 --dir --publish never \
+            --config.mac.forceCodeSigning=false \
+            --config.mac.notarize=false \
+            --config.directories.output=release/parity-macos
+      - name: Verify packaged public config byte parity
+        run: |
+          app_count=$(find release/parity-macos -type d -name '*.app' -prune | wc -l | tr -d ' ')
+          test "$app_count" -eq 1
+          app_path=$(find release/parity-macos -type d -name '*.app' -prune -print -quit)
+          cmp build/config/public-runtime-config.json \
+            "$app_path/Contents/Resources/config/public-runtime-config.json"
+
+  linux-resource-parity:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - name: Build Linux application directory
+        run: |
+          npm run build
+          npx electron-builder --linux --x64 --dir --publish never \
+            --config.directories.output=release/parity-linux
+      - name: Verify packaged public config byte parity
+        run: |
+          cmp build/config/public-runtime-config.json \
+            release/parity-linux/linux-unpacked/resources/config/public-runtime-config.json
+
+  windows-resource-parity:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - name: Build Windows application directory
+        run: |
+          npm run build
+          npx electron-builder --win --x64 --dir --publish never --config.directories.output=release/parity-windows
+      - name: Verify packaged public config byte parity
+        shell: pwsh
+        run: |
+          $source = (Get-FileHash build/config/public-runtime-config.json -Algorithm SHA256).Hash
+          $packaged = (Get-FileHash release/parity-windows/win-unpacked/resources/config/public-runtime-config.json -Algorithm SHA256).Hash
+          if ($source -ne $packaged) { throw 'Packaged public runtime config differs from source' }

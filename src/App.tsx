@@ -44,6 +44,7 @@ import {
   failTranscriptSession,
   finishTranscriptSession,
   initialTranscriptSession,
+  markTranscriptProcessing,
   markTranscriptSegmentReviewed,
   markTranscriptBlocked,
   markTranscriptReady,
@@ -1586,10 +1587,15 @@ function App() {
     }
     stopInFlightRef.current = true;
     setStopping(true);
-    let stopOutcome: 'finished' | 'error' = 'finished';
+    let stopOutcome: 'finished' | 'degraded' | 'error' = 'finished';
     let stopErrorMessage: string | undefined;
     try {
-      await recorderRef.current?.stop();
+      const recorder = recorderRef.current;
+      await recorder?.stop();
+      const stopResult = recorder?.getStopResult?.() ?? null;
+      const degradedStream = [stopResult?.gatewayLive, stopResult?.liveStt].find(
+        (result) => result?.state === 'degraded',
+      );
       transcriptSessionIdRef.current = null;
       pendingLiveTranscriptEventsRef.current = [];
       setLiveStreamActive(false);
@@ -1597,8 +1603,17 @@ function App() {
       setLiveStreamStatus(null);
       setAudioRms(null);
       setLastAudioAtMs(null);
-      setStatus('Kayıt tamamlandı, gönderildi.');
-      setTranscriptSession((current) => finishTranscriptSession(current, Date.now()));
+      if (degradedStream) {
+        const warning = `Kayıt gönderildi; canlı transkriptin son onayı alınamadı (${degradedStream.reason}). Kalıcı sonuç işleniyor.`;
+        stopOutcome = 'degraded';
+        stopErrorMessage = warning;
+        setStatus(warning);
+        setError(warning);
+        setTranscriptSession((current) => markTranscriptProcessing(current, Date.now(), warning));
+      } else {
+        setStatus('Kayıt tamamlandı, gönderildi.');
+        setTranscriptSession((current) => finishTranscriptSession(current, Date.now()));
+      }
       setMeetingIntelligence((current) => markIntelligenceWaiting(current));
     } catch (e) {
       const message = `Kayıt durdurulamadı: ${(e as Error).message}`;

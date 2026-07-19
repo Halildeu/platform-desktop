@@ -39,6 +39,7 @@ import {
 } from './services/display-media-lease.js';
 import {
   notifyRecordingError,
+  notifyRecordingDegraded,
   notifyRecordingFinished,
   notifyRecordingStarted,
 } from './services/notifications.js';
@@ -209,7 +210,7 @@ ipcMain.handle('app:set-auto-launch', (_event, enabled: boolean) => {
 
 ipcMain.on(
   'tray:set-recording-active',
-  (_event, active: boolean, outcome?: 'finished' | 'error', errorMessage?: string) => {
+  (_event, active: boolean, outcome?: 'finished' | 'degraded' | 'error', errorMessage?: string) => {
     if (active === recordingActive) {
       return;
     }
@@ -222,6 +223,8 @@ ipcMain.on(
       notifyRecordingStarted();
     } else if (outcome === 'error') {
       notifyRecordingError(errorMessage ?? 'Kayıt hatası');
+    } else if (outcome === 'degraded') {
+      notifyRecordingDegraded();
     } else if (outcome === 'finished') {
       notifyRecordingFinished();
     }

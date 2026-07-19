@@ -324,13 +324,11 @@ function parseDocument(
     schemaError(source, configPath, 'root must be an object');
   }
   assertNoForbiddenFields(value, source, configPath);
-  assertAllowedKeys(
-    value,
-    new Set(['schemaVersion', 'environment', 'keycloak', 'services', 'recorder']),
-    'root',
-    source,
-    configPath,
-  );
+  const allowedRootKeys =
+    source === 'user'
+      ? new Set(['schemaVersion', 'environment', 'recorder'])
+      : new Set(['schemaVersion', 'environment', 'keycloak', 'services', 'recorder']);
+  assertAllowedKeys(value, allowedRootKeys, 'root', source, configPath);
   if (value.schemaVersion !== 1) {
     schemaError(source, configPath, 'schemaVersion must equal 1');
   }
@@ -598,6 +596,10 @@ export function resolvePublicRuntimeEnvironment(
   > = [
     ['packaged', paths.packaged, options.requirePackaged !== false],
     ['system', paths.system, false],
+    // The user path is intentionally preference-only. Authenticated service
+    // authorities must come from the signed package, an administrator-owned
+    // system config, or the controlled process environment; otherwise a local
+    // file edit could redirect bearer tokens and captured audio.
     ['user', paths.user, false],
   ];
 

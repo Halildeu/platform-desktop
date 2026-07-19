@@ -12,6 +12,11 @@ const STOP_QUIET_MS = 1_250;
 const RECONNECT_BASE_MS = 250;
 const RECONNECT_MAX_MS = 2_000;
 const MAX_RECONNECT_ATTEMPTS = 60;
+const MAX_PENDING_FRAME_COUNT = 32;
+const MAX_PENDING_AUDIO_BYTES = 2 * 1024 * 1024;
+const SOCKET_BUFFER_HIGH_WATER_BYTES = 512 * 1024;
+const SOCKET_BUFFER_LOW_WATER_BYTES = 128 * 1024;
+const BACKPRESSURE_RETRY_MS = 25;
 
 function encodeGatewayLivePcm16Frame(input: {
   chunkSeq: number;
@@ -85,6 +90,7 @@ export type GatewayLiveServerEvent =
       source?: string;
     }
   | { type: 'final'; seq: number; text: string; elapsed_ms?: number; rms?: number }
+  | { type: 'audio_ack'; chunk_seq: number }
   | { type: 'eof_ack' | 'drained' }
   | { type: 'error'; msg: string }
   | { type: 'debug' };
@@ -100,18 +106,26 @@ export interface GatewayLiveStreamStopResult {
     | 'timeout'
     | 'socket-close'
     | 'socket-error'
+    | 'buffer-overflow'
     | 'unavailable';
   acknowledged: boolean;
 }
 
 interface GatewaySocket {
   readonly readyState: number;
+  readonly bufferedAmount: number;
   onopen: (() => void) | null;
   onmessage: ((event: { data: unknown }) => void) | null;
   onerror: (() => void) | null;
   onclose: (() => void) | null;
   send(data: string | ArrayBuffer | ArrayBufferView): void;
   close(code?: number, reason?: string): void;
+}
+
+interface PendingAudioFrame {
+  encoded: ArrayBuffer;
+  byteLength: number;
+  sentGeneration: number | null;
 }
 
 type GatewaySocketFactory = (url: string, jwt: string) => GatewaySocket;
@@ -204,6 +218,11 @@ function parseServerEvent(data: unknown): GatewayLiveServerEvent | null {
       }
       return parsed as GatewayLiveServerEvent;
     }
+    if (parsed.type === 'audio_ack') {
+      return nonNegativeSequence(parsed.chunk_seq)
+        ? { type: 'audio_ack', chunk_seq: parsed.chunk_seq }
+        : null;
+    }
     if (parsed.type === 'error') {
       return typeof parsed.msg === 'string' && parsed.msg.trim()
         ? { type: 'error', msg: parsed.msg }
@@ -226,16 +245,21 @@ export class GatewayLiveStream {
   private readonly options: GatewayLiveStreamOptions;
   private readonly socketFactory: GatewaySocketFactory;
   private socket: GatewaySocket | null = null;
+  private socketGeneration = 0;
   private connectInFlight: Promise<void> | null = null;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private reconnectAttempts = 0;
   private latestRestSequence = -1;
-  private nextLiveSequence = 0;
   private ready = false;
   private stopping = false;
   private closed = false;
-  private sentAudio = false;
+  private eofSent = false;
   private eofSupported = false;
+  private pendingAudioBytes = 0;
+  private readonly pendingFrames = new Map<number, PendingAudioFrame>();
+  private backpressureTimer: ReturnType<typeof setTimeout> | null = null;
+  private backpressured = false;
+  private liveDeliveryDegraded = false;
   private stopPromise: Promise<GatewayLiveStreamStopResult> | null = null;
   private settleStop: ((result: GatewayLiveStreamStopResult) => void) | null = null;
   private stopTimeout: ReturnType<typeof setTimeout> | null = null;
@@ -262,32 +286,21 @@ export class GatewayLiveStream {
     }
     this.latestRestSequence = chunkSeq;
 
-    if (!this.ready || !this.socket || this.stopping || this.closed) {
-      this.scheduleReconnect();
+    if (this.stopping || this.closed) {
       return false;
     }
-    if (chunkSeq < this.nextLiveSequence) {
-      return false;
-    }
-    if (chunkSeq !== this.nextLiveSequence) {
-      this.options.onError(
-        new Error('gateway live sequence diverged; reconnecting from REST baseline'),
-      );
-      this.resetSocket();
+
+    const encoded = encodeGatewayLivePcm16Frame({ chunkSeq, capturedAtMs, pcm16 });
+    if (!this.enqueueFrame(chunkSeq, encoded)) {
       this.scheduleReconnect();
       return false;
     }
 
-    this.socket.send(
-      encodeGatewayLivePcm16Frame({
-        chunkSeq,
-        capturedAtMs,
-        pcm16,
-      }),
-    );
-    this.nextLiveSequence += 1;
-    this.sentAudio = true;
-    return true;
+    if (!this.ready || !this.socket) {
+      this.scheduleReconnect();
+      return false;
+    }
+    return this.flushPendingFrames();
   }
 
   stop(): Promise<GatewayLiveStreamStopResult> {
@@ -300,8 +313,12 @@ export class GatewayLiveStream {
       this.settleStop = resolve;
     });
 
-    if (!this.sentAudio) {
+    if (this.latestRestSequence < 0) {
       this.finishStop({ state: 'drained', reason: 'no-audio', acknowledged: false });
+      return this.stopPromise;
+    }
+    if (this.liveDeliveryDegraded) {
+      this.finishStop({ state: 'degraded', reason: 'buffer-overflow', acknowledged: false });
       return this.stopPromise;
     }
     if (!this.ready || !this.socket) {
@@ -313,10 +330,9 @@ export class GatewayLiveStream {
       this.finishStop({ state: 'degraded', reason: 'timeout', acknowledged: false });
     }, STOP_TIMEOUT_MS);
 
-    if (this.eofSupported) {
-      this.socket.send(JSON.stringify({ type: 'eof' }));
-    } else {
-      this.scheduleQuietStop('quiet', false);
+    this.flushPendingFrames();
+    if (this.pendingFrames.size === 0) {
+      this.beginTerminalStop();
     }
     return this.stopPromise;
   }
@@ -325,6 +341,7 @@ export class GatewayLiveStream {
     this.closed = true;
     this.stopping = true;
     this.clearReconnectTimer();
+    this.clearBackpressureTimer();
     this.clearStopTimers();
     this.resetSocket();
     if (this.settleStop) {
@@ -336,7 +353,6 @@ export class GatewayLiveStream {
     if (this.connectInFlight) {
       return this.connectInFlight;
     }
-    const baseline = this.latestRestSequence;
     const operation = (async (): Promise<void> => {
       const jwt = await this.options.getJwt();
       if (!jwt) {
@@ -345,6 +361,7 @@ export class GatewayLiveStream {
       const url = gatewayLiveStreamSessionUrl(this.options.cfg.baseUrl, this.options.sessionId);
       await new Promise<void>((resolve, reject) => {
         const socket = this.socketFactory(url, jwt);
+        const generation = ++this.socketGeneration;
         this.socket = socket;
         let settled = false;
         const timeout = setTimeout(() => {
@@ -352,7 +369,7 @@ export class GatewayLiveStream {
             return;
           }
           settled = true;
-          this.resetSocket();
+          this.resetSocket(socket);
           reject(new Error(`gateway live stream open timed out after ${OPEN_TIMEOUT_MS}ms`));
         }, OPEN_TIMEOUT_MS);
 
@@ -361,30 +378,26 @@ export class GatewayLiveStream {
           // fail-closed until the upstream model's validated `ready` event.
         };
         socket.onmessage = (message) => {
-          const event = this.handleMessage(message.data);
+          if (this.socket !== socket) {
+            return;
+          }
+          const event = this.handleMessage(socket, message.data);
           if (!settled && event?.type === 'error') {
             clearTimeout(timeout);
             settled = true;
-            this.resetSocket();
+            this.resetSocket(socket);
             reject(new Error(`gateway live STT rejected startup: ${event.msg}`));
             return;
           }
           if (settled || event?.type !== 'ready') {
             return;
           }
-          if (this.latestRestSequence !== baseline) {
-            clearTimeout(timeout);
-            settled = true;
-            this.resetSocket();
-            reject(new Error('gateway live stream baseline changed during handshake'));
-            return;
-          }
           clearTimeout(timeout);
           settled = true;
           this.ready = true;
           this.reconnectAttempts = 0;
-          this.nextLiveSequence = baseline + 1;
           resolve();
+          this.flushPendingFrames(generation);
         };
         socket.onerror = () => {
           if (!settled) {
@@ -392,7 +405,7 @@ export class GatewayLiveStream {
             settled = true;
             reject(new Error('gateway live stream handshake failed'));
           }
-          this.handleSocketFailure('socket-error');
+          this.handleSocketFailure(socket, 'socket-error');
         };
         socket.onclose = () => {
           if (!settled) {
@@ -400,7 +413,7 @@ export class GatewayLiveStream {
             settled = true;
             reject(new Error('gateway live stream closed during handshake'));
           }
-          this.handleSocketFailure('socket-close');
+          this.handleSocketFailure(socket, 'socket-close');
         };
       });
     })().finally(() => {
@@ -412,7 +425,7 @@ export class GatewayLiveStream {
     return operation;
   }
 
-  private handleMessage(data: unknown): GatewayLiveServerEvent | null {
+  private handleMessage(socket: GatewaySocket, data: unknown): GatewayLiveServerEvent | null {
     const event = parseServerEvent(data);
     if (!event) {
       this.options.onError(new Error('gateway live stream returned an invalid event'));
@@ -422,22 +435,39 @@ export class GatewayLiveStream {
       this.eofSupported =
         event.supports_eof === true || event.capabilities?.includes('eof') === true;
     }
+    if (event.type === 'audio_ack') {
+      this.acknowledgeFrame(event.chunk_seq);
+      if (this.stopping && this.pendingFrames.size === 0) {
+        this.beginTerminalStop();
+      }
+    }
     if (event.type === 'error') {
       this.options.onError(new Error(`gateway live STT error: ${event.msg}`));
       if (this.stopping) {
         this.finishStop({ state: 'degraded', reason: 'socket-error', acknowledged: false });
+      } else {
+        this.handleSocketFailure(socket, 'socket-error');
       }
     }
     if (this.stopping && event.type === 'drained') {
-      this.finishStop({ state: 'drained', reason: 'drained', acknowledged: true });
+      this.finishStop(
+        this.liveDeliveryDegraded
+          ? { state: 'degraded', reason: 'buffer-overflow', acknowledged: true }
+          : { state: 'drained', reason: 'drained', acknowledged: true },
+      );
     }
     this.options.onEvent(event);
     return event;
   }
 
-  private handleSocketFailure(reason: 'socket-close' | 'socket-error'): void {
-    this.ready = false;
-    this.socket = null;
+  private handleSocketFailure(
+    socket: GatewaySocket,
+    reason: 'socket-close' | 'socket-error',
+  ): void {
+    if (this.socket !== socket) {
+      return;
+    }
+    this.resetSocket(socket);
     if (this.stopping) {
       this.finishStop({ state: 'degraded', reason, acknowledged: false });
       return;
@@ -445,6 +475,107 @@ export class GatewayLiveStream {
     if (!this.closed) {
       this.options.onError(new Error(`gateway live stream ${reason}; REST transcript continues`));
       this.scheduleReconnect();
+    }
+  }
+
+  private enqueueFrame(chunkSeq: number, encoded: ArrayBuffer): boolean {
+    if (this.liveDeliveryDegraded) {
+      return false;
+    }
+    const byteLength = encoded.byteLength;
+    if (
+      this.pendingFrames.size >= MAX_PENDING_FRAME_COUNT ||
+      this.pendingAudioBytes + byteLength > MAX_PENDING_AUDIO_BYTES
+    ) {
+      if (!this.liveDeliveryDegraded) {
+        this.liveDeliveryDegraded = true;
+        this.options.onError(
+          new Error(
+            'gateway live replay buffer is full; canonical REST recording continues without this live frame',
+          ),
+        );
+      }
+      this.pendingFrames.clear();
+      this.pendingAudioBytes = 0;
+      this.resetSocket();
+      return false;
+    }
+    this.pendingFrames.set(chunkSeq, { encoded, byteLength, sentGeneration: null });
+    this.pendingAudioBytes += byteLength;
+    return true;
+  }
+
+  private acknowledgeFrame(chunkSeq: number): void {
+    const pending = this.pendingFrames.get(chunkSeq);
+    if (!pending) {
+      return;
+    }
+    this.pendingFrames.delete(chunkSeq);
+    this.pendingAudioBytes -= pending.byteLength;
+    this.flushPendingFrames();
+  }
+
+  private flushPendingFrames(expectedGeneration = this.socketGeneration): boolean {
+    const socket = this.socket;
+    if (!socket || !this.ready || this.closed || expectedGeneration !== this.socketGeneration) {
+      return false;
+    }
+    if (this.backpressured) {
+      if (socket.bufferedAmount > SOCKET_BUFFER_LOW_WATER_BYTES) {
+        this.scheduleBackpressureRetry(expectedGeneration);
+        return false;
+      }
+      this.backpressured = false;
+    }
+
+    let sent = false;
+    for (const pending of this.pendingFrames.values()) {
+      if (pending.sentGeneration === expectedGeneration) {
+        continue;
+      }
+      if (this.socket !== socket || !this.ready) {
+        return sent;
+      }
+      if (socket.bufferedAmount >= SOCKET_BUFFER_HIGH_WATER_BYTES) {
+        this.backpressured = true;
+        this.scheduleBackpressureRetry(expectedGeneration);
+        return sent;
+      }
+      try {
+        socket.send(pending.encoded);
+      } catch {
+        this.handleSocketFailure(socket, 'socket-error');
+        return sent;
+      }
+      pending.sentGeneration = expectedGeneration;
+      sent = true;
+    }
+    return sent;
+  }
+
+  private scheduleBackpressureRetry(generation: number): void {
+    if (this.backpressureTimer || this.closed) {
+      return;
+    }
+    this.backpressureTimer = setTimeout(() => {
+      this.backpressureTimer = null;
+      this.flushPendingFrames(generation);
+    }, BACKPRESSURE_RETRY_MS);
+  }
+
+  private beginTerminalStop(): void {
+    if (this.eofSent || !this.socket || !this.ready) {
+      return;
+    }
+    this.eofSent = true;
+    if (this.eofSupported) {
+      try {
+        this.socket.send(JSON.stringify({ type: 'eof' }));
+      } catch {
+        this.finishStop({ state: 'degraded', reason: 'socket-error', acknowledged: false });
+      }
+    } else {
+      this.scheduleQuietStop('quiet', false);
     }
   }
 
@@ -486,8 +617,11 @@ export class GatewayLiveStream {
     this.closed = true;
     this.ready = false;
     this.clearReconnectTimer();
+    this.clearBackpressureTimer();
     this.clearStopTimers();
     this.resetSocket();
+    this.pendingFrames.clear();
+    this.pendingAudioBytes = 0;
     settle(result);
   }
 
@@ -509,10 +643,22 @@ export class GatewayLiveStream {
     }
   }
 
-  private resetSocket(): void {
+  private clearBackpressureTimer(): void {
+    if (this.backpressureTimer) {
+      clearTimeout(this.backpressureTimer);
+      this.backpressureTimer = null;
+    }
+  }
+
+  private resetSocket(expected?: GatewaySocket): void {
     const socket = this.socket;
+    if (expected && socket !== expected) {
+      return;
+    }
     this.socket = null;
     this.ready = false;
+    this.backpressured = false;
+    this.clearBackpressureTimer();
     if (socket) {
       socket.onopen = null;
       socket.onmessage = null;

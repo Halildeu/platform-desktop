@@ -7,8 +7,8 @@ test ortamının public endpoint'lerini sağlar. Electron Builder bu dosyayı `a
 Öncelik alan bazındadır:
 
 1. process environment
-2. managed user config
-3. managed system config
+2. managed user preferences (`recorder.deviceId` only)
+3. administrator-owned system config
 4. packaged config
 
 macOS managed yolları:
@@ -17,10 +17,13 @@ macOS managed yolları:
 - System: `/Library/Application Support/Meeting Intelligence/config/public-runtime-config.json`
 
 Managed belgeler aynı `schemaVersion: 1` ve `environment: "test"` sözleşmesini kullanır, ancak
-yalnız değiştirecekleri bölümleri içerebilir. Bilinmeyen veya secret biçimli alanlar reddedilir;
-HTTP/WS endpoint kabul edilmez. Bozuk bir managed belge packaged değere sessizce düşmez; uygulama
-güvenli hata kodu ve config yoluyla başlatmayı reddeder. Değişiklikler uygulama yeniden
-başlatıldığında okunur.
+yalnız değiştirecekleri bölümleri içerebilir. Kullanıcı tarafından yazılabilen belge yalnız
+`recorder.deviceId` tercihini taşıyabilir; `keycloak` ve `services` bölümleri burada reddedilir.
+JWT veya ses taşıyan servis authority'leri yalnız imzalı package, yöneticiye ait system config ya
+da kontrollü process environment katmanından gelir. Bilinmeyen veya secret biçimli alanlar
+reddedilir; HTTP/WS endpoint kabul edilmez. Bozuk bir managed belge packaged değere sessizce
+düşmez; uygulama güvenli hata kodu ve config yoluyla başlatmayı reddeder. Değişiklikler uygulama
+yeniden başlatıldığında okunur.
 
 Process environment yalnız geliştirme ve kontrollü test override'ı içindir. Mevcut loader
 sözleşmesi bu en üst katmanda yalnız `localhost` / `127.0.0.1` / `::1` için HTTP/WS kabul eder;
