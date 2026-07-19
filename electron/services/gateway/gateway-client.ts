@@ -417,6 +417,8 @@ export async function sendChunk(
   chunk: { seq: number; bytes: Uint8Array; startedAtMs: number },
   idempotencyKey: string = newIdempotencyKey(),
 ): Promise<void> {
+  const body = new ArrayBuffer(chunk.bytes.byteLength);
+  new Uint8Array(body).set(chunk.bytes);
   await fetchWithTimeout(
     chunksUrl(cfg, sessionId),
     {
@@ -428,7 +430,7 @@ export async function sendChunk(
         startedAtMs: chunk.startedAtMs,
         byteLength: chunk.bytes.byteLength,
       }),
-      body: chunk.bytes,
+      body,
     },
     'sendChunk',
     async (res) => {

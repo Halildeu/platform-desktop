@@ -94,6 +94,13 @@
         "filter": [
           "*.png"
         ]
+      },
+      {
+        "from": "build/config",
+        "to": "config",
+        "filter": [
+          "public-runtime-config.json"
+        ]
       }
     ],
     "mac": {

@@ -45,6 +45,7 @@ export interface TranscriptPanelProps {
   onSegmentReviewed?: (segmentId: string) => void;
   stream?: {
     directConfigured: boolean;
+    mode?: 'gateway-live' | 'direct-live' | 'gateway-events';
     directReady?: boolean;
     directStatus?: LiveSttStreamStatusEvent | null;
     directActive: boolean;
@@ -71,20 +72,21 @@ function captureMode(hasLoopback: boolean): string {
 }
 
 function streamModeLabel(stream: TranscriptPanelProps['stream'], recordingActive: boolean): string {
+  const liveLabel = stream?.mode === 'gateway-live' ? 'Gateway canlı' : 'Direct stream';
   if (!recordingActive) {
-    return stream?.directConfigured ? 'Direct stream' : 'Gateway event';
+    return stream?.directConfigured ? liveLabel : 'Gateway event';
   }
   if (stream?.directStatus?.status === 'reconnecting') {
-    return 'Direct stream';
+    return liveLabel;
   }
   if (stream?.directActive) {
-    return 'Direct stream';
+    return liveLabel;
   }
   if (stream?.directReady) {
-    return 'Direct stream';
+    return liveLabel;
   }
   if (stream?.directConfigured) {
-    return 'Direct stream bekleniyor';
+    return `${liveLabel} bekleniyor`;
   }
   if (stream?.disabledReason) {
     return 'Gateway event';
@@ -702,12 +704,15 @@ function transcriptFlowHealth(
   }
 
   if (stream?.directStatus?.status === 'error' || stream?.directStatus?.status === 'closed') {
+    const gatewayLive = stream.mode === 'gateway-live';
     return {
       label: 'Bağlantı hatası',
-      detail:
-        'Direct stream kapalı veya hata verdi; gateway fallback ve tanı snapshotı kontrol edilmeli.',
-      nextAction:
-        'Tanıyı kopyalayın; direct STT URL, sertifika ve gateway fallback loglarını eşleştirin.',
+      detail: gatewayLive
+        ? 'Yetkili Gateway canlı akışı kapandı veya hata verdi; kalıcı ses gönderimi ve tanı kaydı kontrol edilmeli.'
+        : 'Direct stream kapalı veya hata verdi; gateway fallback ve tanı snapshotı kontrol edilmeli.',
+      nextAction: gatewayLive
+        ? 'Tanıyı kopyalayın; Gateway oturum yetkisi, bağlantı ve kalıcı ses gönderimi kayıtlarını eşleştirin.'
+        : 'Tanıyı kopyalayın; direct STT URL, sertifika ve gateway fallback loglarını eşleştirin.',
       level: 'warn',
       risk: 'connection_error',
       words,
@@ -724,7 +729,9 @@ function transcriptFlowHealth(
       label: 'Ses var, metin yok',
       detail: 'Mikrofon sesi görülüyor ancak henüz transcript satırı alınmadı.',
       nextAction:
-        'Mikrofon girişini ve direct STT bağlantısını kontrol edin; durum sürerse tanıyı kopyalayın.',
+        stream?.mode === 'gateway-live'
+          ? 'Mikrofon girişini ve Gateway canlı bağlantısını kontrol edin; durum sürerse tanıyı kopyalayın.'
+          : 'Mikrofon girişini ve direct STT bağlantısını kontrol edin; durum sürerse tanıyı kopyalayın.',
       level: 'warn',
       risk: 'no_text',
       words,

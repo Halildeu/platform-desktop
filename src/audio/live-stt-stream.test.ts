@@ -16,6 +16,7 @@ class FakeWebSocket extends EventTarget {
 
   readyState = FakeWebSocket.CONNECTING;
   sent: unknown[] = [];
+  closeCalls = 0;
 
   constructor(readonly url: string) {
     super();
@@ -27,6 +28,7 @@ class FakeWebSocket extends EventTarget {
   }
 
   close(): void {
+    this.closeCalls += 1;
     this.readyState = FakeWebSocket.CLOSED;
     this.dispatchEvent(new Event('close'));
   }
@@ -37,6 +39,10 @@ class FakeWebSocket extends EventTarget {
 
   message(payload: unknown): void {
     this.dispatchEvent(new MessageEvent('message', { data: JSON.stringify(payload) }));
+  }
+
+  fail(): void {
+    this.dispatchEvent(new Event('error'));
   }
 }
 
@@ -1583,6 +1589,236 @@ describe('connectLiveSttStream', () => {
     ]);
 
     stream.close();
+  });
+
+  it('keeps late final and revised segment events but reports degraded without terminal drained', async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal('WebSocket', FakeWebSocket);
+    const events: LiveSttTranscriptEvent[] = [];
+    const statuses: LiveSttStreamStatusEvent[] = [];
+
+    const stream = connectLiveSttStream('ws://127.0.0.1:18220/ws/stream', {
+      onStatus: (event) => statuses.push(event),
+      onTranscriptEvent: (event) => events.push(event),
+    });
+    const ws = FakeWebSocket.instances[0];
+    ws?.open();
+    ws?.message({ type: 'ready' });
+    stream.send(new Float32Array([0.01, 0.01]));
+
+    const stopPromise = stream.stop();
+    let settled = false;
+    void stopPromise.then(() => {
+      settled = true;
+    });
+    expect(ws?.readyState).toBe(FakeWebSocket.OPEN);
+    expect(statuses.at(-1)).toEqual({ status: 'draining' });
+
+    ws?.message({
+      type: 'final',
+      seq: 0,
+      text: 'İlk final metin.',
+      elapsed_ms: 300,
+      rms: 0.04,
+    });
+    vi.advanceTimersByTime(1_000);
+    ws?.message({
+      type: 'final',
+      seq: 0,
+      text: 'Düzeltilmiş geç final metin.',
+      elapsed_ms: 450,
+      rms: 0.04,
+    });
+
+    vi.advanceTimersByTime(1_249);
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    expect(events.map((event) => [event.id, event.status, event.text])).toEqual([
+      ['stream:0', 'final', 'İlk final metin.'],
+      ['stream:0:1', 'final', 'Düzeltilmiş geç final metin.'],
+    ]);
+
+    await vi.advanceTimersByTimeAsync(1);
+    await expect(stopPromise).resolves.toEqual({
+      state: 'degraded',
+      reason: 'quiet',
+      acknowledged: false,
+    });
+    expect(ws?.readyState).toBe(FakeWebSocket.CLOSED);
+    expect(ws?.closeCalls).toBe(1);
+    expect(statuses.at(-1)).toEqual({ status: 'closed', reason: 'quiet' });
+  });
+
+  it('requests EOF only when the server advertises support and waits for terminal drained', async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal('WebSocket', FakeWebSocket);
+
+    const stream = connectLiveSttStream('ws://127.0.0.1:18220/ws/stream');
+    const ws = FakeWebSocket.instances[0];
+    ws?.open();
+    ws?.message({ type: 'ready', capabilities: ['eof'] });
+    stream.send(new Float32Array([0.01]));
+
+    const stopPromise = stream.stop();
+
+    expect(ws?.sent).toHaveLength(2);
+    expect(ws?.sent[1]).toBe(JSON.stringify({ type: 'eof' }));
+    ws?.message({ type: 'eof_ack' });
+    await vi.advanceTimersByTimeAsync(1_250);
+    let settled = false;
+    void stopPromise.then(() => {
+      settled = true;
+    });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    ws?.message({ type: 'drained' });
+
+    await expect(stopPromise).resolves.toEqual({
+      state: 'drained',
+      reason: 'drained',
+      acknowledged: true,
+    });
+  });
+
+  it('keeps draining status when a connecting socket becomes ready after stop', async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal('WebSocket', FakeWebSocket);
+    const statuses: LiveSttStreamStatusEvent[] = [];
+    const onReady = vi.fn();
+
+    const stream = connectLiveSttStream('ws://127.0.0.1:18220/ws/stream', {
+      onReady,
+      onStatus: (event) => statuses.push(event),
+    });
+    const ws = FakeWebSocket.instances[0];
+    stream.send(new Float32Array([0.01]));
+    const stopPromise = stream.stop();
+
+    ws?.open();
+    ws?.message({ type: 'ready' });
+    expect(statuses.map((event) => event.status)).toEqual(['connecting', 'draining']);
+    expect(onReady).not.toHaveBeenCalled();
+    expect(ws?.sent).toHaveLength(1);
+
+    ws?.message({
+      type: 'final',
+      seq: 0,
+      text: 'Bağlantı sonrası final.',
+      elapsed_ms: 300,
+      rms: 0.04,
+    });
+    await vi.advanceTimersByTimeAsync(1_250);
+    await expect(stopPromise).resolves.toEqual({
+      state: 'degraded',
+      reason: 'quiet',
+      acknowledged: false,
+    });
+  });
+
+  it('returns a degraded timeout without hanging and removes listeners and timers', async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal('WebSocket', FakeWebSocket);
+    const events: LiveSttTranscriptEvent[] = [];
+    const statuses: LiveSttStreamStatusEvent[] = [];
+    const errors: string[] = [];
+
+    const stream = connectLiveSttStream('ws://127.0.0.1:18220/ws/stream', {
+      onStatus: (event) => statuses.push(event),
+      onTranscriptEvent: (event) => events.push(event),
+      onError: (error) => errors.push(error.message),
+    });
+    const ws = FakeWebSocket.instances[0];
+    ws?.open();
+    ws?.message({ type: 'ready' });
+    stream.send(new Float32Array([0.01]));
+
+    const stopPromise = stream.stop();
+    await vi.advanceTimersByTimeAsync(8_000);
+
+    await expect(stopPromise).resolves.toEqual({
+      state: 'degraded',
+      reason: 'timeout',
+      acknowledged: false,
+    });
+    expect(statuses).toContainEqual({
+      status: 'degraded',
+      reason: 'Direct STT stop drain zaman aşımına uğradı; geç final doğrulanamadı.',
+    });
+    expect(errors).toEqual([
+      'Direct STT stop drain zaman aşımına uğradı; geç final doğrulanamadı.',
+    ]);
+    expect(vi.getTimerCount()).toBe(0);
+
+    ws?.message({
+      type: 'final',
+      seq: 0,
+      text: 'Listener temizliğinden sonra gelmemeli.',
+      elapsed_ms: 500,
+      rms: 0.04,
+    });
+    expect(events).toEqual([]);
+  });
+
+  it.each([
+    ['close', 'socket-close'],
+    ['error', 'socket-error'],
+  ] as const)('settles stop on socket %s without reconnecting', async (event, reason) => {
+    vi.useFakeTimers();
+    vi.stubGlobal('WebSocket', FakeWebSocket);
+
+    const stream = connectLiveSttStream('ws://127.0.0.1:18220/ws/stream');
+    const ws = FakeWebSocket.instances[0];
+    ws?.open();
+    ws?.message({ type: 'ready' });
+    stream.send(new Float32Array([0.01]));
+    const stopPromise = stream.stop();
+
+    if (event === 'close') {
+      ws?.close();
+    } else {
+      ws?.fail();
+    }
+
+    await expect(stopPromise).resolves.toEqual({
+      state: 'degraded',
+      reason,
+      acknowledged: false,
+    });
+    await vi.runAllTimersAsync();
+    expect(FakeWebSocket.instances).toHaveLength(1);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('returns the same stop promise and tears down exactly once', async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal('WebSocket', FakeWebSocket);
+    const statuses: LiveSttStreamStatusEvent[] = [];
+
+    const stream = connectLiveSttStream('ws://127.0.0.1:18220/ws/stream', {
+      onStatus: (event) => statuses.push(event),
+    });
+    const ws = FakeWebSocket.instances[0];
+    ws?.open();
+    ws?.message({ type: 'ready' });
+    stream.send(new Float32Array([0.01]));
+
+    const first = stream.stop();
+    const second = stream.stop();
+    expect(second).toBe(first);
+
+    ws?.message({
+      type: 'final',
+      seq: 0,
+      text: 'Tek final.',
+      elapsed_ms: 300,
+      rms: 0.04,
+    });
+    await vi.advanceTimersByTimeAsync(1_250);
+
+    await expect(first).resolves.toEqual(await second);
+    expect(ws?.closeCalls).toBe(1);
+    expect(statuses.filter((event) => event.status === 'draining')).toHaveLength(1);
+    expect(statuses.filter((event) => event.status === 'closed')).toHaveLength(1);
   });
 
   it('reconnects after a transient close and flushes buffered audio frames', () => {

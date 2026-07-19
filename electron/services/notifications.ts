@@ -20,6 +20,14 @@ export function notifyRecordingFinished(): void {
   notify('Kayıt tamamlandı', 'Kayıt gönderildi, toplantı çıktısı hazırlanıyor.');
 }
 
+export function notifyRecordingDegraded(): void {
+  notify(
+    'Kayıt gönderildi',
+    'Canlı transkriptin son onayı alınamadı; kalıcı toplantı sonucu işleniyor.',
+    true,
+  );
+}
+
 export function notifyRecordingError(message: string): void {
   // message zaten transcript-free hata sınıfı/kodu (App.tsx aynı kuralı uyguluyor).
   notify('Kayıt hatası', message, true);

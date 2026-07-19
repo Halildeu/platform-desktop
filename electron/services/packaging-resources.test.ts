@@ -52,6 +52,13 @@ function readLinuxPackageWorkflow(): string {
   );
 }
 
+function readPackageResourceParityWorkflow(): string {
+  return readFileSync(
+    new URL('../../.github/workflows/package-resource-parity.yml', import.meta.url),
+    'utf8',
+  );
+}
+
 function readLinuxRpmAfterInstall(): string {
   return readFileSync(new URL('../../build/linux-rpm-install-state.sh', import.meta.url), 'utf8');
 }
@@ -77,6 +84,43 @@ describe('packaged runtime resources', () => {
         }),
       ]),
     );
+  });
+
+  it('ships the strict non-secret public runtime config outside app.asar', () => {
+    const packageJson = readPackageJson();
+
+    expect(packageJson.build?.extraResources).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          from: 'build/config',
+          to: 'config',
+          filter: ['public-runtime-config.json'],
+        }),
+      ]),
+    );
+
+    const runtimeConfig = readFileSync(
+      new URL('../../build/config/public-runtime-config.json', import.meta.url),
+      'utf8',
+    );
+    expect(runtimeConfig).toContain('"environment": "test"');
+    expect(runtimeConfig).toContain('"gatewayBaseUrl": "https://testai.acik.com"');
+    expect(runtimeConfig).toContain('"gatewayLiveStreamEnabled": true');
+    expect(runtimeConfig).toContain('"liveSttStreamUrl": null');
+    expect(runtimeConfig).not.toMatch(/secret|password|token|credential|private.?key|api.?key/i);
+    expect(runtimeConfig).not.toContain('RECORDER_MEETING_ID');
+  });
+
+  it('proves public config byte parity in actual macOS, Linux and Windows app directories', () => {
+    const workflow = readPackageResourceParityWorkflow();
+
+    expect(workflow).toContain('macos-resource-parity:');
+    expect(workflow).toContain('linux-resource-parity:');
+    expect(workflow).toContain('windows-resource-parity:');
+    expect(workflow).toContain('Contents/Resources/config/public-runtime-config.json');
+    expect(workflow).toContain('linux-unpacked/resources/config/public-runtime-config.json');
+    expect(workflow).toContain('win-unpacked/resources/config/public-runtime-config.json');
+    expect(workflow.match(/Verify packaged public config byte parity/g)).toHaveLength(3);
   });
 
   it('declares macOS privacy usage strings for audio and system-audio capture', () => {

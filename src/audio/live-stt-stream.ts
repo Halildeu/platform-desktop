@@ -15,6 +15,8 @@ export type LiveSttStreamStatus =
   | 'loading'
   | 'ready'
   | 'reconnecting'
+  | 'draining'
+  | 'degraded'
   | 'closed'
   | 'error';
 
@@ -36,7 +38,27 @@ export interface LiveSttStreamCallbacks {
 
 export interface LiveSttStreamConnection {
   send: (samples: Float32Array) => void;
+  stop: () => Promise<LiveSttStopResult>;
   close: () => void;
+}
+
+export type LiveSttStopReason =
+  | 'no-audio'
+  | 'final-ack'
+  | 'eof-ack'
+  | 'drained'
+  | 'quiet'
+  | 'timeout'
+  | 'socket-close'
+  | 'socket-error'
+  | 'server-error'
+  | 'unavailable'
+  | 'closed';
+
+export interface LiveSttStopResult {
+  state: 'drained' | 'degraded';
+  reason: LiveSttStopReason;
+  acknowledged: boolean;
 }
 
 interface LiveSttServerPartial {
@@ -64,7 +86,13 @@ interface LiveSttServerError {
 
 type LiveSttServerEvent =
   | { type: 'loading'; stage?: string }
-  | { type: 'ready'; partial_mode?: 'stable-v1' }
+  | {
+      type: 'ready';
+      partial_mode?: 'stable-v1';
+      capabilities?: string[];
+      supports_eof?: boolean;
+    }
+  | { type: 'eof_ack' | 'drained' }
   | { type: 'debug' }
   | LiveSttServerPartial
   | LiveSttServerFinal
@@ -80,6 +108,10 @@ const RECONNECT_BASE_DELAY_MS = 250;
 const RECONNECT_MAX_DELAY_MS = 2_000;
 const ACTIVE_AUDIO_RMS = 0.0008;
 const ACTIVE_AUDIO_TRANSCRIPT_STALL_MS = 12_000;
+const STOP_DRAIN_AUDIO_RMS = 0.0005;
+const STOP_DRAIN_TIMEOUT_MS = 8_000;
+const STOP_FINAL_QUIET_MS = 1_250;
+const EOF_CAPABILITY = 'eof';
 const MIN_FALLBACK_DRAFT_WORDS = 2;
 const MAX_RECENT_FINAL_WORDS = 24;
 const ROLLING_CONTINUATION_MIN_PREVIOUS_WORDS = 4;
@@ -770,9 +802,20 @@ export function connectLiveSttStream(
   const pendingFrames: Float32Array[] = [];
   let ready = false;
   let closedByClient = false;
+  let stopping = false;
   let reconnectAttempts = 0;
   let stablePartialMode = false;
+  let eofSupported = false;
+  let eofRequested = false;
+  let activeAudioSinceLastFinal = false;
+  let sentActiveAudio = false;
+  let drainedObserved = false;
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  let stopTimeoutTimer: ReturnType<typeof setTimeout> | null = null;
+  let stopQuietTimer: ReturnType<typeof setTimeout> | null = null;
+  let stopPromise: Promise<LiveSttStopResult> | null = null;
+  let resolveStop: ((result: LiveSttStopResult) => void) | null = null;
+  let detachSocketListeners: (() => void) | null = null;
   let closeReconnectReason: string | null = null;
   let lastUsableTranscriptAtMs: number | null = null;
   const segmentStartedAt = new Map<number, number>();
@@ -784,6 +827,7 @@ export function connectLiveSttStream(
   const pendingPartialTimers = new Map<number, Array<ReturnType<typeof setTimeout>>>();
   let lastEmittedFinalText = '';
   let recentEmittedFinalText = '';
+  let closedStatusEmitted = false;
 
   const emitError = (message: string): void => {
     callbacks.onError?.(new Error(message));
@@ -795,6 +839,99 @@ export function connectLiveSttStream(
 
   const markUsableTranscript = (): void => {
     lastUsableTranscriptAtMs = Date.now();
+  };
+
+  const emitClosed = (reason?: string): void => {
+    if (closedStatusEmitted) {
+      return;
+    }
+    closedStatusEmitted = true;
+    emitStatus({ status: 'closed', reason });
+  };
+
+  const clearStopTimers = (): void => {
+    if (stopTimeoutTimer) {
+      clearTimeout(stopTimeoutTimer);
+      stopTimeoutTimer = null;
+    }
+    if (stopQuietTimer) {
+      clearTimeout(stopQuietTimer);
+      stopQuietTimer = null;
+    }
+  };
+
+  const teardown = (reason?: string): void => {
+    closedByClient = true;
+    ready = false;
+    pendingFrames.length = 0;
+    clearAllPendingPartials();
+    clearStopTimers();
+    if (reconnectTimer) {
+      clearTimeout(reconnectTimer);
+      reconnectTimer = null;
+    }
+    detachSocketListeners?.();
+    detachSocketListeners = null;
+    const socket = ws;
+    ws = null;
+    if (
+      socket &&
+      (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)
+    ) {
+      socket.close();
+    }
+    emitClosed(reason);
+  };
+
+  const settleStop = (result: LiveSttStopResult): void => {
+    const settle = resolveStop;
+    if (!settle) {
+      return;
+    }
+    resolveStop = null;
+    if (result.state === 'degraded') {
+      const reason =
+        result.reason === 'timeout'
+          ? 'Direct STT stop drain zaman aşımına uğradı; geç final doğrulanamadı.'
+          : `Direct STT stop drain tamamlanamadı: ${result.reason}`;
+      emitStatus({ status: 'degraded', reason });
+      emitError(reason);
+    }
+    teardown(result.reason);
+    settle(result);
+  };
+
+  const scheduleQuietStop = (): void => {
+    if (!stopping || !resolveStop) {
+      return;
+    }
+    if (stopQuietTimer) {
+      clearTimeout(stopQuietTimer);
+    }
+    stopQuietTimer = setTimeout(() => {
+      stopQuietTimer = null;
+      settleStop({
+        state: 'degraded',
+        reason: 'quiet',
+        acknowledged: false,
+      });
+    }, STOP_FINAL_QUIET_MS);
+  };
+
+  const requestEofIfSupported = (): void => {
+    const socket = ws;
+    if (
+      !stopping ||
+      !eofSupported ||
+      eofRequested ||
+      !ready ||
+      !socket ||
+      socket.readyState !== WebSocket.OPEN
+    ) {
+      return;
+    }
+    eofRequested = true;
+    socket.send(JSON.stringify({ type: 'eof' }));
   };
 
   const flushPending = (): void => {
@@ -817,10 +954,12 @@ export function connectLiveSttStream(
     );
 
   const connect = (): void => {
-    if (closedByClient) {
+    if (closedByClient || stopping) {
       return;
     }
 
+    detachSocketListeners?.();
+    detachSocketListeners = null;
     ready = false;
     emitStatus(reconnectAttempts > 0 ? { status: 'reconnecting' } : { status: 'connecting' });
     let socket: WebSocket;
@@ -835,7 +974,7 @@ export function connectLiveSttStream(
     ws = socket;
 
     const scheduleReconnect = (reason: string): void => {
-      if (closedByClient || ws !== socket || reconnectTimer) {
+      if (closedByClient || stopping || ws !== socket || reconnectTimer) {
         return;
       }
 
@@ -861,7 +1000,7 @@ export function connectLiveSttStream(
       }, retryDelayMs);
     };
 
-    socket.addEventListener('message', (message) => {
+    const handleMessage = (message: MessageEvent): void => {
       const event = parseEvent(message.data);
       if (!event) {
         return;
@@ -870,11 +1009,16 @@ export function connectLiveSttStream(
       if (event.type === 'ready') {
         ready = true;
         stablePartialMode = event.partial_mode === 'stable-v1';
+        eofSupported =
+          event.supports_eof === true || event.capabilities?.includes(EOF_CAPABILITY) === true;
         reconnectAttempts = 0;
         lastUsableTranscriptAtMs = Date.now();
-        emitStatus({ status: 'ready' });
-        callbacks.onReady?.();
+        if (!stopping) {
+          emitStatus({ status: 'ready' });
+          callbacks.onReady?.();
+        }
         flushPending();
+        requestEofIfSupported();
         return;
       }
 
@@ -896,6 +1040,9 @@ export function connectLiveSttStream(
       }
 
       if (event.type === 'final') {
+        if (stopping && !eofSupported) {
+          scheduleQuietStop();
+        }
         if (finalizedSequences.has(event.seq)) {
           const previousFinal = segmentFinalText.get(event.seq);
           if (previousFinal && sameNormalizedText(previousFinal, event.text)) {
@@ -939,6 +1086,7 @@ export function connectLiveSttStream(
         segmentFinalText.set(event.seq, text);
         lastEmittedFinalText = text;
         recentEmittedFinalText = appendRecentFinalText(recentEmittedFinalText, text);
+        activeAudioSinceLastFinal = false;
         markUsableTranscript();
         callbacks.onTranscriptEvent?.({
           id: segmentId(event.seq),
@@ -951,20 +1099,67 @@ export function connectLiveSttStream(
         return;
       }
 
+      if (event.type === 'drained') {
+        drainedObserved = true;
+        if (stopping) {
+          settleStop({ state: 'drained', reason: 'drained', acknowledged: true });
+        }
+        return;
+      }
+
+      if (event.type === 'eof_ack') {
+        return;
+      }
+
       if (event.type === 'error') {
+        if (stopping) {
+          settleStop({ state: 'degraded', reason: 'server-error', acknowledged: false });
+          return;
+        }
         scheduleReconnect(event.msg);
       }
-    });
+    };
 
-    socket.addEventListener('error', () => {
+    const handleError = (): void => {
+      if (stopping) {
+        settleStop({ state: 'degraded', reason: 'socket-error', acknowledged: false });
+        return;
+      }
       scheduleReconnect('bağlantı hatası');
-    });
+    };
 
-    socket.addEventListener('close', () => {
+    const handleClose = (): void => {
+      if (stopping) {
+        if (drainedObserved) {
+          settleStop({
+            state: 'drained',
+            reason: 'drained',
+            acknowledged: true,
+          });
+        } else {
+          settleStop({ state: 'degraded', reason: 'socket-close', acknowledged: false });
+        }
+        return;
+      }
       const reason = closeReconnectReason ?? 'bağlantı kapandı';
       closeReconnectReason = null;
       scheduleReconnect(reason);
-    });
+      detachSocketListeners?.();
+      detachSocketListeners = null;
+    };
+
+    socket.addEventListener('message', handleMessage);
+    socket.addEventListener('error', handleError);
+    socket.addEventListener('close', handleClose);
+    const detach = (): void => {
+      socket.removeEventListener('message', handleMessage);
+      socket.removeEventListener('error', handleError);
+      socket.removeEventListener('close', handleClose);
+      if (detachSocketListeners === detach) {
+        detachSocketListeners = null;
+      }
+    };
+    detachSocketListeners = detach;
   };
 
   const shouldRestartForTranscriptStall = (samples: Float32Array): boolean => {
@@ -1063,8 +1258,12 @@ export function connectLiveSttStream(
 
   return {
     send: (samples: Float32Array): void => {
-      if (closedByClient || samples.length === 0) {
+      if (closedByClient || stopping || samples.length === 0) {
         return;
+      }
+      if (rms(samples) >= STOP_DRAIN_AUDIO_RMS) {
+        sentActiveAudio = true;
+        activeAudioSinceLastFinal = true;
       }
       const socket = ws;
       if (ready && socket?.readyState === WebSocket.OPEN) {
@@ -1079,22 +1278,53 @@ export function connectLiveSttStream(
       }
       pushBounded(pendingFrames, samples);
     },
-    close: (): void => {
-      closedByClient = true;
-      pendingFrames.length = 0;
-      clearAllPendingPartials();
-      emitStatus({ status: 'closed' });
+    stop: (): Promise<LiveSttStopResult> => {
+      if (stopPromise) {
+        return stopPromise;
+      }
+
+      stopPromise = new Promise<LiveSttStopResult>((resolve) => {
+        resolveStop = resolve;
+      });
+      stopping = true;
+      emitStatus({ status: 'draining' });
       if (reconnectTimer) {
         clearTimeout(reconnectTimer);
         reconnectTimer = null;
       }
+
       const socket = ws;
-      if (
-        socket &&
-        (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)
-      ) {
-        socket.close();
+      if (!socket) {
+        settleStop({ state: 'degraded', reason: 'unavailable', acknowledged: false });
+        return stopPromise;
       }
+      if (socket.readyState === WebSocket.CLOSED) {
+        settleStop({ state: 'degraded', reason: 'socket-close', acknowledged: false });
+        return stopPromise;
+      }
+      if (!sentActiveAudio) {
+        settleStop({ state: 'drained', reason: 'no-audio', acknowledged: false });
+        return stopPromise;
+      }
+
+      stopTimeoutTimer = setTimeout(() => {
+        stopTimeoutTimer = null;
+        settleStop({ state: 'degraded', reason: 'timeout', acknowledged: false });
+      }, STOP_DRAIN_TIMEOUT_MS);
+
+      flushPending();
+      requestEofIfSupported();
+      if (!activeAudioSinceLastFinal && finalizedSequences.size > 0) {
+        scheduleQuietStop();
+      }
+      return stopPromise;
+    },
+    close: (): void => {
+      if (resolveStop) {
+        settleStop({ state: 'degraded', reason: 'closed', acknowledged: false });
+        return;
+      }
+      teardown('closed');
     },
   };
 }

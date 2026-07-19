@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "environment": "test",
+  "keycloak": {
+    "baseUrl": "https://testai.acik.com",
+    "realm": "platform-test",
+    "clientId": "platform-desktop",
+    "redirectPort": 8123,
+    "scope": "openid profile email"
+  },
+  "services": {
+    "gatewayBaseUrl": "https://testai.acik.com",
+    "meetingBaseUrl": "https://testai.acik.com",
+    "gatewayLiveStreamEnabled": true,
+    "liveSttStreamUrl": null
+  },
+  "recorder": {
+    "deviceId": "desktop-1"
+  }
+}

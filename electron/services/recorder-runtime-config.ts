@@ -1,3 +1,15 @@
+import {
+  hydratePublicRuntimeEnvironment,
+  type PublicRuntimeConfigLoadOptions,
+  resolvePublicRuntimeEnvironment,
+} from './public-runtime-config.js';
+
+if (process.versions.electron) {
+  // audio.ts bu modulu handler kaydindan once yukler. Gateway loader env-only
+  // kaldigi icin packaged public degerler burada bir kez process'e aktarilir.
+  hydratePublicRuntimeEnvironment();
+}
+
 const MEETING_ID_PATTERN =
   /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
 const DEVICE_ID_PATTERN = /^[A-Za-z0-9._-]{1,64}$/;
@@ -8,6 +20,7 @@ export interface RecorderRuntimeConfig {
   deviceId: string;
   ready: boolean;
   reason: string | null;
+  gatewayLiveStreamEnabled: boolean;
   liveSttStreamUrl: string | null;
   liveSttStreamReason: string | null;
 }
@@ -57,10 +70,13 @@ function normalizeLiveSttStreamUrl(raw: string): {
 
 export function loadRecorderRuntimeConfig(
   env: NodeJS.ProcessEnv = process.env,
+  options: PublicRuntimeConfigLoadOptions = {},
 ): RecorderRuntimeConfig {
-  const meetingId = normalize(env.RECORDER_MEETING_ID);
-  const deviceId = normalize(env.RECORDER_DEVICE_ID) || DEFAULT_DEVICE_ID;
-  const liveStream = normalizeLiveSttStreamUrl(normalize(env.LIVE_STT_STREAM_URL));
+  const resolvedEnv = resolvePublicRuntimeEnvironment(env, options).env;
+  const meetingId = normalize(resolvedEnv.RECORDER_MEETING_ID);
+  const deviceId = normalize(resolvedEnv.RECORDER_DEVICE_ID) || DEFAULT_DEVICE_ID;
+  const gatewayLiveStreamEnabled = resolvedEnv.GATEWAY_LIVE_STREAM_ENABLED === 'true';
+  const liveStream = normalizeLiveSttStreamUrl(normalize(resolvedEnv.LIVE_STT_STREAM_URL));
 
   if (!DEVICE_ID_PATTERN.test(deviceId)) {
     return {
@@ -68,6 +84,7 @@ export function loadRecorderRuntimeConfig(
       deviceId,
       ready: false,
       reason: 'RECORDER_DEVICE_ID audio-gateway deviceId formatina uymuyor.',
+      gatewayLiveStreamEnabled,
       ...liveStream,
     };
   }
@@ -79,6 +96,7 @@ export function loadRecorderRuntimeConfig(
       ready: false,
       reason:
         'RECORDER_MEETING_ID tanimli degil; kayit icin meeting-service MeetingResponse.id gerekli.',
+      gatewayLiveStreamEnabled,
       ...liveStream,
     };
   }
@@ -89,6 +107,7 @@ export function loadRecorderRuntimeConfig(
       deviceId,
       ready: false,
       reason: 'RECORDER_MEETING_ID meeting-service UUID formatina uymuyor.',
+      gatewayLiveStreamEnabled,
       ...liveStream,
     };
   }
@@ -98,6 +117,7 @@ export function loadRecorderRuntimeConfig(
     deviceId,
     ready: true,
     reason: null,
+    gatewayLiveStreamEnabled,
     ...liveStream,
   };
 }

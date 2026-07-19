@@ -1,13 +1,9 @@
-/**
- * Keycloak OAuth2 config — env-parametrik (#1 PR-desktop-01).
- *
- * Gerçek değerler Halil'in #1 yorumundaki cevabıyla `.env`'e konur
- * (KEYCLOAK_BASE_URL / KEYCLOAK_CLIENT_ID / KEYCLOAK_REDIRECT_PORT). Kod yapısı
- * bu değerlere bağlı DEĞİL — config gelmeden iskelet + unit test yazılabilir.
- *
- * Desktop OAuth = RFC 8252 (system browser + loopback redirect). Realm `platform`
- * audio-gateway contract-v1'den biliniyor.
- */
+/** Keycloak OAuth2 public runtime config (RFC 8252 + PKCE). */
+
+import {
+  type PublicRuntimeConfigLoadOptions,
+  resolvePublicRuntimeEnvironment,
+} from '../public-runtime-config.js';
 
 export interface KeycloakConfig {
   /** Keycloak kök URL, örn. https://auth.example.com */
@@ -16,20 +12,24 @@ export interface KeycloakConfig {
   realm: string;
   /** Desktop public client id (PKCE) */
   clientId: string;
-  /** Loopback redirect portu (127.0.0.1:<port>/callback). 0 = işletim sistemi seçsin */
+  /** Sabit loopback redirect portu (127.0.0.1:<port>/callback). */
   redirectPort: number;
   /** OAuth scope */
   scope: string;
 }
 
-/** Env'den (parametrik) config yükle. Test için env enjekte edilebilir. */
-export function loadKeycloakConfig(env: NodeJS.ProcessEnv = process.env): KeycloakConfig {
+/** Env > managed user > managed system > packaged config onceligiyle yukle. */
+export function loadKeycloakConfig(
+  env: NodeJS.ProcessEnv = process.env,
+  options: PublicRuntimeConfigLoadOptions = {},
+): KeycloakConfig {
+  const resolvedEnv = resolvePublicRuntimeEnvironment(env, options).env;
   return {
-    baseUrl: (env.KEYCLOAK_BASE_URL ?? '').replace(/\/+$/, ''),
-    realm: env.KEYCLOAK_REALM ?? 'platform-test',
-    clientId: env.KEYCLOAK_CLIENT_ID ?? 'platform-desktop',
-    redirectPort: Number.parseInt(env.KEYCLOAK_REDIRECT_PORT ?? '8123', 10) || 8123,
-    scope: env.KEYCLOAK_SCOPE ?? 'openid profile email',
+    baseUrl: (resolvedEnv.KEYCLOAK_BASE_URL ?? '').replace(/\/+$/, ''),
+    realm: resolvedEnv.KEYCLOAK_REALM ?? 'platform-test',
+    clientId: resolvedEnv.KEYCLOAK_CLIENT_ID ?? 'platform-desktop',
+    redirectPort: Number.parseInt(resolvedEnv.KEYCLOAK_REDIRECT_PORT ?? '8123', 10) || 8123,
+    scope: resolvedEnv.KEYCLOAK_SCOPE ?? 'openid profile email',
   };
 }
 
@@ -48,7 +48,7 @@ export function keycloakConfigError(cfg: KeycloakConfig): string | null {
     .map(([key]) => key);
 
   if (missing.length > 0) {
-    return `${missing.join(', ')} tanimli degil; .env icinde Keycloak test realm config'i gerekli.`;
+    return `${missing.join(', ')} public runtime config icinde tanimli degil (env, managed user/system veya packaged config).`;
   }
 
   try {

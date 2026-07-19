@@ -18,6 +18,12 @@ import {
 
 const MEETING_ID = '33333333-3333-4333-8333-333333333333';
 const RUN_ID = '55555555-5555-4555-8555-555555555555';
+const NO_PUBLIC_CONFIG = {
+  paths: { packaged: null, system: null, user: null },
+} as const;
+const PACKAGED_ONLY_CONFIG = {
+  paths: { system: null, user: null },
+} as const;
 
 function canonicalResultFixture(): Record<string, unknown> {
   return {
@@ -83,16 +89,22 @@ afterEach(() => {
 
 describe('meeting-client', () => {
   it('loads meeting base URL from MEETING_BASE_URL with gateway/keycloak fallback', () => {
-    expect(loadMeetingConfig({ MEETING_BASE_URL: 'https://meeting.example.com/' }).baseUrl).toBe(
-      'https://meeting.example.com',
+    expect(loadMeetingConfig({}, PACKAGED_ONLY_CONFIG).baseUrl).toBe('https://testai.acik.com');
+    expect(
+      loadMeetingConfig({ MEETING_BASE_URL: 'https://meeting.example.com/' }, PACKAGED_ONLY_CONFIG)
+        .baseUrl,
+    ).toBe('https://meeting.example.com');
+    expect(
+      loadMeetingConfig({ GATEWAY_BASE_URL: 'https://testai.acik.com' }, PACKAGED_ONLY_CONFIG)
+        .baseUrl,
+    ).toBe('https://testai.acik.com');
+    expect(
+      loadMeetingConfig({ KEYCLOAK_BASE_URL: 'https://testai.acik.com' }, PACKAGED_ONLY_CONFIG)
+        .baseUrl,
+    ).toBe('https://testai.acik.com');
+    expect(() => loadMeetingConfig({}, NO_PUBLIC_CONFIG)).toThrow(
+      'MEETING_BASE_URL or GATEWAY_BASE_URL',
     );
-    expect(loadMeetingConfig({ GATEWAY_BASE_URL: 'https://testai.acik.com' }).baseUrl).toBe(
-      'https://testai.acik.com',
-    );
-    expect(loadMeetingConfig({ KEYCLOAK_BASE_URL: 'https://testai.acik.com' }).baseUrl).toBe(
-      'https://testai.acik.com',
-    );
-    expect(() => loadMeetingConfig({})).toThrow('MEETING_BASE_URL or GATEWAY_BASE_URL');
     expect(() => loadMeetingConfig({ MEETING_BASE_URL: '/meeting' })).toThrow(
       'MEETING_BASE_URL must be an absolute URL',
     );

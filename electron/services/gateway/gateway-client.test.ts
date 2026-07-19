@@ -280,7 +280,7 @@ describe('gateway-client HTTP fetch wrapper', () => {
     expect(opts.headers['X-Audio-Format']).toBe('PCM16');
     expect(opts.headers['X-Audio-Sample-Rate-Hz']).toBe('16000');
     expect(opts.headers['X-Audio-Channels']).toBe('1');
-    expect(opts.body).toBe(bytes);
+    expect(Array.from(new Uint8Array(opts.body as ArrayBuffer))).toEqual(Array.from(bytes));
   });
 
   it('finishSession posts finish request', async () => {

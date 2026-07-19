@@ -1,4 +1,8 @@
 import { desktopFetch, withDesktopFetchDeadline } from '../net/desktop-fetch.js';
+import {
+  type PublicRuntimeConfigLoadOptions,
+  resolvePublicRuntimeEnvironment,
+} from '../public-runtime-config.js';
 
 const API = '/api/v1/admin/meetings';
 const CREATE_CONTRACT_MAX_ATTEMPTS = 3;
@@ -149,11 +153,17 @@ function isLocalHttp(url: URL): boolean {
   );
 }
 
-export function loadMeetingConfig(env: NodeJS.ProcessEnv = process.env): MeetingClientConfig {
-  const raw = (env.MEETING_BASE_URL ?? env.GATEWAY_BASE_URL ?? env.KEYCLOAK_BASE_URL ?? '').replace(
-    /\/+$/,
-    '',
-  );
+export function loadMeetingConfig(
+  env: NodeJS.ProcessEnv = process.env,
+  options: PublicRuntimeConfigLoadOptions = {},
+): MeetingClientConfig {
+  const resolvedEnv = resolvePublicRuntimeEnvironment(env, options).env;
+  const raw = (
+    resolvedEnv.MEETING_BASE_URL ??
+    resolvedEnv.GATEWAY_BASE_URL ??
+    resolvedEnv.KEYCLOAK_BASE_URL ??
+    ''
+  ).replace(/\/+$/, '');
   if (!raw) {
     throw new Error('MEETING_BASE_URL or GATEWAY_BASE_URL is required');
   }

@@ -22,6 +22,11 @@ import {
   startSession,
   type TranscriptGatewayEvent,
 } from '../services/gateway/gateway-client.js';
+import {
+  GatewayLiveStream,
+  type GatewayLiveServerEvent,
+  type GatewayLiveStreamStopResult,
+} from '../services/gateway/gateway-live-stream.js';
 import { TranscriptEventSubscription } from '../services/gateway/transcript-event-subscription.js';
 import { loadMeetingConfig, syncRecordingLifecycle } from '../services/meeting/meeting-client.js';
 import {
@@ -74,11 +79,18 @@ interface ActiveRecording {
   gatewayFinished: boolean;
   gatewayFinishIdempotencyKey: string;
   sender: ChunkSender;
+  liveStream: GatewayLiveStream | null;
   transcriptSubscription: TranscriptEventSubscription;
   startedAtMs: number;
   lastStartedAtMs: number | null;
   rendererWebContentsId: number | null;
   consent: ConsentRecord;
+  rendererSend: RendererSend | null;
+}
+
+export interface AudioFinishResult {
+  ok: true;
+  liveTranscript: GatewayLiveStreamStopResult | null;
 }
 
 function unconfirmedGatewayMutation(code: string, error: unknown): Error {
@@ -91,7 +103,7 @@ let starting = false;
 let finishing = false;
 let reconcilingLifecycle = false;
 let lifecycleReconciliationInFlight: Promise<LifecycleReconciliationResult> | null = null;
-let finishInFlight: { captureId: string; operation: Promise<void> } | null = null;
+let finishInFlight: { captureId: string; operation: Promise<AudioFinishResult> } | null = null;
 let pendingConsent: ConsentRecord | null = null;
 const lifecycleOutbox = new RecordingLifecycleOutbox();
 const startOutbox = new RecordingStartOutbox();
@@ -157,6 +169,8 @@ function requireActive(captureId: unknown): ActiveRecording {
 
 type RendererSend = (channel: string, payload: unknown) => void;
 
+const GATEWAY_LIVE_CORRELATION_ID = 'gateway-live';
+
 function rendererSend(event: unknown): RendererSend | null {
   const sender = (event as { sender?: { send?: unknown } } | null)?.sender;
   if (typeof sender?.send !== 'function') {
@@ -179,6 +193,46 @@ function emitTranscriptEvent(send: RendererSend | null, event: TranscriptGateway
     return;
   }
   send('audio:transcript-event', event);
+}
+
+function emitGatewayLiveTranscriptEvent(
+  send: RendererSend | null,
+  sessionId: string,
+  meetingId: string,
+  event: GatewayLiveServerEvent,
+): void {
+  if (event.type !== 'partial' && event.type !== 'final') {
+    return;
+  }
+  const text =
+    event.type === 'partial'
+      ? [event.confirmed, event.tentative]
+          .map((part) => part.trim())
+          .filter(Boolean)
+          .join(' ')
+      : event.text.trim();
+  if (!text) {
+    return;
+  }
+  const receivedAtMs = Date.now();
+  const elapsedMs =
+    typeof event.elapsed_ms === 'number' && Number.isFinite(event.elapsed_ms)
+      ? Math.max(0, event.elapsed_ms)
+      : null;
+  emitTranscriptEvent(send, {
+    eventId: `live-${sessionId}-${event.seq}`,
+    sessionId,
+    meetingId,
+    chunkSeq: event.seq,
+    chunkStartedAtMs: elapsedMs === null ? receivedAtMs : receivedAtMs - elapsedMs,
+    text,
+    textLength: text.length,
+    status: event.type === 'final' ? 'FINAL' : 'DRAFT',
+    receivedAtMs,
+    sttLanguage: 'tr',
+    durationSeconds: elapsedMs === null ? null : elapsedMs / 1000,
+    correlationId: GATEWAY_LIVE_CORRELATION_ID,
+  });
 }
 
 function transcriptErrorMessage(error: Error): string {
@@ -380,9 +434,11 @@ async function flushPendingRecordingLifecycles(): Promise<LifecycleReconciliatio
   return { ok: firstError === null && remaining === 0, processed, remaining };
 }
 
-async function finishActiveRecording(recording: ActiveRecording): Promise<void> {
+async function finishActiveRecording(recording: ActiveRecording): Promise<AudioFinishResult> {
   let gatewayError: unknown = null;
   let canonicalError: unknown = null;
+  let liveStreamDrainError: Error | null = null;
+  let liveTranscript: GatewayLiveStreamStopResult | null = null;
   recording.canonicalEndedAt ??= new Date().toISOString();
   let durableError: unknown = null;
   let pending: PendingRecordingLifecycle = {
@@ -400,6 +456,19 @@ async function finishActiveRecording(recording: ActiveRecording): Promise<void> 
   }
   try {
     if (!durableError) {
+      if (recording.liveStream) {
+        liveTranscript = await recording.liveStream.stop();
+        if (liveTranscript.state === 'degraded') {
+          liveStreamDrainError = new Error(
+            `Canlı transkript son onayı alınamadı (${liveTranscript.reason}); kalıcı Gateway akışı işlenmeye devam ediyor.`,
+          );
+          emitTranscriptError(
+            recording.rendererSend,
+            recording.externalSessionId,
+            liveStreamDrainError,
+          );
+        }
+      }
       try {
         if (!recording.gatewayFinished) {
           await recording.sender.finish(recording.gatewayFinishIdempotencyKey);
@@ -424,6 +493,7 @@ async function finishActiveRecording(recording: ActiveRecording): Promise<void> 
   } catch (error) {
     canonicalError = error;
   } finally {
+    recording.liveStream?.close();
     recording.transcriptSubscription.stop();
     if (active?.captureId === recording.captureId) {
       active = null;
@@ -443,9 +513,10 @@ async function finishActiveRecording(recording: ActiveRecording): Promise<void> 
   if (gatewayError && !recording.gatewayFinished) {
     throw gatewayError;
   }
+  return { ok: true, liveTranscript };
 }
 
-async function disposeActiveRecording(recording: ActiveRecording): Promise<void> {
+async function disposeActiveRecording(recording: ActiveRecording): Promise<AudioFinishResult> {
   if (finishInFlight?.captureId === recording.captureId) {
     return finishInFlight.operation;
   }
@@ -464,7 +535,7 @@ async function disposeActiveRecording(recording: ActiveRecording): Promise<void>
         // active capture. Its durable entries remain queued for the next pass.
       }
     }
-    await finishActiveRecording(recording);
+    return finishActiveRecording(recording);
   })().finally(() => {
     if (finishInFlight?.captureId === recording.captureId) {
       finishInFlight = null;
@@ -739,6 +810,33 @@ export function registerAudioIpc(): void {
           throw new Error('renderer unloaded while recording session was starting');
         }
         const send = rendererSend(event);
+        const runtimeConfig = loadRecorderRuntimeConfig();
+        let liveStream: GatewayLiveStream | null = null;
+        if (runtimeConfig.gatewayLiveStreamEnabled === true) {
+          liveStream = new GatewayLiveStream({
+            cfg,
+            sessionId,
+            getJwt: () => getValidAccessToken(),
+            onEvent: (liveEvent) =>
+              emitGatewayLiveTranscriptEvent(send, sessionId, normalizedMeetingId, liveEvent),
+            onError: (streamError) => emitTranscriptError(send, sessionId, streamError),
+          });
+          try {
+            await liveStream.start();
+          } catch (error) {
+            liveStream.close();
+            const ended = lifecycleOutbox.markEnded(pendingLifecycle, new Date().toISOString());
+            try {
+              await syncPendingLifecycle(ended);
+            } catch (cleanupError) {
+              console.warn('Gateway live stream startup cleanup remains queued', {
+                error: cleanupError instanceof Error ? cleanupError.message : 'unknown error',
+              });
+            }
+            const reason = error instanceof Error ? error.message : String(error);
+            throw new Error(`Yetkili Gateway canlı ses bağlantısı kurulamadı: ${reason}`);
+          }
+        }
         const transcriptSubscription = new TranscriptEventSubscription({
           cfg,
           sessionId,
@@ -757,11 +855,13 @@ export function registerAudioIpc(): void {
           gatewayFinished: false,
           gatewayFinishIdempotencyKey,
           sender,
+          liveStream,
           transcriptSubscription,
           startedAtMs: Date.now(),
           lastStartedAtMs: null,
           rendererWebContentsId: rendererId,
           consent,
+          rendererSend: send,
         };
         setRecordingActive(true);
         return { sessionId, transcriptSessionId, captureId };
@@ -785,13 +885,13 @@ export function registerAudioIpc(): void {
     }
     recording.lastStartedAtMs = chunk.startedAtMs;
     const seq = await recording.sender.send(chunk.bytes, chunk.startedAtMs);
+    recording.liveStream?.sendAfterRestAccepted(chunk.bytes, seq, chunk.startedAtMs);
     return { seq };
   });
 
-  ipcMain.handle('audio:finish', async (_e, captureId: unknown): Promise<{ ok: boolean }> => {
+  ipcMain.handle('audio:finish', async (_e, captureId: unknown): Promise<AudioFinishResult> => {
     const recording = requireActive(captureId);
-    await disposeActiveRecording(recording);
-    return { ok: true };
+    return disposeActiveRecording(recording);
   });
 
   ipcMain.handle('audio:abort', async (_e, captureId: unknown): Promise<{ ok: boolean }> => {
