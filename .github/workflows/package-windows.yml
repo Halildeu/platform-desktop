@@ -76,16 +76,26 @@ jobs:
 
       - name: Verify packaged installer + portable exist
         run: |
+          # electron-builder uses productName ("Meeting Intelligence" with a
+          # space) for the Windows output filenames — the NSIS installer is
+          # "<name> Setup <version>.exe" and the portable is "<name> <version>.exe".
+          # No dashed artifactName is set for Windows (unlike Linux), so we glob
+          # on the space-separated names directly.
           shopt -s nullglob
-          installers=("$PACKAGE_DIR"/Meeting-Intelligence-Setup-*.exe)
-          portables=("$PACKAGE_DIR"/Meeting-Intelligence-*.exe)
+          installers=("$PACKAGE_DIR"/*Setup*.exe)
+          portables=()
+          for f in "$PACKAGE_DIR"/*.exe; do
+            [[ "$f" == *Setup* ]] || portables+=("$f")
+          done
           test "${#installers[@]}" -ge 1 || {
             echo "ERR: NSIS installer missing"; ls -la "$PACKAGE_DIR" || true; exit 1
           }
+          test "${#portables[@]}" -ge 1 || {
+            echo "ERR: portable .exe missing"; ls -la "$PACKAGE_DIR" || true; exit 1
+          }
           echo "Installer: ${installers[0]}"
-          echo "Portable candidates: ${portables[*]}"
+          echo "Portable:  ${portables[0]}"
           for f in "${installers[@]}" "${portables[@]}"; do
-            [ -f "$f" ] || continue
             size=$(stat -c '%s' "$f")
             test "$size" -gt 10000000 || {
               echo "ERR: $f is suspiciously small ($size bytes)"; exit 1
@@ -108,7 +118,9 @@ jobs:
         with:
           name: windows-x64-${{ env.PACKAGE_VERSION }}-${{ github.sha }}
           path: |
-            ${{ env.PACKAGE_DIR }}/Meeting-Intelligence-*.exe
+            ${{ env.PACKAGE_DIR }}/*.exe
+            ${{ env.PACKAGE_DIR }}/*.exe.blockmap
+            ${{ env.PACKAGE_DIR }}/latest.yml
             ${{ env.PACKAGE_DIR }}/BUILD_METADATA.txt
           retention-days: 14
           if-no-files-found: error
