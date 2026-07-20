@@ -15,6 +15,7 @@ import {
 } from '../services/gateway/chunk-sender.js';
 import {
   finishSession,
+  GatewaySessionFinishRejectedError,
   GatewaySessionStartRejectedError,
   loadGatewayConfig,
   newIdempotencyKey,
@@ -279,6 +280,14 @@ async function finishGatewaySessionWithRetry(
       return;
     } catch (error) {
       lastError = error;
+      if (
+        error instanceof GatewaySessionFinishRejectedError &&
+        error.status >= 400 &&
+        error.status < 500 &&
+        error.status !== 429
+      ) {
+        throw error;
+      }
       if (attempt < GATEWAY_FINISH_MAX_ATTEMPTS) {
         await new Promise<void>((resolve) => {
           setTimeout(resolve, GATEWAY_FINISH_RETRY_DELAY_MS);
@@ -302,8 +311,21 @@ async function syncPendingLifecycle(record: PendingRecordingLifecycle): Promise<
     if (!finishIdempotencyKey) {
       throw new Error('durable gateway finish idempotency key is missing');
     }
-    await finishGatewaySessionWithRetry(confirmed.externalSessionId, finishIdempotencyKey);
-    confirmed = lifecycleOutbox.markGatewayFinished(confirmed);
+    try {
+      await finishGatewaySessionWithRetry(confirmed.externalSessionId, finishIdempotencyKey);
+      confirmed = lifecycleOutbox.markGatewayFinished(confirmed);
+    } catch (error) {
+      if (
+        error instanceof GatewaySessionFinishRejectedError &&
+        error.status === 404 &&
+        error.code === 'AUDIO_GATEWAY_SESSION_NOT_FOUND' &&
+        error.retryable === false
+      ) {
+        confirmed = lifecycleOutbox.markGatewaySessionNotFound(confirmed, { attemptCount: 1 });
+      } else {
+        throw error;
+      }
+    }
   }
   await syncRecordingLifecycle(loadMeetingConfig(), await getValidAccessToken(), confirmed);
   if (confirmed.endedAt === null || confirmed.gatewayFinishPending) {
@@ -385,11 +407,13 @@ interface LifecycleReconciliationResult {
   ok: boolean;
   processed: number;
   remaining: number;
+  terminalized: number;
 }
 
 async function flushPendingRecordingLifecycles(): Promise<LifecycleReconciliationResult> {
   let processed = 0;
   let firstError: unknown = null;
+  const unreconcilableBefore = lifecycleOutbox.listUnreconcilable().length;
   for (const intent of startOutbox.list()) {
     processed += 1;
     try {
@@ -431,7 +455,12 @@ async function flushPendingRecordingLifecycles(): Promise<LifecycleReconciliatio
       remaining,
     });
   }
-  return { ok: firstError === null && remaining === 0, processed, remaining };
+  return {
+    ok: firstError === null && remaining === 0,
+    processed,
+    remaining,
+    terminalized: lifecycleOutbox.listUnreconcilable().length - unreconcilableBefore,
+  };
 }
 
 async function finishActiveRecording(recording: ActiveRecording): Promise<AudioFinishResult> {

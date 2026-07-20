@@ -1,6 +1,7 @@
 import Store from 'electron-store';
 
 const MAX_PENDING_LIFECYCLES = 32;
+const MAX_UNRECONCILABLE_LIFECYCLES = 128;
 const MEETING_ID_PATTERN =
   /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
 const EXTERNAL_SESSION_ID_PATTERN = /^[A-Za-z0-9._:-]{1,128}$/;
@@ -15,6 +16,20 @@ export interface PendingRecordingLifecycle {
   gatewayFinishIdempotencyKey?: string | null;
 }
 
+export interface UnreconcilableRecordingLifecycle {
+  meetingId: string;
+  externalSessionId: string;
+  startedAt: string;
+  endedAt: string;
+  gatewayFinishIdempotencyKey: string | null;
+  terminalReason: 'gateway-session-not-found';
+  gatewayStatus: 404;
+  gatewayCode: 'AUDIO_GATEWAY_SESSION_NOT_FOUND';
+  retryable: false;
+  recordedAt: string;
+  attemptCount: number;
+}
+
 interface PersistShape {
   snapshot?: PersistedSnapshot;
   pending?: PendingRecordingLifecycle[];
@@ -23,6 +38,7 @@ interface PersistShape {
 interface PersistedSnapshot {
   generation: number;
   pending: PendingRecordingLifecycle[];
+  unreconcilable?: UnreconcilableRecordingLifecycle[];
 }
 
 interface StoreLike {
@@ -81,8 +97,62 @@ function validate(value: unknown): PendingRecordingLifecycle {
   };
 }
 
+function validateUnreconcilable(value: unknown): UnreconcilableRecordingLifecycle {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('unreconcilable recording lifecycle entry is invalid');
+  }
+  const record = value as Partial<UnreconcilableRecordingLifecycle>;
+  const lifecycle = validate({
+    meetingId: record.meetingId,
+    externalSessionId: record.externalSessionId,
+    startedAt: record.startedAt,
+    endedAt: record.endedAt,
+    gatewayFinishPending: false,
+    gatewayFinishIdempotencyKey: record.gatewayFinishIdempotencyKey,
+  });
+  if (!lifecycle.endedAt) {
+    throw new Error('unreconcilable recording lifecycle endedAt is required');
+  }
+  if (record.terminalReason !== 'gateway-session-not-found') {
+    throw new Error('unreconcilable recording lifecycle terminalReason is invalid');
+  }
+  if (record.gatewayStatus !== 404) {
+    throw new Error('unreconcilable recording lifecycle gatewayStatus is invalid');
+  }
+  if (record.gatewayCode !== 'AUDIO_GATEWAY_SESSION_NOT_FOUND') {
+    throw new Error('unreconcilable recording lifecycle gatewayCode is invalid');
+  }
+  if (record.retryable !== false) {
+    throw new Error('unreconcilable recording lifecycle retryable is invalid');
+  }
+  const recordedAt = canonicalInstant(
+    record.recordedAt,
+    'unreconcilable recording lifecycle recordedAt',
+  );
+  if (
+    typeof record.attemptCount !== 'number' ||
+    !Number.isSafeInteger(record.attemptCount) ||
+    record.attemptCount <= 0
+  ) {
+    throw new Error('unreconcilable recording lifecycle attemptCount is invalid');
+  }
+  return {
+    meetingId: lifecycle.meetingId,
+    externalSessionId: lifecycle.externalSessionId,
+    startedAt: lifecycle.startedAt,
+    endedAt: lifecycle.endedAt,
+    gatewayFinishIdempotencyKey: lifecycle.gatewayFinishIdempotencyKey ?? null,
+    terminalReason: 'gateway-session-not-found',
+    gatewayStatus: 404,
+    gatewayCode: 'AUDIO_GATEWAY_SESSION_NOT_FOUND',
+    retryable: false,
+    recordedAt,
+    attemptCount: record.attemptCount,
+  };
+}
+
 function sameIdentity(
-  left: PendingRecordingLifecycle,
+  left: Pick<PendingRecordingLifecycle, 'meetingId' | 'externalSessionId'>,
   right: Pick<PendingRecordingLifecycle, 'meetingId' | 'externalSessionId'>,
 ): boolean {
   return left.meetingId === right.meetingId && left.externalSessionId === right.externalSessionId;
@@ -111,11 +181,23 @@ export class RecordingLifecycleOutbox {
   }
 
   list(): PendingRecordingLifecycle[] {
+    return this.currentSnapshot().pending;
+  }
+
+  listUnreconcilable(): UnreconcilableRecordingLifecycle[] {
+    return this.currentSnapshot().unreconcilable ?? [];
+  }
+
+  private currentSnapshot(): PersistedSnapshot {
     const { primary, recovery } = this.readAvailableSnapshots();
     if (primary.generation > 0 || recovery.generation > 0) {
-      return primary.generation >= recovery.generation ? primary.pending : recovery.pending;
+      return primary.generation >= recovery.generation ? primary : recovery;
     }
-    return this.mergeLegacy(primary.pending, recovery.pending);
+    return {
+      generation: 0,
+      pending: this.mergeLegacy(primary.pending, recovery.pending),
+      unreconcilable: [],
+    };
   }
 
   private mergeLegacy(
@@ -181,6 +263,18 @@ export class RecordingLifecycleOutbox {
     return {
       generation: snapshot.generation,
       pending: snapshot.pending.map((entry) => validate(entry)),
+      unreconcilable: (() => {
+        if (snapshot.unreconcilable === undefined) {
+          return [];
+        }
+        if (
+          !Array.isArray(snapshot.unreconcilable) ||
+          snapshot.unreconcilable.length > MAX_UNRECONCILABLE_LIFECYCLES
+        ) {
+          throw new Error('unreconcilable recording lifecycle outbox is invalid');
+        }
+        return snapshot.unreconcilable.map((entry) => validateUnreconcilable(entry));
+      })(),
     };
   }
 
@@ -236,7 +330,10 @@ export class RecordingLifecycleOutbox {
     };
   }
 
-  private persist(pending: PendingRecordingLifecycle[]): void {
+  private persist(
+    pending: PendingRecordingLifecycle[],
+    unreconcilable: UnreconcilableRecordingLifecycle[],
+  ): void {
     const { primary, recovery } = this.readAvailableSnapshots();
     const generation = Math.max(primary.generation, recovery.generation) + 1;
     if (!Number.isSafeInteger(generation)) {
@@ -245,6 +342,7 @@ export class RecordingLifecycleOutbox {
     const snapshot: PersistedSnapshot = {
       generation,
       pending: pending.map((entry) => validate(entry)),
+      unreconcilable: unreconcilable.map((entry) => validateUnreconcilable(entry)),
     };
     try {
       // Recovery is written first. A crash between the two writes leaves the
@@ -266,7 +364,8 @@ export class RecordingLifecycleOutbox {
 
   upsert(record: PendingRecordingLifecycle): PendingRecordingLifecycle {
     const normalized = validate(record);
-    const pending = this.list();
+    const current = this.currentSnapshot();
+    const pending = [...current.pending];
     const index = pending.findIndex((entry) => sameIdentity(entry, normalized));
     if (index >= 0) {
       const existing = pending[index];
@@ -298,7 +397,7 @@ export class RecordingLifecycleOutbox {
       }
       pending.push(normalized);
     }
-    this.persist(pending);
+    this.persist(pending, current.unreconcilable ?? []);
     return pending[index >= 0 ? index : pending.length - 1];
   }
 
@@ -327,8 +426,56 @@ export class RecordingLifecycleOutbox {
     return this.upsert({ ...existing, gatewayFinishPending: false });
   }
 
+  markGatewaySessionNotFound(
+    identity: Pick<PendingRecordingLifecycle, 'meetingId' | 'externalSessionId'>,
+    args: { recordedAt?: string; attemptCount: number },
+  ): PendingRecordingLifecycle {
+    const current = this.currentSnapshot();
+    const pending = [...current.pending];
+    const pendingIndex = pending.findIndex((entry) => sameIdentity(entry, identity));
+    if (pendingIndex < 0) {
+      throw new Error('pending recording lifecycle identity was not found');
+    }
+    const lifecycle = pending[pendingIndex];
+    if (!lifecycle.endedAt) {
+      throw new Error('pending recording lifecycle must be ended before terminal classification');
+    }
+
+    const unreconcilable = [...(current.unreconcilable ?? [])];
+    const existing = unreconcilable.find((entry) => sameIdentity(entry, identity));
+    if (existing) {
+      if (lifecycle.gatewayFinishPending) {
+        pending[pendingIndex] = { ...lifecycle, gatewayFinishPending: false };
+        this.persist(pending, unreconcilable);
+      }
+      return pending[pendingIndex];
+    }
+    if (unreconcilable.length >= MAX_UNRECONCILABLE_LIFECYCLES) {
+      throw new Error('unreconcilable recording lifecycle outbox capacity exceeded');
+    }
+
+    const terminal = validateUnreconcilable({
+      meetingId: lifecycle.meetingId,
+      externalSessionId: lifecycle.externalSessionId,
+      startedAt: lifecycle.startedAt,
+      endedAt: lifecycle.endedAt,
+      gatewayFinishIdempotencyKey: lifecycle.gatewayFinishIdempotencyKey ?? null,
+      terminalReason: 'gateway-session-not-found',
+      gatewayStatus: 404,
+      gatewayCode: 'AUDIO_GATEWAY_SESSION_NOT_FOUND',
+      retryable: false,
+      recordedAt: args.recordedAt ?? new Date().toISOString(),
+      attemptCount: args.attemptCount,
+    });
+    pending[pendingIndex] = { ...lifecycle, gatewayFinishPending: false };
+    unreconcilable.push(terminal);
+    this.persist(pending, unreconcilable);
+    return pending[pendingIndex];
+  }
+
   remove(identity: Pick<PendingRecordingLifecycle, 'meetingId' | 'externalSessionId'>): void {
-    const pending = this.list().filter((entry) => !sameIdentity(entry, identity));
-    this.persist(pending);
+    const current = this.currentSnapshot();
+    const pending = current.pending.filter((entry) => !sameIdentity(entry, identity));
+    this.persist(pending, current.unreconcilable ?? []);
   }
 }

@@ -131,7 +131,13 @@ export function chunkHeaders(args: {
   };
 }
 
-async function httpErrorMessage(res: Response, label: string): Promise<string> {
+interface GatewayHttpErrorDetails {
+  message: string;
+  code: string | null;
+  retryable: boolean | null;
+}
+
+async function httpErrorDetails(res: Response, label: string): Promise<GatewayHttpErrorDetails> {
   const contentType = res.headers?.get('content-type') ?? '';
   let body = '';
   try {
@@ -141,6 +147,8 @@ async function httpErrorMessage(res: Response, label: string): Promise<string> {
   }
 
   const fields: string[] = [];
+  let code: string | null = null;
+  let retryable: boolean | null = null;
   if (contentType.toLowerCase().includes('application/json') && body.trim()) {
     try {
       const parsed = JSON.parse(body) as {
@@ -149,6 +157,7 @@ async function httpErrorMessage(res: Response, label: string): Promise<string> {
         retryable?: unknown;
       };
       if (typeof parsed.code === 'string' && /^[A-Z_]{1,64}$/.test(parsed.code)) {
+        code = parsed.code;
         fields.push(`code=${parsed.code}`);
       }
       if (
@@ -158,6 +167,7 @@ async function httpErrorMessage(res: Response, label: string): Promise<string> {
         fields.push(`correlationId=${parsed.correlationId}`);
       }
       if (typeof parsed.retryable === 'boolean') {
+        retryable = parsed.retryable;
         fields.push(`retryable=${String(parsed.retryable)}`);
       }
     } catch {
@@ -168,7 +178,15 @@ async function httpErrorMessage(res: Response, label: string): Promise<string> {
   }
 
   const suffix = fields.length > 0 ? ` ${fields.join(' ')}` : '';
-  return `${label} failed: ${res.status}${suffix}`;
+  return {
+    message: `${label} failed: ${res.status}${suffix}`,
+    code,
+    retryable,
+  };
+}
+
+async function httpErrorMessage(res: Response, label: string): Promise<string> {
+  return (await httpErrorDetails(res, label)).message;
 }
 
 export interface StartSessionArgs {
@@ -216,6 +234,20 @@ export class GatewaySessionStartRejectedError extends Error {
     super(message);
     this.name = 'GatewaySessionStartRejectedError';
     this.status = status;
+  }
+}
+
+export class GatewaySessionFinishRejectedError extends Error {
+  readonly status: number;
+  readonly code: string | null;
+  readonly retryable: boolean | null;
+
+  constructor(details: GatewayHttpErrorDetails, status: number) {
+    super(details.message);
+    this.name = 'GatewaySessionFinishRejectedError';
+    this.status = status;
+    this.code = details.code;
+    this.retryable = details.retryable;
   }
 }
 
@@ -460,7 +492,10 @@ export async function finishSession(
     'finishSession',
     async (res) => {
       if (!res.ok) {
-        throw new Error(await httpErrorMessage(res, 'finishSession'));
+        throw new GatewaySessionFinishRejectedError(
+          await httpErrorDetails(res, 'finishSession'),
+          res.status,
+        );
       }
       return parseFinishSessionInfo(await res.json(), sessionId);
     },

@@ -6,6 +6,7 @@ import {
   consentsUrl,
   finishSession,
   finishUrl,
+  GatewaySessionFinishRejectedError,
   loadGatewayConfig,
   newIdempotencyKey,
   readTranscriptEvents,
@@ -427,6 +428,32 @@ describe('gateway-client HTTP fetch wrapper', () => {
   it('throws status on non-ok response', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 502 }));
     await expect(finishSession(cfg, 'JWT', 'SES-9', 'IK')).rejects.toThrow('502');
+  });
+
+  it('preserves the allowlisted terminal finish classification', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: false,
+        status: 404,
+        headers: { get: () => 'application/json' },
+        text: async () =>
+          JSON.stringify({
+            code: 'AUDIO_GATEWAY_SESSION_NOT_FOUND',
+            correlationId: 'corr-404',
+            retryable: false,
+          }),
+      }),
+    );
+
+    const error = await finishSession(cfg, 'JWT', 'SES-9', 'IK').catch((value: unknown) => value);
+
+    expect(error).toBeInstanceOf(GatewaySessionFinishRejectedError);
+    expect(error).toMatchObject({
+      status: 404,
+      code: 'AUDIO_GATEWAY_SESSION_NOT_FOUND',
+      retryable: false,
+    });
   });
 
   it('sanitizes JSON error body and does not expose message or details', async () => {
