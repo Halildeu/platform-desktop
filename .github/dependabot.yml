@@ -1,23 +1,25 @@
 # Dependabot v2 — automated dependency updates (Faz 24 Meeting Intelligence).
 #
 # Rationale: `security:audit` was blocking CI on rolling npm advisories that
-# had no code change of ours behind them (tar, brace-expansion, js-yaml — all
-# transitive). One-off `npm audit fix` commits pushed by humans/AI is
-# short-lived: the next new advisory reproduces the same friction. Dependabot
-# raises a PR the moment an advisory drops, and the audit gate stops being a
-# scheduled tax.
+# had no code path in this app (brace-expansion, js-yaml, tar — all transitive).
+# One-off `npm audit fix` commits pushed by humans/AI is short-lived — the next
+# advisory reproduces the same friction. Dependabot maintains this baseline
+# automatically so the audit gate stops being a scheduled tax.
 #
 # Layers:
-#   - npm ecosystem, weekly on Monday morning — reasonable cadence for a
-#     desktop app (not so frequent it swamps review; not so slow that a
-#     critical advisory sits for weeks).
-#   - group patch/minor updates into ONE PR per week so review is a
-#     single decision, not a queue of near-identical PRs.
-#   - major updates stay individual (each needs its own runtime + smoke).
-#   - security-updates: opened immediately (interval: daily) — bypasses the
-#     weekly cadence so a critical fix does not wait Monday.
-#   - github-actions: pin-by-sha updates monthly (workflows/*).
+#   - npm ecosystem, weekly (Monday) grouped patch+minor — one review decision
+#     per week for routine deps. Majors stay individual (each needs isolated
+#     runtime + smoke review).
+#   - Security fixes are OPENED IMMEDIATELY by dependabot regardless of the
+#     weekly cadence — this is dependabot's default behaviour for advisories
+#     with a fix (docs.github.com/en/code-security/dependabot/dependabot-security-updates).
+#     A separate "security-only" npm entry would violate v2's uniqueness rule
+#     (one entry per ecosystem+directory+target-branch) and is redundant.
+#   - github-actions monthly (Monday) — pin-by-sha updates for workflow YAMLs.
 #
+# One entry per (ecosystem, directory, target-branch). Do not duplicate npm
+# for a "daily security" channel — see comment above.
+
 version: 2
 
 updates:
@@ -41,42 +43,15 @@ updates:
     reviewers:
       - 'Halildeu'
     groups:
-      # Non-major updates land as one PR. `patterns: ["*"]` catches everything
-      # in this ecosystem; `update-types` narrows to patch+minor so majors
-      # remain individual (their break-risk warrants isolated review).
+      # Non-major updates land as ONE PR/week. Majors stay individual.
+      # Security fixes (from advisories) bypass this grouping automatically
+      # and open as their own PR the moment the advisory is published.
       minor-and-patch:
         patterns:
           - '*'
         update-types:
           - 'minor'
           - 'patch'
-
-  # ── security-only channel (bypasses weekly cadence) ──────────────────────
-  # Same ecosystem, ~daily poll; only security fixes escape here. Non-security
-  # deps still batch through the weekly PR above.
-  - package-ecosystem: 'npm'
-    directory: '/'
-    schedule:
-      interval: 'daily'
-      time: '07:00'
-      timezone: 'Europe/Istanbul'
-    open-pull-requests-limit: 4
-    labels:
-      - 'dependencies'
-      - 'npm'
-      - 'security'
-      - 'faz-24'
-    commit-message:
-      prefix: 'fix(deps)'
-      include: 'scope'
-    reviewers:
-      - 'Halildeu'
-    # `allow` restricts this schedule to security updates only. Regular
-    # updates continue to arrive through the weekly grouped PR above.
-    allow:
-      - dependency-type: 'all'
-    # Security updates cannot be grouped in dependabot v2 (each is a distinct
-    # advisory + fix), so they arrive one PR per advisory.
 
   # ── github-actions (workflow pins) ───────────────────────────────────────
   - package-ecosystem: 'github-actions'
