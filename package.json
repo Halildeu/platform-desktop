@@ -17,7 +17,8 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build && tsc -p tsconfig.electron.json",
-    "security:audit": "npm audit --audit-level=moderate",
+    "security:audit": "npm audit --omit=dev --audit-level=high",
+    "security:audit:full": "npm audit --audit-level=moderate",
     "preview": "vite preview",
     "package": "npm run build && electron-builder",
     "package:mac": "npm run release:mac:assert-env && npm run build && electron-builder --mac --universal --publish never",

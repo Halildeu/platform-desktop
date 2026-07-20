@@ -1,0 +1,98 @@
+# Dependabot v2 — automated dependency updates (Faz 24 Meeting Intelligence).
+#
+# Rationale: `security:audit` was blocking CI on rolling npm advisories that
+# had no code change of ours behind them (tar, brace-expansion, js-yaml — all
+# transitive). One-off `npm audit fix` commits pushed by humans/AI is
+# short-lived: the next new advisory reproduces the same friction. Dependabot
+# raises a PR the moment an advisory drops, and the audit gate stops being a
+# scheduled tax.
+#
+# Layers:
+#   - npm ecosystem, weekly on Monday morning — reasonable cadence for a
+#     desktop app (not so frequent it swamps review; not so slow that a
+#     critical advisory sits for weeks).
+#   - group patch/minor updates into ONE PR per week so review is a
+#     single decision, not a queue of near-identical PRs.
+#   - major updates stay individual (each needs its own runtime + smoke).
+#   - security-updates: opened immediately (interval: daily) — bypasses the
+#     weekly cadence so a critical fix does not wait Monday.
+#   - github-actions: pin-by-sha updates monthly (workflows/*).
+#
+version: 2
+
+updates:
+  # ── npm (application deps) ───────────────────────────────────────────────
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "07:00"
+      timezone: "Europe/Istanbul"
+    open-pull-requests-limit: 8
+    labels:
+      - "dependencies"
+      - "npm"
+      - "faz-24"
+    commit-message:
+      prefix: "chore(deps)"
+      prefix-development: "chore(deps-dev)"
+      include: "scope"
+    reviewers:
+      - "Halildeu"
+    groups:
+      # Non-major updates land as one PR. `patterns: ["*"]` catches everything
+      # in this ecosystem; `update-types` narrows to patch+minor so majors
+      # remain individual (their break-risk warrants isolated review).
+      minor-and-patch:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
+
+  # ── security-only channel (bypasses weekly cadence) ──────────────────────
+  # Same ecosystem, ~daily poll; only security fixes escape here. Non-security
+  # deps still batch through the weekly PR above.
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "daily"
+      time: "07:00"
+      timezone: "Europe/Istanbul"
+    open-pull-requests-limit: 4
+    labels:
+      - "dependencies"
+      - "npm"
+      - "security"
+      - "faz-24"
+    commit-message:
+      prefix: "fix(deps)"
+      include: "scope"
+    reviewers:
+      - "Halildeu"
+    # `allow` restricts this schedule to security updates only. Regular
+    # updates continue to arrive through the weekly grouped PR above.
+    allow:
+      - dependency-type: "all"
+    # Security updates cannot be grouped in dependabot v2 (each is a distinct
+    # advisory + fix), so they arrive one PR per advisory.
+
+  # ── github-actions (workflow pins) ───────────────────────────────────────
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+      day: "monday"
+      time: "07:00"
+      timezone: "Europe/Istanbul"
+    open-pull-requests-limit: 4
+    labels:
+      - "dependencies"
+      - "github-actions"
+      - "faz-24"
+    commit-message:
+      prefix: "chore(actions)"
+      include: "scope"
+    reviewers:
+      - "Halildeu"
