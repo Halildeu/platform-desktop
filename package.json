@@ -136,10 +136,17 @@
     },
     "win": {
       "icon": "build/icon.png",
+      "artifactName": "Meeting-Intelligence-${version}-${arch}.${ext}",
       "target": [
         "nsis",
         "portable"
       ]
+    },
+    "nsis": {
+      "artifactName": "Meeting-Intelligence-Setup-${version}-${arch}.${ext}"
+    },
+    "portable": {
+      "artifactName": "Meeting-Intelligence-${version}-${arch}.${ext}"
     },
     "linux": {
       "artifactName": "Meeting-Intelligence-${version}-${arch}.${ext}",

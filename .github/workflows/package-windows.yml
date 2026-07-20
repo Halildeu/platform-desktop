@@ -76,22 +76,28 @@ jobs:
 
       - name: Verify packaged installer + portable exist
         run: |
-          # electron-builder uses productName ("Meeting Intelligence" with a
-          # space) for the Windows output filenames — the NSIS installer is
-          # "<name> Setup <version>.exe" and the portable is "<name> <version>.exe".
-          # No dashed artifactName is set for Windows (unlike Linux), so we glob
-          # on the space-separated names directly.
+          # artifactName standardised across platforms (package.json):
+          # NSIS installer:  Meeting-Intelligence-Setup-<version>-<arch>.exe
+          # Portable:        Meeting-Intelligence-<version>-<arch>.exe
+          # Pin the glob to the dashed contract so an accidental removal of
+          # the win.artifactName / nsis.artifactName override (which would
+          # regress to productName-based names with spaces) fails CI —
+          # drift guard rather than a tolerant matcher.
           shopt -s nullglob
-          installers=("$PACKAGE_DIR"/*Setup*.exe)
+          installers=("$PACKAGE_DIR"/Meeting-Intelligence-Setup-*.exe)
           portables=()
-          for f in "$PACKAGE_DIR"/*.exe; do
+          for f in "$PACKAGE_DIR"/Meeting-Intelligence-*.exe; do
             [[ "$f" == *Setup* ]] || portables+=("$f")
           done
           test "${#installers[@]}" -ge 1 || {
-            echo "ERR: NSIS installer missing"; ls -la "$PACKAGE_DIR" || true; exit 1
+            echo "ERR: NSIS installer missing (dashed artifactName contract)"
+            ls -la "$PACKAGE_DIR" || true
+            exit 1
           }
           test "${#portables[@]}" -ge 1 || {
-            echo "ERR: portable .exe missing"; ls -la "$PACKAGE_DIR" || true; exit 1
+            echo "ERR: portable .exe missing (dashed artifactName contract)"
+            ls -la "$PACKAGE_DIR" || true
+            exit 1
           }
           echo "Installer: ${installers[0]}"
           echo "Portable:  ${portables[0]}"
