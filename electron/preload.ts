@@ -10,9 +10,24 @@ import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron';
 import type { AuthStatus } from './ipc/auth.js';
 import type { AudioFinishResult } from './ipc/audio.js';
 import type {
+  LiveAnalysisFrame,
+  LiveAnalysisStatus,
+} from './services/meeting/live-analysis-stream.js';
+import type {
   MeetingIntelligenceReadOutcome,
   RecentMeetingsPage,
 } from './services/meeting/meeting-client.js';
+
+/** Every live-analysis IPC payload carries the meetingId so the renderer can
+ *  filter for its currently-open meeting (multiple subscriptions may coexist).
+ */
+export interface LiveAnalysisFramePayload extends LiveAnalysisFrame {
+  meetingId: string;
+}
+export interface LiveAnalysisStatusPayload {
+  meetingId: string;
+  status: LiveAnalysisStatus;
+}
 
 export interface TranscriptGatewayEvent {
   eventId: string;
@@ -173,6 +188,28 @@ const electronAPI = {
       meetingId: string;
     }): Promise<MeetingIntelligenceReadOutcome> =>
       ipcRenderer.invoke('meeting:get-intelligence-result', payload),
+    /** Start the SSE subscription for a meeting's live analysis stream.
+     *  Idempotent (a second start for the same meetingId returns
+     *  `{started:false}`). Frames arrive via `onLiveAnalysisFrame`.
+     */
+    startLiveAnalysis: (payload: { meetingId: string }): Promise<{ started: boolean }> =>
+      ipcRenderer.invoke('meeting:live-analysis-start', payload),
+    stopLiveAnalysis: (payload: { meetingId: string }): Promise<{ stopped: boolean }> =>
+      ipcRenderer.invoke('meeting:live-analysis-stop', payload),
+    onLiveAnalysisFrame: (callback: (frame: LiveAnalysisFramePayload) => void): (() => void) => {
+      const listener = (_event: IpcRendererEvent, payload: LiveAnalysisFramePayload): void => {
+        callback(payload);
+      };
+      ipcRenderer.on('meeting:live-analysis-frame', listener);
+      return () => ipcRenderer.removeListener('meeting:live-analysis-frame', listener);
+    },
+    onLiveAnalysisStatus: (callback: (status: LiveAnalysisStatusPayload) => void): (() => void) => {
+      const listener = (_event: IpcRendererEvent, payload: LiveAnalysisStatusPayload): void => {
+        callback(payload);
+      };
+      ipcRenderer.on('meeting:live-analysis-status', listener);
+      return () => ipcRenderer.removeListener('meeting:live-analysis-status', listener);
+    },
   },
 };
 

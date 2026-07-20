@@ -158,6 +158,10 @@ function installElectronApiMock(): void {
       createContract: vi.fn(),
       analyze: vi.fn(),
       getIntelligenceResult: vi.fn(),
+      startLiveAnalysis: vi.fn().mockResolvedValue({ started: true }),
+      stopLiveAnalysis: vi.fn().mockResolvedValue({ stopped: true }),
+      onLiveAnalysisFrame: vi.fn(() => (): void => {}),
+      onLiveAnalysisStatus: vi.fn(() => (): void => {}),
     },
     audio: {
       recorderConfig: vi.fn(),

@@ -1,5 +1,10 @@
-import { ipcMain } from 'electron';
+import { BrowserWindow, ipcMain } from 'electron';
 
+import {
+  LiveAnalysisSubscriber,
+  type LiveAnalysisFrame,
+  type LiveAnalysisStatus,
+} from '../services/meeting/live-analysis-stream.js';
 import {
   analyzeMeetingIntelligence,
   createMeetingContract,
@@ -15,6 +20,29 @@ import {
   type RecentMeetingsPage,
 } from '../services/meeting/meeting-client.js';
 import { getValidAccessToken } from './auth.js';
+
+// Faz 24 İ3 — live-analysis SSE subscribers, keyed by meetingId. One
+// subscriber per meeting; a second start for the same meeting is idempotent
+// and returns the existing handle. The map is process-wide so a renderer
+// window that goes away without calling stop() does not leak the loop
+// forever — see stopAllLiveAnalysisSubscribers() below.
+const liveAnalysisSubscribers = new Map<string, LiveAnalysisSubscriber>();
+
+/** Broadcast an SSE-derived event to every renderer window. */
+function broadcastToRenderers(channel: string, payload: unknown): void {
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (!win.isDestroyed()) {
+      win.webContents.send(channel, payload);
+    }
+  }
+}
+
+/** Stop and drop all active live-analysis subscribers. Called on app quit. */
+export async function stopAllLiveAnalysisSubscribers(): Promise<void> {
+  const subs = Array.from(liveAnalysisSubscribers.values());
+  liveAnalysisSubscribers.clear();
+  await Promise.allSettled(subs.map((s) => s.stop('shutdown')));
+}
 
 const MEETING_ID_PATTERN =
   /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
@@ -207,6 +235,57 @@ export function registerMeetingIpc(): void {
         await getValidAccessToken(),
         meetingId,
       );
+    },
+  );
+
+  // ── Faz 24 İ3: live-analysis SSE subscribe/unsubscribe ──────────────────
+  // The renderer starts a subscription for a meetingId when the live panel
+  // opens and stops it when the meeting closes (or on nav/exit). Each SSE
+  // frame is broadcast as `meeting:live-analysis-frame` to every window;
+  // status transitions (connecting/open/closed/error) are broadcast as
+  // `meeting:live-analysis-status`. The renderer filters on meetingId.
+  ipcMain.handle(
+    'meeting:live-analysis-start',
+    async (_e, payload: unknown): Promise<{ started: boolean }> => {
+      const meetingId = parseResultReadArgs(payload);
+      if (liveAnalysisSubscribers.has(meetingId)) {
+        return { started: false }; // already subscribed — idempotent
+      }
+      const cfg = loadMeetingConfig();
+      const token = await getValidAccessToken();
+      const subscriber = new LiveAnalysisSubscriber({
+        baseUrl: cfg.baseUrl,
+        meetingId,
+        accessToken: token ?? undefined,
+        onFrame: (frame: LiveAnalysisFrame) => {
+          broadcastToRenderers('meeting:live-analysis-frame', {
+            meetingId,
+            ...frame,
+          });
+        },
+        onStatus: (status: LiveAnalysisStatus) => {
+          broadcastToRenderers('meeting:live-analysis-status', {
+            meetingId,
+            status,
+          });
+        },
+      });
+      liveAnalysisSubscribers.set(meetingId, subscriber);
+      subscriber.start();
+      return { started: true };
+    },
+  );
+  ipcMain.handle(
+    'meeting:live-analysis-stop',
+    async (_e, payload: unknown): Promise<{ stopped: boolean }> => {
+      const meetingId = parseResultReadArgs(payload);
+      const subscriber = liveAnalysisSubscribers.get(meetingId);
+      if (!subscriber) {
+        return { stopped: false };
+      }
+      liveAnalysisSubscribers.delete(meetingId);
+      await subscriber.stop('renderer-stop');
+      return { stopped: true };
     },
   );
 }

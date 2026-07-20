@@ -30,7 +30,7 @@ import { fileURLToPath } from 'node:url';
 
 import { registerAudioIpc } from './ipc/audio.js';
 import { registerAuthIpc } from './ipc/auth.js';
-import { registerMeetingIpc } from './ipc/meeting.js';
+import { registerMeetingIpc, stopAllLiveAnalysisSubscribers } from './ipc/meeting.js';
 import { isAutoLaunchEnabled, setAutoLaunchEnabled } from './services/auto-launch.js';
 import { initAutoUpdate } from './services/auto-update.js';
 import {
@@ -298,6 +298,9 @@ void app.whenReady().then(() => {
 app.on('before-quit', () => {
   isQuitting = true;
   saveCurrentBounds();
+  // Faz 24 İ3: unwind any live-analysis SSE subscribers so the fetch loop
+  // and background timers do not keep the app alive past user-visible quit.
+  void stopAllLiveAnalysisSubscribers();
 });
 
 app.on('window-all-closed', () => {
