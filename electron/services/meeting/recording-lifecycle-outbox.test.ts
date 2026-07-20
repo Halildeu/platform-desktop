@@ -3,18 +3,32 @@ import { describe, expect, it } from 'vitest';
 import {
   RecordingLifecycleOutbox,
   type PendingRecordingLifecycle,
+  type UnreconcilableRecordingLifecycle,
 } from './recording-lifecycle-outbox';
 
 class MemoryStore {
   pending: PendingRecordingLifecycle[] | undefined;
-  snapshot: { generation: number; pending: PendingRecordingLifecycle[] } | undefined;
+  snapshot:
+    | {
+        generation: number;
+        pending: PendingRecordingLifecycle[];
+        unreconcilable?: UnreconcilableRecordingLifecycle[];
+      }
+    | undefined;
   failWrites = false;
 
   get(key: 'snapshot' | 'pending'): unknown {
     return key === 'snapshot' ? this.snapshot : this.pending;
   }
 
-  set(_key: 'snapshot', value: { generation: number; pending: PendingRecordingLifecycle[] }): void {
+  set(
+    _key: 'snapshot',
+    value: {
+      generation: number;
+      pending: PendingRecordingLifecycle[];
+      unreconcilable?: UnreconcilableRecordingLifecycle[];
+    },
+  ): void {
     if (this.failWrites) {
       throw new Error('store write failed');
     }
@@ -150,6 +164,7 @@ describe('RecordingLifecycleOutbox', () => {
           endedAt: '2026-07-17T08:44:20.000Z',
         },
       ],
+      unreconcilable: [],
     });
     expect(outbox.list()[0].endedAt).toBe('2026-07-17T08:44:20.000Z');
   });
@@ -194,5 +209,63 @@ describe('RecordingLifecycleOutbox', () => {
         gatewayFinishIdempotencyKey: 'fedcba9876543210fedcba9876543210',
       }),
     ).toThrow('conflicting gateway finish idempotency key');
+  });
+
+  it('moves a verified missing gateway session to durable terminal evidence atomically', () => {
+    const primary = new MemoryStore();
+    const recovery = new MemoryStore();
+    const outbox = new RecordingLifecycleOutbox(primary, recovery);
+    outbox.upsert(active);
+    const ended = outbox.markEnded(active, '2026-07-17T08:44:20Z');
+
+    expect(
+      outbox.markGatewaySessionNotFound(ended, {
+        recordedAt: '2026-07-20T08:30:00Z',
+        attemptCount: 1,
+      }),
+    ).toEqual(expect.objectContaining({ gatewayFinishPending: false }));
+    expect(outbox.list()).toEqual([
+      expect.objectContaining({ externalSessionId: 'SES-1', gatewayFinishPending: false }),
+    ]);
+    expect(outbox.listUnreconcilable()).toEqual([
+      {
+        meetingId: active.meetingId,
+        externalSessionId: active.externalSessionId,
+        startedAt: '2026-07-17T08:43:20.000Z',
+        endedAt: '2026-07-17T08:44:20.000Z',
+        gatewayFinishIdempotencyKey: active.gatewayFinishIdempotencyKey,
+        terminalReason: 'gateway-session-not-found',
+        gatewayStatus: 404,
+        gatewayCode: 'AUDIO_GATEWAY_SESSION_NOT_FOUND',
+        retryable: false,
+        recordedAt: '2026-07-20T08:30:00.000Z',
+        attemptCount: 1,
+      },
+    ]);
+
+    outbox.remove(active);
+    const restarted = new RecordingLifecycleOutbox(primary, recovery);
+    expect(restarted.list()).toEqual([]);
+    expect(restarted.listUnreconcilable()).toHaveLength(1);
+  });
+
+  it('keeps the lifecycle blocking when terminal evidence cannot be persisted', () => {
+    const primary = new MemoryStore();
+    const recovery = new MemoryStore();
+    const outbox = new RecordingLifecycleOutbox(primary, recovery);
+    outbox.upsert(active);
+    const ended = outbox.markEnded(active, '2026-07-17T08:44:20Z');
+    recovery.failWrites = true;
+
+    expect(() =>
+      outbox.markGatewaySessionNotFound(ended, {
+        recordedAt: '2026-07-20T08:30:00Z',
+        attemptCount: 1,
+      }),
+    ).toThrow('recovery snapshot could not be persisted');
+    expect(new RecordingLifecycleOutbox(primary, recovery).list()).toEqual([
+      expect.objectContaining({ externalSessionId: 'SES-1', gatewayFinishPending: true }),
+    ]);
+    expect(new RecordingLifecycleOutbox(primary, recovery).listUnreconcilable()).toEqual([]);
   });
 });

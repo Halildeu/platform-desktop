@@ -83,8 +83,12 @@ const electronAPI = {
       liveSttStreamUrl: string | null;
       liveSttStreamReason: string | null;
     }> => ipcRenderer.invoke('audio:recorder-config'),
-    reconcileLifecycle: (): Promise<{ ok: boolean; processed: number; remaining: number }> =>
-      ipcRenderer.invoke('audio:reconcile-lifecycle'),
+    reconcileLifecycle: (): Promise<{
+      ok: boolean;
+      processed: number;
+      remaining: number;
+      terminalized: number;
+    }> => ipcRenderer.invoke('audio:reconcile-lifecycle'),
     permissionStatus: (): Promise<{
       status: 'granted' | 'denied' | 'restricted' | 'not-determined' | 'unknown';
       granted: boolean;

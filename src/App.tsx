@@ -1007,7 +1007,16 @@ function App() {
     const reconcile = async (attempt: number): Promise<void> => {
       try {
         const outcome = await window.electronAPI?.audio.reconcileLifecycle();
-        if (cancelled || !outcome || outcome.remaining === 0) {
+        if (cancelled || !outcome) {
+          return;
+        }
+        if (outcome.terminalized > 0) {
+          setStatus(
+            `${outcome.terminalized} eski Gateway oturumu sunucuda bulunamadi; ` +
+              'dayanikli tani kaydina alindi. Yeni kayit baslatilabilir.',
+          );
+        }
+        if (outcome.remaining === 0) {
           return;
         }
         if (attempt >= LIFECYCLE_RECONCILIATION_MAX_ATTEMPTS - 1) {

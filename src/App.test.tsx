@@ -189,7 +189,9 @@ function installElectronApiMock(recorderConfig: {
         liveSttStreamReason: null,
         ...recorderConfig,
       }),
-      reconcileLifecycle: vi.fn().mockResolvedValue({ ok: true, processed: 0, remaining: 0 }),
+      reconcileLifecycle: vi
+        .fn()
+        .mockResolvedValue({ ok: true, processed: 0, remaining: 0, terminalized: 0 }),
       permissionStatus: vi.fn().mockResolvedValue({
         status: 'granted',
         granted: true,
