@@ -33,7 +33,7 @@ Global `~/.claude/CLAUDE.md` HARD RULE seti aynen geçerli. Repo özel öne çı
 - **Audio API**: `getUserMedia` → AudioWorklet → PCM16 → IPC → WebSocket
 - **Cross-platform parity**: macOS/Windows/Linux her PR CI build sanity
 - **Code signing**: Unsigned binary production'da YASAK
-- **Cross-AI Peer Review**: Provider-level — Electron repo'da Codex review thread zorunlu
+- **Cross-AI Peer Review**: Provider-distinct — implementer sağlayıcısıyla aynı sağlayıcı review yapmaz. Kullanıcı 2026-07-20 esnetmesi (gitops#2708): Codex, Claude, MiniMax veya GLM'den mevcut ve doğrulanabilir olan(lar) reviewer kanal; spesifik model kilidi yok. Canonical detay: platform-k8s-gitops `docs/context-priority-rules.md` §11.
 - **Türkçe cevap default**
 - **Her İş Project Board'a** (Project #4 Hedef Repo: platform-desktop)
 
