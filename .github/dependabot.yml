@@ -22,77 +22,77 @@ version: 2
 
 updates:
   # ── npm (application deps) ───────────────────────────────────────────────
-  - package-ecosystem: "npm"
-    directory: "/"
+  - package-ecosystem: 'npm'
+    directory: '/'
     schedule:
-      interval: "weekly"
-      day: "monday"
-      time: "07:00"
-      timezone: "Europe/Istanbul"
+      interval: 'weekly'
+      day: 'monday'
+      time: '07:00'
+      timezone: 'Europe/Istanbul'
     open-pull-requests-limit: 8
     labels:
-      - "dependencies"
-      - "npm"
-      - "faz-24"
+      - 'dependencies'
+      - 'npm'
+      - 'faz-24'
     commit-message:
-      prefix: "chore(deps)"
-      prefix-development: "chore(deps-dev)"
-      include: "scope"
+      prefix: 'chore(deps)'
+      prefix-development: 'chore(deps-dev)'
+      include: 'scope'
     reviewers:
-      - "Halildeu"
+      - 'Halildeu'
     groups:
       # Non-major updates land as one PR. `patterns: ["*"]` catches everything
       # in this ecosystem; `update-types` narrows to patch+minor so majors
       # remain individual (their break-risk warrants isolated review).
       minor-and-patch:
         patterns:
-          - "*"
+          - '*'
         update-types:
-          - "minor"
-          - "patch"
+          - 'minor'
+          - 'patch'
 
   # ── security-only channel (bypasses weekly cadence) ──────────────────────
   # Same ecosystem, ~daily poll; only security fixes escape here. Non-security
   # deps still batch through the weekly PR above.
-  - package-ecosystem: "npm"
-    directory: "/"
+  - package-ecosystem: 'npm'
+    directory: '/'
     schedule:
-      interval: "daily"
-      time: "07:00"
-      timezone: "Europe/Istanbul"
+      interval: 'daily'
+      time: '07:00'
+      timezone: 'Europe/Istanbul'
     open-pull-requests-limit: 4
     labels:
-      - "dependencies"
-      - "npm"
-      - "security"
-      - "faz-24"
+      - 'dependencies'
+      - 'npm'
+      - 'security'
+      - 'faz-24'
     commit-message:
-      prefix: "fix(deps)"
-      include: "scope"
+      prefix: 'fix(deps)'
+      include: 'scope'
     reviewers:
-      - "Halildeu"
+      - 'Halildeu'
     # `allow` restricts this schedule to security updates only. Regular
     # updates continue to arrive through the weekly grouped PR above.
     allow:
-      - dependency-type: "all"
+      - dependency-type: 'all'
     # Security updates cannot be grouped in dependabot v2 (each is a distinct
     # advisory + fix), so they arrive one PR per advisory.
 
   # ── github-actions (workflow pins) ───────────────────────────────────────
-  - package-ecosystem: "github-actions"
-    directory: "/"
+  - package-ecosystem: 'github-actions'
+    directory: '/'
     schedule:
-      interval: "monthly"
-      day: "monday"
-      time: "07:00"
-      timezone: "Europe/Istanbul"
+      interval: 'monthly'
+      day: 'monday'
+      time: '07:00'
+      timezone: 'Europe/Istanbul'
     open-pull-requests-limit: 4
     labels:
-      - "dependencies"
-      - "github-actions"
-      - "faz-24"
+      - 'dependencies'
+      - 'github-actions'
+      - 'faz-24'
     commit-message:
-      prefix: "chore(actions)"
-      include: "scope"
+      prefix: 'chore(actions)'
+      include: 'scope'
     reviewers:
-      - "Halildeu"
+      - 'Halildeu'
