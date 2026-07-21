@@ -29,10 +29,11 @@ const MAX_PENDING_AUDIO_MS = 120_000;
 const MAX_PENDING_CHUNKS = Math.ceil(MAX_PENDING_AUDIO_MS / CHUNK_MS);
 const CAPTURE_PERMISSION_TIMEOUT_MS = 45_000;
 const CAPTURE_IPC_TIMEOUT_MS = 15_000;
-// Main waits up to 300s for a cold streaming model plus bounded consent,
-// session, and lifecycle calls before that handshake. Renderer cancellation
-// must not fire first and strand an active main-process recording.
-const RECORDER_START_IPC_TIMEOUT_MS = 360_000;
+// Main waits up to 300s for a cold streaming model after bounded token refresh,
+// consent, session, and lifecycle calls (about 83s worst case). Keep explicit
+// headroom so renderer cancellation cannot fire first and strand an active
+// main-process recording.
+const RECORDER_START_IPC_TIMEOUT_MS = 420_000;
 const LOOPBACK_CAPTURE_TIMEOUT_MS = 5_000;
 const WINDOWS_USER_AGENT_RE = /\bWindows NT\b/i;
 

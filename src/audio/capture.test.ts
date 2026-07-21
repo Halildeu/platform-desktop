@@ -789,7 +789,7 @@ describe('startRecording', () => {
       const rejection = expect(recording).rejects.toThrow(
         'Audio gateway oturumu zaman aşımına uğradı.',
       );
-      await vi.advanceTimersByTimeAsync(360_000);
+      await vi.advanceTimersByTimeAsync(420_000);
 
       await rejection;
       expect(micTrack.stop).toHaveBeenCalled();

@@ -535,4 +535,27 @@ describe('GatewayLiveStream', () => {
     expect(sockets[0].readyState).toBe(3);
     expect(vi.getTimerCount()).toBe(0);
   });
+
+  it('does not create a socket when lifecycle closes while token refresh is pending', async () => {
+    let resolveJwt: (jwt: string) => void = () => undefined;
+    const socketFactory = vi.fn(() => new FakeSocket());
+    const stream = new GatewayLiveStream({
+      cfg: { baseUrl: 'https://testai.acik.com' },
+      sessionId: 'SES-token-close',
+      getJwt: () =>
+        new Promise((resolve) => {
+          resolveJwt = resolve;
+        }),
+      onEvent: vi.fn(),
+      onError: vi.fn(),
+      socketFactory,
+    });
+
+    const started = stream.start();
+    stream.close();
+    resolveJwt('JWT');
+
+    await expect(started).rejects.toThrow(/closed while waiting for token/);
+    expect(socketFactory).not.toHaveBeenCalled();
+  });
 });

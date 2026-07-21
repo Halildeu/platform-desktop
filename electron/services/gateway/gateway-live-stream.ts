@@ -367,6 +367,9 @@ export class GatewayLiveStream {
     }
     const operation = (async (): Promise<void> => {
       const jwt = await this.options.getJwt();
+      if (this.closed || this.stopping) {
+        throw new Error('gateway live stream closed while waiting for token');
+      }
       if (!jwt) {
         throw new Error('gateway live stream token is unavailable');
       }
