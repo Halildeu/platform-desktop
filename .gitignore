@@ -147,3 +147,6 @@ vite.config.ts.timestamp-*
 
 # electron-builder output
 release/
+
+# Faz 24 signed release local dev cert bundle (never commit)
+.local/
