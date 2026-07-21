@@ -187,6 +187,16 @@ function rendererWebContentsId(event: unknown): number | null {
   return typeof id === 'number' ? id : null;
 }
 
+function takeStartupCancellation(rendererId: number | null): boolean {
+  return rendererId !== null && unloadedRendererIds.delete(rendererId);
+}
+
+function assertStartupOwnerPresent(rendererId: number | null): void {
+  if (takeStartupCancellation(rendererId)) {
+    throw new Error('renderer unloaded while recording session was starting');
+  }
+}
+
 function emitTranscriptEvent(send: RendererSend | null, event: TranscriptGatewayEvent): void {
   if (!send) {
     console.warn('Transcript event dropped because renderer sender is unavailable', {
@@ -731,6 +741,7 @@ export function registerAudioIpc(): void {
       starting = true;
       try {
         await ensureNoActiveRecording();
+        assertStartupOwnerPresent(rendererId);
         ensureLifecycleReadyForNewRecording();
         const consent = pendingConsent;
         if (!consent) {
@@ -741,8 +752,10 @@ export function registerAudioIpc(): void {
         const normalizedDeviceId = requireIdentifier(deviceId, 'deviceId');
         const captureId = randomUUID();
         const cfg = loadGatewayConfig();
+        const consentAccessToken = await getValidAccessToken();
+        assertStartupOwnerPresent(rendererId);
         try {
-          await recordConsent(cfg, await getValidAccessToken(), {
+          await recordConsent(cfg, consentAccessToken, {
             meetingId: normalizedMeetingId,
             captureId,
             consentVersion: consent.consentVersion,
@@ -752,6 +765,7 @@ export function registerAudioIpc(): void {
         } catch (error) {
           throw unconfirmedGatewayMutation(CONSENT_UNCONFIRMED_CODE, error);
         }
+        assertStartupOwnerPresent(rendererId);
         const sender = new ChunkSender(cfg, () => getValidAccessToken());
         const canonicalStartedAt = new Date().toISOString();
         const startIdempotencyKey = newIdempotencyKey();
@@ -810,11 +824,23 @@ export function registerAudioIpc(): void {
           );
           throw error;
         }
+
+        const cancelStartedLifecycle = async (): Promise<void> => {
+          if (!takeStartupCancellation(rendererId)) {
+            return;
+          }
+          const finished = lifecycleOutbox.markEnded(pendingLifecycle, new Date().toISOString());
+          await syncPendingLifecycle(finished);
+          throw new Error('renderer unloaded while recording session was starting');
+        };
+        await cancelStartedLifecycle();
         let transcriptSessionId: string;
+        const lifecycleAccessToken = await getValidAccessToken();
+        await cancelStartedLifecycle();
         try {
           const canonicalLifecycle = await syncRecordingLifecycle(
             loadMeetingConfig(),
-            await getValidAccessToken(),
+            lifecycleAccessToken,
             pendingLifecycle,
           );
           transcriptSessionId = canonicalLifecycle.sessionId;
@@ -846,11 +872,7 @@ export function registerAudioIpc(): void {
             .catch(() => undefined);
           throw error;
         }
-        if (rendererId !== null && unloadedRendererIds.delete(rendererId)) {
-          const finished = lifecycleOutbox.markEnded(pendingLifecycle, new Date().toISOString());
-          await syncPendingLifecycle(finished);
-          throw new Error('renderer unloaded while recording session was starting');
-        }
+        await cancelStartedLifecycle();
         const send = rendererSend(event);
         const runtimeConfig = loadRecorderRuntimeConfig();
         let liveStream: GatewayLiveStream | null = null;

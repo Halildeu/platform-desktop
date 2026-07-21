@@ -6,6 +6,7 @@ import userEvent from '@testing-library/user-event';
 import '@testing-library/jest-dom/vitest';
 
 vi.mock('./audio/capture', () => ({
+  RECORDER_START_OPERATION_TIMEOUT_MS: 515_000,
   initialAudioCapturePreflightState: {
     status: 'idle',
     message: null,
@@ -768,15 +769,16 @@ describe('App recorder readiness', () => {
     );
 
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(150_000);
+      await vi.advanceTimersByTimeAsync(515_000);
       await Promise.resolve();
     });
     vi.useRealTimers();
 
     const timeoutErrors = screen.getAllByText(
-      'Kayıt başlatılamadı: Recorder başlatma 150 sn içinde yanıt vermedi; izin/gateway zinciri kontrol edilmeli.',
+      'Kayıt başlatılamadı: Recorder başlatma 515 sn içinde yanıt vermedi; izin/gateway zinciri kontrol edilmeli.',
     );
     expect(timeoutErrors.length).toBeGreaterThan(0);
+    expect(window.electronAPI?.audio.cancelCapture).toHaveBeenCalledTimes(1);
     expect(screen.getByRole('button', { name: 'Kaydet' })).toBeEnabled();
   });
 

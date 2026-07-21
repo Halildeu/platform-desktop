@@ -35,6 +35,16 @@ const CAPTURE_IPC_TIMEOUT_MS = 15_000;
 // main-process recording.
 const RECORDER_START_IPC_TIMEOUT_MS = 420_000;
 const LOOPBACK_CAPTURE_TIMEOUT_MS = 5_000;
+// App.tsx owns the final user-facing guard. Keep that guard derived from every
+// sequential capture/start budget plus explicit scheduling headroom so a valid
+// cold model load cannot be reported as failed while main is still starting.
+export const RECORDER_START_OPERATION_TIMEOUT_MS =
+  CAPTURE_IPC_TIMEOUT_MS +
+  CAPTURE_PERMISSION_TIMEOUT_MS +
+  LOOPBACK_CAPTURE_TIMEOUT_MS +
+  CAPTURE_IPC_TIMEOUT_MS +
+  RECORDER_START_IPC_TIMEOUT_MS +
+  15_000;
 const WINDOWS_USER_AGENT_RE = /\bWindows NT\b/i;
 
 export function resolvePcmWorkletModuleUrl(baseUri = document.baseURI): string {

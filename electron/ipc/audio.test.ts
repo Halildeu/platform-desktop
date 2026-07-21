@@ -1322,6 +1322,27 @@ describe('audio IPC recorder consent gate', () => {
     expect(mocks.pendingLifecycles).toEqual([]);
   });
 
+  it('stops before consent mutation when its renderer unloads during token refresh', async () => {
+    let resolveToken: ((value: string) => void) | null = null;
+    mocks.getValidAccessToken.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveToken = resolve;
+        }),
+    );
+    await acceptConsent();
+
+    const start = startHandler()({ sender: { id: 37, send: vi.fn() } }, meetingId, deviceId);
+    await vi.waitFor(() => expect(mocks.getValidAccessToken).toHaveBeenCalledTimes(1));
+    rendererUnloadedListener()({ sender: { id: 37 } });
+    resolveToken?.('JWT');
+
+    await expect(start).rejects.toThrow('renderer unloaded while recording session was starting');
+    expect(mocks.recordConsent).not.toHaveBeenCalled();
+    expect(mocks.senderStart).not.toHaveBeenCalled();
+    expect(mocks.syncRecordingLifecycle).not.toHaveBeenCalled();
+  });
+
   it('cancels and reconciles a gateway live stream when its renderer unloads during readiness', async () => {
     let rejectLiveStart: ((error: Error) => void) | null = null;
     mocks.loadRecorderRuntimeConfig.mockReturnValueOnce({
