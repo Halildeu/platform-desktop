@@ -871,11 +871,11 @@ export function registerAudioIpc(): void {
           failStartedLifecycle(error),
         );
         await cancelStartedLifecycle();
-        const canonicalLifecycle = await syncRecordingLifecycle(
-          loadMeetingConfig(),
-          lifecycleAccessToken,
-          pendingLifecycle,
-        ).catch((error: unknown) => failStartedLifecycle(error));
+        const canonicalLifecycle = await Promise.resolve()
+          .then(() =>
+            syncRecordingLifecycle(loadMeetingConfig(), lifecycleAccessToken, pendingLifecycle),
+          )
+          .catch((error: unknown) => failStartedLifecycle(error));
         const transcriptSessionId = canonicalLifecycle.sessionId;
         await cancelStartedLifecycle();
         const send = rendererSend(event);

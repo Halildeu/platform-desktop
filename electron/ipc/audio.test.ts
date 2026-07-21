@@ -594,6 +594,32 @@ describe('audio IPC recorder consent gate', () => {
     expect(mocks.clearCapturePermissionLease).toHaveBeenCalledTimes(1);
   });
 
+  it('durably ends the gateway session when meeting config loading fails', async () => {
+    mocks.loadMeetingConfig.mockImplementationOnce(() => {
+      throw new Error('MEETING_BASE_URL is required');
+    });
+    await acceptConsent();
+
+    await expect(startHandler()({}, meetingId, deviceId)).rejects.toThrow(
+      'MEETING_BASE_URL is required',
+    );
+
+    expect(mocks.recordConsent).toHaveBeenCalledTimes(1);
+    expect(mocks.senderStart).toHaveBeenCalledTimes(1);
+    expect(mocks.syncRecordingLifecycle).not.toHaveBeenCalled();
+    expect(mocks.senderFinish).toHaveBeenCalledTimes(1);
+    expect(mocks.pendingLifecycles).toEqual([
+      expect.objectContaining({
+        meetingId,
+        externalSessionId: 'SES-1',
+        endedAt: expect.any(String),
+        gatewayFinishPending: false,
+      }),
+    ]);
+    expect(mocks.setRecordingActive).not.toHaveBeenCalledWith(true);
+    expect(mocks.clearCapturePermissionLease).toHaveBeenCalledTimes(1);
+  });
+
   it('marks an ambiguous gateway session start as unconfirmed', async () => {
     mocks.senderStart.mockRejectedValueOnce(
       new mocks.MockAmbiguousGatewaySessionStartError('startSession timed out after 15000ms'),
