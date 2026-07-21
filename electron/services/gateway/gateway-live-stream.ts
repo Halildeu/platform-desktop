@@ -420,9 +420,7 @@ export class GatewayLiveStream {
             // this connection can drive to completion — but never past the
             // absolute ceiling.
             if (Date.now() - openStartedAt >= OPEN_MAX_WAIT_MS) {
-              failOpen(
-                `gateway live stream still loading after ${OPEN_MAX_WAIT_MS}ms; giving up`,
-              );
+              failOpen(`gateway live stream still loading after ${OPEN_MAX_WAIT_MS}ms; giving up`);
               return;
             }
             armSilenceTimer();
