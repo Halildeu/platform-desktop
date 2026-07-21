@@ -53,26 +53,30 @@ manually or on `v*` tag pushes.
 
 2. **Base64-encode the P12** so it can live in a GitHub Actions secret
    (which is a text secret — a raw binary blob will not survive):
+
    ```bash
    base64 -i codesign.p12 -o codesign.p12.b64
    ```
 
 3. **Set the four Actions secrets** in this repo (Settings → Secrets
    and variables → Actions):
-   | Secret | Value |
-   |---|---|
-   | `WINDOWS_SIGN_CERT_P12` | contents of `codesign.p12.b64` |
-   | `WINDOWS_SIGN_CERT_PASSWORD` | the P12 password |
+
+   | Secret                       | Value                                                            |
+   | ---------------------------- | ---------------------------------------------------------------- |
+   | `WINDOWS_SIGN_CERT_P12`      | contents of `codesign.p12.b64`                                   |
+   | `WINDOWS_SIGN_CERT_PASSWORD` | the P12 password                                                 |
    | `WINDOWS_SIGN_TIMESTAMP_URL` | e.g. `http://timestamp.sectigo.com` or `https://freetsa.org/tsr` |
-   | `WINDOWS_SIGN_TSA_CACERT` | (optional) CA bundle for a private TSA |
+   | `WINDOWS_SIGN_TSA_CACERT`    | (optional) CA bundle for a private TSA                           |
 
 4. **Fire a signed build**
+
    ```bash
    gh workflow run "Windows package signed release" \
      --repo Halildeu/platform-desktop \
      --ref main \
      -f ref=main
    ```
+
    or push a version tag (`git tag v0.2.0 && git push --tags`).
 
 5. **Verify** the produced `.exe`
