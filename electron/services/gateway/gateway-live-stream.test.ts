@@ -1,6 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { GATEWAY_LIVE_AUDIO_FRAME_HEADER_BYTES, GatewayLiveStream } from './gateway-live-stream';
+import {
+  GATEWAY_LIVE_AUDIO_FRAME_HEADER_BYTES,
+  GATEWAY_LIVE_STREAM_OPEN_MAX_WAIT_MS,
+  GatewayLiveStream,
+} from './gateway-live-stream';
 
 class FakeSocket {
   readyState = 0;
@@ -469,5 +473,66 @@ describe('GatewayLiveStream', () => {
     await vi.advanceTimersByTimeAsync(11_000);
     await assertion;
     stream.close();
+  });
+
+  it('enforces the absolute startup deadline even when loading progress continues', async () => {
+    vi.useFakeTimers();
+    const sockets: FakeSocket[] = [];
+    const stream = new GatewayLiveStream({
+      cfg: { baseUrl: 'https://testai.acik.com' },
+      sessionId: 'SES-deadline',
+      getJwt: async () => 'JWT',
+      onEvent: vi.fn(),
+      onError: vi.fn(),
+      socketFactory: () => {
+        const socket = new FakeSocket();
+        sockets.push(socket);
+        return socket;
+      },
+    });
+
+    const started = stream.start();
+    const assertion = expect(started).rejects.toThrow(/did not become ready within 300000ms/);
+    await vi.runAllTicks();
+    sockets[0].open();
+    for (let elapsed = 0; elapsed < GATEWAY_LIVE_STREAM_OPEN_MAX_WAIT_MS; elapsed += 8_000) {
+      sockets[0].message(JSON.stringify({ type: 'loading', stage: 'model' }));
+      await vi.advanceTimersByTimeAsync(
+        Math.min(8_000, GATEWAY_LIVE_STREAM_OPEN_MAX_WAIT_MS - elapsed),
+      );
+    }
+
+    await assertion;
+    expect(sockets[0].readyState).toBe(3);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('rejects an in-flight startup immediately when the lifecycle owner closes it', async () => {
+    vi.useFakeTimers();
+    const sockets: FakeSocket[] = [];
+    const stream = new GatewayLiveStream({
+      cfg: { baseUrl: 'https://testai.acik.com' },
+      sessionId: 'SES-close',
+      getJwt: async () => 'JWT',
+      onEvent: vi.fn(),
+      onError: vi.fn(),
+      socketFactory: () => {
+        const socket = new FakeSocket();
+        sockets.push(socket);
+        return socket;
+      },
+    });
+
+    const started = stream.start();
+    const assertion = expect(started).rejects.toThrow(/closed while waiting for readiness/);
+    await vi.runAllTicks();
+    sockets[0].open();
+    sockets[0].message(JSON.stringify({ type: 'loading', stage: 'model' }));
+
+    stream.close();
+
+    await assertion;
+    expect(sockets[0].readyState).toBe(3);
+    expect(vi.getTimerCount()).toBe(0);
   });
 });

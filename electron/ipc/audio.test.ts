@@ -1322,6 +1322,40 @@ describe('audio IPC recorder consent gate', () => {
     expect(mocks.pendingLifecycles).toEqual([]);
   });
 
+  it('cancels and reconciles a gateway live stream when its renderer unloads during readiness', async () => {
+    let rejectLiveStart: ((error: Error) => void) | null = null;
+    mocks.loadRecorderRuntimeConfig.mockReturnValueOnce({
+      meetingId: '22222222-2222-4222-8222-222222222222',
+      deviceId: 'dev1',
+      ready: true,
+      reason: null,
+      liveSttStreamUrl: null,
+      liveSttStreamReason: null,
+      gatewayLiveStreamEnabled: true,
+    });
+    mocks.gatewayLiveStreamStart.mockImplementationOnce(
+      () =>
+        new Promise<void>((_resolve, reject) => {
+          rejectLiveStart = reject;
+        }),
+    );
+    mocks.gatewayLiveStreamClose.mockImplementation(() => {
+      rejectLiveStart?.(new Error('closed while waiting for readiness'));
+    });
+    await acceptConsent();
+
+    const start = startHandler()({ sender: { id: 27, send: vi.fn() } }, meetingId, deviceId);
+    await vi.waitFor(() => expect(mocks.gatewayLiveStreamStart).toHaveBeenCalledTimes(1));
+    rendererUnloadedListener()({ sender: { id: 27 } });
+
+    await expect(start).rejects.toThrow('renderer unloaded while gateway live stream was starting');
+    expect(mocks.gatewayLiveStreamClose).toHaveBeenCalled();
+    expect(mocks.finishSession).toHaveBeenCalledTimes(1);
+    expect(mocks.transcriptSubscriptionStart).not.toHaveBeenCalled();
+    expect(mocks.setRecordingActive).not.toHaveBeenCalledWith(true);
+    expect(mocks.pendingLifecycles).toEqual([]);
+  });
+
   it('single-flights unload and abort while rejecting concurrent reconciliation', async () => {
     let releaseFinish: (() => void) | null = null;
     mocks.senderFinish.mockImplementationOnce(

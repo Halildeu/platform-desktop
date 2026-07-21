@@ -106,6 +106,8 @@ let reconcilingLifecycle = false;
 let lifecycleReconciliationInFlight: Promise<LifecycleReconciliationResult> | null = null;
 let finishInFlight: { captureId: string; operation: Promise<AudioFinishResult> } | null = null;
 let pendingConsent: ConsentRecord | null = null;
+let startingRendererId: number | null = null;
+let startingLiveStream: GatewayLiveStream | null = null;
 const lifecycleOutbox = new RecordingLifecycleOutbox();
 const startOutbox = new RecordingStartOutbox();
 const unloadedRendererIds = new Set<number>();
@@ -623,6 +625,9 @@ function requireChunkPayload(payload: unknown): {
 export function registerAudioIpc(): void {
   ipcMain.on('audio:renderer-unloaded', (event): void => {
     unloadedRendererIds.add(event.sender.id);
+    if (startingRendererId === event.sender.id) {
+      startingLiveStream?.close();
+    }
     const recording = active;
     if (!recording || recording.rendererWebContentsId !== event.sender.id) {
       return;
@@ -691,7 +696,12 @@ export function registerAudioIpc(): void {
     },
   );
 
-  ipcMain.handle('audio:cancel-capture', async (): Promise<{ ok: boolean }> => {
+  ipcMain.handle('audio:cancel-capture', async (event): Promise<{ ok: boolean }> => {
+    const rendererId = rendererWebContentsId(event);
+    if (rendererId !== null && startingRendererId === rendererId) {
+      unloadedRendererIds.add(rendererId);
+      startingLiveStream?.close();
+    }
     if (!active) {
       clearCapturePermissionLease();
     }
@@ -711,14 +721,17 @@ export function registerAudioIpc(): void {
       if (starting || finishing || reconcilingLifecycle || lifecycleReconciliationInFlight) {
         throw new Error('recording session already active');
       }
+      const rendererId = rendererWebContentsId(event);
+      if (rendererId !== null) {
+        // Discard only an unload from an older document before this start
+        // operation. Any unload after this point remains observable.
+        unloadedRendererIds.delete(rendererId);
+      }
+      startingRendererId = rendererId;
       starting = true;
       try {
         await ensureNoActiveRecording();
         ensureLifecycleReadyForNewRecording();
-        const rendererId = rendererWebContentsId(event);
-        if (rendererId !== null) {
-          unloadedRendererIds.delete(rendererId);
-        }
         const consent = pendingConsent;
         if (!consent) {
           throw new Error('consent required before recording');
@@ -850,6 +863,7 @@ export function registerAudioIpc(): void {
               emitGatewayLiveTranscriptEvent(send, sessionId, normalizedMeetingId, liveEvent),
             onError: (streamError) => emitTranscriptError(send, sessionId, streamError),
           });
+          startingLiveStream = liveStream;
           try {
             await liveStream.start();
           } catch (error) {
@@ -862,8 +876,17 @@ export function registerAudioIpc(): void {
                 error: cleanupError instanceof Error ? cleanupError.message : 'unknown error',
               });
             }
+            if (rendererId !== null && unloadedRendererIds.delete(rendererId)) {
+              throw new Error('renderer unloaded while gateway live stream was starting');
+            }
             const reason = error instanceof Error ? error.message : String(error);
             throw new Error(`Yetkili Gateway canlı ses bağlantısı kurulamadı: ${reason}`);
+          }
+          if (rendererId !== null && unloadedRendererIds.delete(rendererId)) {
+            liveStream.close();
+            const ended = lifecycleOutbox.markEnded(pendingLifecycle, new Date().toISOString());
+            await syncPendingLifecycle(ended);
+            throw new Error('renderer unloaded while gateway live stream was starting');
           }
         }
         const transcriptSubscription = new TranscriptEventSubscription({
@@ -898,6 +921,8 @@ export function registerAudioIpc(): void {
         clearCapturePermissionLease();
         throw err;
       } finally {
+        startingLiveStream = null;
+        startingRendererId = null;
         starting = false;
       }
     },
