@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 
 import {
   initialAudioCapturePreflightState,
+  RECORDER_START_OPERATION_TIMEOUT_MS,
   type AudioCapturePreflightState,
   type Recorder,
   startRecording,
@@ -58,9 +59,6 @@ import {
 const MEETING_ID_MISSING_MESSAGE =
   'Geçerli meetingId bulunamadı; kayıt başlatılamaz. (meetingId kaynağı henüz belirlenmedi)';
 const RECORDER_MEETING_ID_UNSET_MARKER = 'RECORDER_MEETING_ID tanimli degil';
-// This guard must exceed capture.ts's bounded permission, worklet, loopback and
-// main-process startup budget so it cannot orphan a still-running IPC request.
-const RECORDER_START_TIMEOUT_MS = 150_000;
 const TRANSCRIPT_CLIENT_CLOCK_SKEW_MS = 30_000;
 const MAX_PENDING_LIVE_TRANSCRIPT_EVENTS = 50;
 const ACTIVE_AUDIO_RMS = 0.0008;
@@ -197,14 +195,19 @@ async function startRecordingWithTimeout(
     return await new Promise<Recorder>((resolve, reject) => {
       timeoutId = setTimeout(() => {
         didTimeout = true;
+        try {
+          void Promise.resolve(window.electronAPI?.audio.cancelCapture()).catch(() => undefined);
+        } catch {
+          // Cancellation is best-effort; the timeout must still release the UI.
+        }
         reject(
           new Error(
             `Recorder başlatma ${Math.round(
-              RECORDER_START_TIMEOUT_MS / 1000,
+              RECORDER_START_OPERATION_TIMEOUT_MS / 1000,
             )} sn içinde yanıt vermedi; izin/gateway zinciri kontrol edilmeli.`,
           ),
         );
-      }, RECORDER_START_TIMEOUT_MS);
+      }, RECORDER_START_OPERATION_TIMEOUT_MS);
 
       pendingRecorder.then(
         (rec) => {

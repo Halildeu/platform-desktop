@@ -553,6 +553,73 @@ describe('audio IPC recorder consent gate', () => {
     expect(mocks.clearCapturePermissionLease).toHaveBeenCalledTimes(1);
   });
 
+  it('fails closed when the consent access token cannot be refreshed', async () => {
+    mocks.getValidAccessToken.mockRejectedValueOnce(new Error('fetch failed'));
+    await acceptConsent();
+
+    await expect(startHandler()({}, meetingId, deviceId)).rejects.toThrow(
+      'AUDIO_GATEWAY_CONSENT_UNCONFIRMED: fetch failed',
+    );
+
+    expect(mocks.recordConsent).not.toHaveBeenCalled();
+    expect(mocks.senderStart).not.toHaveBeenCalled();
+    expect(mocks.syncRecordingLifecycle).not.toHaveBeenCalled();
+    expect(mocks.setRecordingActive).not.toHaveBeenCalledWith(true);
+    expect(mocks.clearCapturePermissionLease).toHaveBeenCalledTimes(1);
+  });
+
+  it('durably ends the gateway session when the lifecycle token refresh fails', async () => {
+    mocks.getValidAccessToken
+      .mockResolvedValueOnce('CONSENT-JWT')
+      .mockRejectedValueOnce(new Error('lifecycle token refresh failed'));
+    await acceptConsent();
+
+    await expect(startHandler()({}, meetingId, deviceId)).rejects.toThrow(
+      'lifecycle token refresh failed',
+    );
+
+    expect(mocks.recordConsent).toHaveBeenCalledTimes(1);
+    expect(mocks.senderStart).toHaveBeenCalledTimes(1);
+    expect(mocks.syncRecordingLifecycle).not.toHaveBeenCalled();
+    expect(mocks.senderFinish).toHaveBeenCalledTimes(1);
+    expect(mocks.pendingLifecycles).toEqual([
+      expect.objectContaining({
+        meetingId,
+        externalSessionId: 'SES-1',
+        endedAt: expect.any(String),
+        gatewayFinishPending: false,
+      }),
+    ]);
+    expect(mocks.setRecordingActive).not.toHaveBeenCalledWith(true);
+    expect(mocks.clearCapturePermissionLease).toHaveBeenCalledTimes(1);
+  });
+
+  it('durably ends the gateway session when meeting config loading fails', async () => {
+    mocks.loadMeetingConfig.mockImplementationOnce(() => {
+      throw new Error('MEETING_BASE_URL is required');
+    });
+    await acceptConsent();
+
+    await expect(startHandler()({}, meetingId, deviceId)).rejects.toThrow(
+      'MEETING_BASE_URL is required',
+    );
+
+    expect(mocks.recordConsent).toHaveBeenCalledTimes(1);
+    expect(mocks.senderStart).toHaveBeenCalledTimes(1);
+    expect(mocks.syncRecordingLifecycle).not.toHaveBeenCalled();
+    expect(mocks.senderFinish).toHaveBeenCalledTimes(1);
+    expect(mocks.pendingLifecycles).toEqual([
+      expect.objectContaining({
+        meetingId,
+        externalSessionId: 'SES-1',
+        endedAt: expect.any(String),
+        gatewayFinishPending: false,
+      }),
+    ]);
+    expect(mocks.setRecordingActive).not.toHaveBeenCalledWith(true);
+    expect(mocks.clearCapturePermissionLease).toHaveBeenCalledTimes(1);
+  });
+
   it('marks an ambiguous gateway session start as unconfirmed', async () => {
     mocks.senderStart.mockRejectedValueOnce(
       new mocks.MockAmbiguousGatewaySessionStartError('startSession timed out after 15000ms'),
@@ -1316,6 +1383,61 @@ describe('audio IPC recorder consent gate', () => {
     });
 
     await expect(start).rejects.toThrow('renderer unloaded while recording session was starting');
+    expect(mocks.finishSession).toHaveBeenCalledTimes(1);
+    expect(mocks.transcriptSubscriptionStart).not.toHaveBeenCalled();
+    expect(mocks.setRecordingActive).not.toHaveBeenCalledWith(true);
+    expect(mocks.pendingLifecycles).toEqual([]);
+  });
+
+  it('stops before consent mutation when its renderer unloads during token refresh', async () => {
+    let resolveToken: ((value: string) => void) | null = null;
+    mocks.getValidAccessToken.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveToken = resolve;
+        }),
+    );
+    await acceptConsent();
+
+    const start = startHandler()({ sender: { id: 37, send: vi.fn() } }, meetingId, deviceId);
+    await vi.waitFor(() => expect(mocks.getValidAccessToken).toHaveBeenCalledTimes(1));
+    rendererUnloadedListener()({ sender: { id: 37 } });
+    resolveToken?.('JWT');
+
+    await expect(start).rejects.toThrow('renderer unloaded while recording session was starting');
+    expect(mocks.recordConsent).not.toHaveBeenCalled();
+    expect(mocks.senderStart).not.toHaveBeenCalled();
+    expect(mocks.syncRecordingLifecycle).not.toHaveBeenCalled();
+  });
+
+  it('cancels and reconciles a gateway live stream when its renderer unloads during readiness', async () => {
+    let rejectLiveStart: ((error: Error) => void) | null = null;
+    mocks.loadRecorderRuntimeConfig.mockReturnValueOnce({
+      meetingId: '22222222-2222-4222-8222-222222222222',
+      deviceId: 'dev1',
+      ready: true,
+      reason: null,
+      liveSttStreamUrl: null,
+      liveSttStreamReason: null,
+      gatewayLiveStreamEnabled: true,
+    });
+    mocks.gatewayLiveStreamStart.mockImplementationOnce(
+      () =>
+        new Promise<void>((_resolve, reject) => {
+          rejectLiveStart = reject;
+        }),
+    );
+    mocks.gatewayLiveStreamClose.mockImplementation(() => {
+      rejectLiveStart?.(new Error('closed while waiting for readiness'));
+    });
+    await acceptConsent();
+
+    const start = startHandler()({ sender: { id: 27, send: vi.fn() } }, meetingId, deviceId);
+    await vi.waitFor(() => expect(mocks.gatewayLiveStreamStart).toHaveBeenCalledTimes(1));
+    rendererUnloadedListener()({ sender: { id: 27 } });
+
+    await expect(start).rejects.toThrow('renderer unloaded while gateway live stream was starting');
+    expect(mocks.gatewayLiveStreamClose).toHaveBeenCalled();
     expect(mocks.finishSession).toHaveBeenCalledTimes(1);
     expect(mocks.transcriptSubscriptionStart).not.toHaveBeenCalled();
     expect(mocks.setRecordingActive).not.toHaveBeenCalledWith(true);

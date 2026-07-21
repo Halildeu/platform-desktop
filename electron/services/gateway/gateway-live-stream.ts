@@ -12,7 +12,7 @@ const SESSION_ID_PATTERN = /^[A-Za-z0-9._:-]{1,128}$/;
 const OPEN_TIMEOUT_MS = 10_000;
 // Absolute ceiling on the wait, so a server that keeps emitting `loading`
 // forever still fails instead of hanging the recorder.
-const OPEN_MAX_WAIT_MS = 300_000;
+export const GATEWAY_LIVE_STREAM_OPEN_MAX_WAIT_MS = 300_000;
 const STOP_TIMEOUT_MS = 8_000;
 const STOP_QUIET_MS = 1_250;
 const RECONNECT_BASE_MS = 250;
@@ -270,6 +270,9 @@ export class GatewayLiveStream {
   private settleStop: ((result: GatewayLiveStreamStopResult) => void) | null = null;
   private stopTimeout: ReturnType<typeof setTimeout> | null = null;
   private stopQuiet: ReturnType<typeof setTimeout> | null = null;
+  private openSilenceTimer: ReturnType<typeof setTimeout> | null = null;
+  private openDeadlineTimer: ReturnType<typeof setTimeout> | null = null;
+  private rejectOpen: ((reason: string) => void) | null = null;
 
   constructor(options: GatewayLiveStreamOptions) {
     this.options = options;
@@ -346,6 +349,9 @@ export class GatewayLiveStream {
   close(): void {
     this.closed = true;
     this.stopping = true;
+    this.rejectOpen?.('gateway live stream closed while waiting for readiness');
+    this.rejectOpen = null;
+    this.clearOpenTimers();
     this.clearReconnectTimer();
     this.clearBackpressureTimer();
     this.clearStopTimers();
@@ -361,6 +367,9 @@ export class GatewayLiveStream {
     }
     const operation = (async (): Promise<void> => {
       const jwt = await this.options.getJwt();
+      if (this.closed || this.stopping) {
+        throw new Error('gateway live stream closed while waiting for token');
+      }
       if (!jwt) {
         throw new Error('gateway live stream token is unavailable');
       }
@@ -371,16 +380,18 @@ export class GatewayLiveStream {
         this.socket = socket;
         let settled = false;
         const openStartedAt = Date.now();
-        let timeout: ReturnType<typeof setTimeout>;
 
         const failOpen = (reason: string): void => {
           if (settled) {
             return;
           }
           settled = true;
+          this.rejectOpen = null;
+          this.clearOpenTimers();
           this.resetSocket(socket);
           reject(new Error(reason));
         };
+        this.rejectOpen = failOpen;
 
         // Restarted on every `loading` frame: the upstream is telling us it is
         // still working, so silence — not elapsed time — is what we time out
@@ -389,14 +400,21 @@ export class GatewayLiveStream {
         // connection, cancelling it meant it could never finish. Each retry
         // restarted from zero and no session could ever start.
         const armSilenceTimer = (): void => {
-          clearTimeout(timeout);
-          timeout = setTimeout(() => {
+          if (this.openSilenceTimer) {
+            clearTimeout(this.openSilenceTimer);
+          }
+          this.openSilenceTimer = setTimeout(() => {
             failOpen(
               `gateway live stream open timed out after ${OPEN_TIMEOUT_MS}ms without progress`,
             );
           }, OPEN_TIMEOUT_MS);
         };
         armSilenceTimer();
+        this.openDeadlineTimer = setTimeout(() => {
+          failOpen(
+            `gateway live stream did not become ready within ${GATEWAY_LIVE_STREAM_OPEN_MAX_WAIT_MS}ms`,
+          );
+        }, GATEWAY_LIVE_STREAM_OPEN_MAX_WAIT_MS);
 
         socket.onopen = () => {
           // The TCP/WebSocket handshake alone is not STT readiness. Audio stays
@@ -408,10 +426,7 @@ export class GatewayLiveStream {
           }
           const event = this.handleMessage(socket, message.data);
           if (!settled && event?.type === 'error') {
-            clearTimeout(timeout);
-            settled = true;
-            this.resetSocket(socket);
-            reject(new Error(`gateway live STT rejected startup: ${event.msg}`));
+            failOpen(`gateway live STT rejected startup: ${event.msg}`);
             return;
           }
           if (!settled && event?.type === 'loading') {
@@ -419,8 +434,10 @@ export class GatewayLiveStream {
             // another silence window rather than cancelling a load that only
             // this connection can drive to completion — but never past the
             // absolute ceiling.
-            if (Date.now() - openStartedAt >= OPEN_MAX_WAIT_MS) {
-              failOpen(`gateway live stream still loading after ${OPEN_MAX_WAIT_MS}ms; giving up`);
+            if (Date.now() - openStartedAt >= GATEWAY_LIVE_STREAM_OPEN_MAX_WAIT_MS) {
+              failOpen(
+                `gateway live stream still loading after ${GATEWAY_LIVE_STREAM_OPEN_MAX_WAIT_MS}ms; giving up`,
+              );
               return;
             }
             armSilenceTimer();
@@ -429,8 +446,15 @@ export class GatewayLiveStream {
           if (settled || event?.type !== 'ready') {
             return;
           }
-          clearTimeout(timeout);
+          if (Date.now() - openStartedAt >= GATEWAY_LIVE_STREAM_OPEN_MAX_WAIT_MS) {
+            failOpen(
+              `gateway live stream did not become ready within ${GATEWAY_LIVE_STREAM_OPEN_MAX_WAIT_MS}ms`,
+            );
+            return;
+          }
           settled = true;
+          this.rejectOpen = null;
+          this.clearOpenTimers();
           this.ready = true;
           this.reconnectAttempts = 0;
           resolve();
@@ -438,17 +462,13 @@ export class GatewayLiveStream {
         };
         socket.onerror = () => {
           if (!settled) {
-            clearTimeout(timeout);
-            settled = true;
-            reject(new Error('gateway live stream handshake failed'));
+            failOpen('gateway live stream handshake failed');
           }
           this.handleSocketFailure(socket, 'socket-error');
         };
         socket.onclose = () => {
           if (!settled) {
-            clearTimeout(timeout);
-            settled = true;
-            reject(new Error('gateway live stream closed during handshake'));
+            failOpen('gateway live stream closed during handshake');
           }
           this.handleSocketFailure(socket, 'socket-close');
         };
@@ -677,6 +697,17 @@ export class GatewayLiveStream {
     if (this.stopQuiet) {
       clearTimeout(this.stopQuiet);
       this.stopQuiet = null;
+    }
+  }
+
+  private clearOpenTimers(): void {
+    if (this.openSilenceTimer) {
+      clearTimeout(this.openSilenceTimer);
+      this.openSilenceTimer = null;
+    }
+    if (this.openDeadlineTimer) {
+      clearTimeout(this.openDeadlineTimer);
+      this.openDeadlineTimer = null;
     }
   }
 
