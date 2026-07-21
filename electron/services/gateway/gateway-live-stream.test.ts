@@ -406,4 +406,68 @@ describe('GatewayLiveStream', () => {
     await started;
     stream.close();
   });
+
+  it('waits through model loading instead of cancelling it at the silence budget', async () => {
+    // Faz 24 Bulgu 3-F: a cold STT model load takes minutes and is driven by
+    // this very connection. A flat 10s budget cancelled it mid-flight, so the
+    // load could never finish and no session could ever start. `loading`
+    // frames are progress and must restart the silence window.
+    vi.useFakeTimers();
+    const sockets: FakeSocket[] = [];
+    const stream = new GatewayLiveStream({
+      cfg: { baseUrl: 'https://testai.acik.com' },
+      sessionId: 'SES-loading',
+      getJwt: async () => 'JWT',
+      onEvent: vi.fn(),
+      onError: vi.fn(),
+      socketFactory: () => {
+        const socket = new FakeSocket();
+        sockets.push(socket);
+        return socket;
+      },
+    });
+
+    const started = stream.start();
+    await vi.waitFor(() => expect(sockets).toHaveLength(1));
+    sockets[0].open();
+
+    // Well past the 10s silence budget, but progress keeps arriving.
+    for (let elapsed = 0; elapsed < 40_000; elapsed += 8_000) {
+      sockets[0].message(JSON.stringify({ type: 'loading', stage: 'live_model' }));
+      await vi.advanceTimersByTimeAsync(8_000);
+    }
+
+    sockets[0].message(JSON.stringify({ type: 'ready' }));
+    await expect(started).resolves.toBeUndefined();
+    stream.close();
+  });
+
+  it('still fails when the upstream goes silent, even after loading progress', async () => {
+    // Patience is bounded by silence, not removed: once frames stop, the
+    // recorder must fail closed rather than hang.
+    vi.useFakeTimers();
+    const sockets: FakeSocket[] = [];
+    const stream = new GatewayLiveStream({
+      cfg: { baseUrl: 'https://testai.acik.com' },
+      sessionId: 'SES-silent',
+      getJwt: async () => 'JWT',
+      onEvent: vi.fn(),
+      onError: vi.fn(),
+      socketFactory: () => {
+        const socket = new FakeSocket();
+        sockets.push(socket);
+        return socket;
+      },
+    });
+
+    const started = stream.start();
+    const assertion = expect(started).rejects.toThrow(/without progress/);
+    await vi.waitFor(() => expect(sockets).toHaveLength(1));
+    sockets[0].open();
+    sockets[0].message(JSON.stringify({ type: 'loading', stage: 'live_model' }));
+
+    await vi.advanceTimersByTimeAsync(11_000);
+    await assertion;
+    stream.close();
+  });
 });
