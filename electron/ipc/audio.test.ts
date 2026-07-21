@@ -553,6 +553,47 @@ describe('audio IPC recorder consent gate', () => {
     expect(mocks.clearCapturePermissionLease).toHaveBeenCalledTimes(1);
   });
 
+  it('fails closed when the consent access token cannot be refreshed', async () => {
+    mocks.getValidAccessToken.mockRejectedValueOnce(new Error('fetch failed'));
+    await acceptConsent();
+
+    await expect(startHandler()({}, meetingId, deviceId)).rejects.toThrow(
+      'AUDIO_GATEWAY_CONSENT_UNCONFIRMED: fetch failed',
+    );
+
+    expect(mocks.recordConsent).not.toHaveBeenCalled();
+    expect(mocks.senderStart).not.toHaveBeenCalled();
+    expect(mocks.syncRecordingLifecycle).not.toHaveBeenCalled();
+    expect(mocks.setRecordingActive).not.toHaveBeenCalledWith(true);
+    expect(mocks.clearCapturePermissionLease).toHaveBeenCalledTimes(1);
+  });
+
+  it('durably ends the gateway session when the lifecycle token refresh fails', async () => {
+    mocks.getValidAccessToken
+      .mockResolvedValueOnce('CONSENT-JWT')
+      .mockRejectedValueOnce(new Error('lifecycle token refresh failed'));
+    await acceptConsent();
+
+    await expect(startHandler()({}, meetingId, deviceId)).rejects.toThrow(
+      'lifecycle token refresh failed',
+    );
+
+    expect(mocks.recordConsent).toHaveBeenCalledTimes(1);
+    expect(mocks.senderStart).toHaveBeenCalledTimes(1);
+    expect(mocks.syncRecordingLifecycle).not.toHaveBeenCalled();
+    expect(mocks.senderFinish).toHaveBeenCalledTimes(1);
+    expect(mocks.pendingLifecycles).toEqual([
+      expect.objectContaining({
+        meetingId,
+        externalSessionId: 'SES-1',
+        endedAt: expect.any(String),
+        gatewayFinishPending: false,
+      }),
+    ]);
+    expect(mocks.setRecordingActive).not.toHaveBeenCalledWith(true);
+    expect(mocks.clearCapturePermissionLease).toHaveBeenCalledTimes(1);
+  });
+
   it('marks an ambiguous gateway session start as unconfirmed', async () => {
     mocks.senderStart.mockRejectedValueOnce(
       new mocks.MockAmbiguousGatewaySessionStartError('startSession timed out after 15000ms'),

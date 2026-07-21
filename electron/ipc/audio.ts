@@ -752,7 +752,12 @@ export function registerAudioIpc(): void {
         const normalizedDeviceId = requireIdentifier(deviceId, 'deviceId');
         const captureId = randomUUID();
         const cfg = loadGatewayConfig();
-        const consentAccessToken = await getValidAccessToken();
+        let consentAccessToken: string;
+        try {
+          consentAccessToken = await getValidAccessToken();
+        } catch (error) {
+          throw unconfirmedGatewayMutation(CONSENT_UNCONFIRMED_CODE, error);
+        }
         assertStartupOwnerPresent(rendererId);
         try {
           await recordConsent(cfg, consentAccessToken, {
@@ -833,18 +838,7 @@ export function registerAudioIpc(): void {
           await syncPendingLifecycle(finished);
           throw new Error('renderer unloaded while recording session was starting');
         };
-        await cancelStartedLifecycle();
-        let transcriptSessionId: string;
-        const lifecycleAccessToken = await getValidAccessToken();
-        await cancelStartedLifecycle();
-        try {
-          const canonicalLifecycle = await syncRecordingLifecycle(
-            loadMeetingConfig(),
-            lifecycleAccessToken,
-            pendingLifecycle,
-          );
-          transcriptSessionId = canonicalLifecycle.sessionId;
-        } catch (error) {
+        const failStartedLifecycle = (error: unknown): never => {
           let pendingFinish = pendingLifecycle;
           try {
             pendingFinish = lifecycleOutbox.markEnded(pendingLifecycle, new Date().toISOString());
@@ -871,7 +865,18 @@ export function registerAudioIpc(): void {
             })
             .catch(() => undefined);
           throw error;
-        }
+        };
+        await cancelStartedLifecycle();
+        const lifecycleAccessToken = await getValidAccessToken().catch((error: unknown) =>
+          failStartedLifecycle(error),
+        );
+        await cancelStartedLifecycle();
+        const canonicalLifecycle = await syncRecordingLifecycle(
+          loadMeetingConfig(),
+          lifecycleAccessToken,
+          pendingLifecycle,
+        ).catch((error: unknown) => failStartedLifecycle(error));
+        const transcriptSessionId = canonicalLifecycle.sessionId;
         await cancelStartedLifecycle();
         const send = rendererSend(event);
         const runtimeConfig = loadRecorderRuntimeConfig();
