@@ -1,0 +1,211 @@
+name: Windows package signed release
+#
+# Signed Windows release track — port of the AG-018 pattern from
+# platform-agent (Linux osslsigncode + internal CA + sudoers-pinned
+# wrapper) to platform-desktop.
+#
+# STATUS: SKELETON. Runs ONLY when the code-signing secrets are
+# present so a PR that lacks them (e.g. this scaffold PR) does not fail
+# the workflow list. Enable is a two-step owner action:
+#   1. Populate the four `secrets.WINDOWS_SIGN_*` values in this repo's
+#      Actions secrets (see docs/release-signing.md § How to enable).
+#   2. Push a tag matching `v*` — the workflow flips on and produces
+#      a signed installer + portable + a `signing-manifest.json`
+#      alongside the existing unsigned `package-windows.yml` outputs.
+#
+# Design notes:
+#   - runs-on: ubuntu-latest — sign happens on Linux (osslsigncode) not
+#     a Windows runner. Cross-signs the .exe artifacts produced by the
+#     unsigned track (same Wine cross-build); consistent with AG-018.
+#   - Cert + key never touch the repo — pulled from Actions secrets
+#     into a runner-only tmp dir and cleared at job end. Zero-trust
+#     surface: the sudoers-pinned osslsigncode wrapper stays on the
+#     runner host (İ-S2 in the release-signing doc); this workflow is
+#     the layer above it.
+#   - Timestamp URL is configurable so we can rotate from a public TSA
+#     (freetsa.org for early stage) to Sectigo/DigiCert if the internal
+#     CA promotes to a public one (İ-S3).
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Git ref to sign (default: main HEAD)'
+        required: false
+        default: 'main'
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-package-signed-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  gate:
+    # A single gate job that decides whether the signed track can run.
+    # We fail-loud when a tag is pushed without the secrets so a release
+    # push does not silently produce an unsigned build; we skip cleanly
+    # for workflow_dispatch runs (allowed to noop when secrets missing
+    # so a developer can verify the wiring without owner cert access).
+    runs-on: ubuntu-latest
+    outputs:
+      enabled: ${{ steps.check.outputs.enabled }}
+    steps:
+      - id: check
+        env:
+          # `secrets.NAME != ''` is the canonical GitHub Actions guard for
+          # "is this secret populated". Cert / key / password / TSA URL
+          # all four are needed — a partial set is a config bug.
+          CERT_P12: ${{ secrets.WINDOWS_SIGN_CERT_P12 }}
+          CERT_PW: ${{ secrets.WINDOWS_SIGN_CERT_PASSWORD }}
+          TSA_URL: ${{ secrets.WINDOWS_SIGN_TIMESTAMP_URL }}
+        run: |
+          set -euo pipefail
+          if [ -n "$CERT_P12" ] && [ -n "$CERT_PW" ] && [ -n "$TSA_URL" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::Signed release track enabled — secrets present."
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            if [ "${{ github.event_name }}" = "push" ]; then
+              echo "::error::Tag push into the signed release track without"
+              echo "::error::WINDOWS_SIGN_CERT_P12 / CERT_PASSWORD / TIMESTAMP_URL"
+              echo "::error::secrets. See docs/release-signing.md § How to enable."
+              exit 1
+            fi
+            echo "::warning::Signed track secrets missing — dispatch skipped."
+            echo "::warning::See docs/release-signing.md § How to enable."
+          fi
+
+  build-signed:
+    needs: gate
+    if: needs.gate.outputs.enabled == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    env:
+      PACKAGE_DIR: release/windows-x64-signed-${{ github.sha }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ github.event.inputs.ref || github.ref }}
+          fetch-depth: 0
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install Windows cross-build + osslsigncode
+        run: |
+          set -euo pipefail
+          sudo dpkg --add-architecture i386
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends --yes \
+            wine wine32:i386 wine64 mono-devel nsis fakeroot \
+            osslsigncode
+          command -v osslsigncode
+          osslsigncode --version || true
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Read package version
+        run: echo "PACKAGE_VERSION=$(node -p "require('./package.json').version")" >> "$GITHUB_ENV"
+
+      - name: Build unsigned .exe (Wine cross-build)
+        env:
+          # electron-builder MUST NOT try to sign here — signing happens
+          # in the next step via osslsigncode against the produced .exe.
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+          WIN_CSC_LINK: ''
+          WIN_CSC_KEY_PASSWORD: ''
+        run: |
+          npm run build
+          npx electron-builder \
+            --win \
+            --x64 \
+            --publish never \
+            --config.win.forceCodeSigning=false \
+            --config.directories.output="$PACKAGE_DIR"
+
+      - name: Materialize signing cert (runner-only, tmp)
+        env:
+          CERT_P12_B64: ${{ secrets.WINDOWS_SIGN_CERT_P12 }}
+        run: |
+          set -euo pipefail
+          tmpdir=$(mktemp -d)
+          echo "SIGN_TMPDIR=$tmpdir" >> "$GITHUB_ENV"
+          printf '%s' "$CERT_P12_B64" | base64 -d > "$tmpdir/cert.p12"
+          # Sanity: the P12 must load. Never print the cert contents.
+          openssl pkcs12 -in "$tmpdir/cert.p12" \
+            -passin env:WINDOWS_SIGN_CERT_PASSWORD -noout -info
+        # WINDOWS_SIGN_CERT_PASSWORD injected into openssl via env
+        # ONLY on this step, then cleared at job end.
+
+      - name: Sign every produced .exe
+        env:
+          CERT_PW: ${{ secrets.WINDOWS_SIGN_CERT_PASSWORD }}
+          TSA_URL: ${{ secrets.WINDOWS_SIGN_TIMESTAMP_URL }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          exes=("$PACKAGE_DIR"/Meeting-Intelligence-*.exe)
+          test "${#exes[@]}" -ge 1 || { echo "no .exe to sign"; exit 1; }
+          out_manifest="$PACKAGE_DIR/signing-manifest.json"
+          echo "[" > "$out_manifest"
+          first=1
+          for f in "${exes[@]}"; do
+            signed="${f%.exe}.signed.exe"
+            osslsigncode sign \
+              -pkcs12 "$SIGN_TMPDIR/cert.p12" \
+              -pass "$CERT_PW" \
+              -h sha256 \
+              -t "$TSA_URL" \
+              -in "$f" \
+              -out "$signed"
+            mv "$signed" "$f"
+            # Verify the signature we just applied.
+            osslsigncode verify -in "$f" | tail -3
+            sha=$(sha256sum "$f" | cut -d' ' -f1)
+            [ $first -eq 1 ] || echo "," >> "$out_manifest"
+            first=0
+            printf '  {"file":"%s","sha256":"%s"}' \
+              "$(basename "$f")" "$sha" >> "$out_manifest"
+          done
+          printf "\n]\n" >> "$out_manifest"
+          cat "$out_manifest"
+
+      - name: Clear signing tmp
+        if: always()
+        run: |
+          if [ -n "${SIGN_TMPDIR:-}" ]; then
+            rm -rf "$SIGN_TMPDIR"
+          fi
+
+      - name: Emit build metadata
+        run: |
+          {
+            echo "version=$PACKAGE_VERSION"
+            echo "commit=$GITHUB_SHA"
+            echo "built_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo "signing=signed-authenticode"
+          } > "$PACKAGE_DIR/BUILD_METADATA.txt"
+          ls -la "$PACKAGE_DIR"
+
+      - name: Upload signed Windows package artifact
+        uses: actions/upload-artifact@50769540e7f4bd5e21e526ee35c689e35e0d6874 # v4
+        with:
+          name: windows-x64-signed-${{ env.PACKAGE_VERSION }}-${{ github.sha }}
+          path: |
+            ${{ env.PACKAGE_DIR }}/*.exe
+            ${{ env.PACKAGE_DIR }}/*.exe.blockmap
+            ${{ env.PACKAGE_DIR }}/latest.yml
+            ${{ env.PACKAGE_DIR }}/signing-manifest.json
+            ${{ env.PACKAGE_DIR }}/BUILD_METADATA.txt
+          retention-days: 30
+          if-no-files-found: error
