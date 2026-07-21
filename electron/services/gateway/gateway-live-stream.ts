@@ -6,7 +6,13 @@ export const GATEWAY_LIVE_AUDIO_FRAME_VERSION = 1;
 export const GATEWAY_LIVE_AUDIO_FRAME_HEADER_BYTES = 19;
 const GATEWAY_LIVE_AUDIO_FRAME_MAX_PAYLOAD_BYTES = 65_535;
 const SESSION_ID_PATTERN = /^[A-Za-z0-9._:-]{1,128}$/;
+// Budget for *silence* while waiting for `ready`, not for the whole wait. The
+// upstream reports progress with `loading` frames, and each one restarts this
+// timer (see the open promise below).
 const OPEN_TIMEOUT_MS = 10_000;
+// Absolute ceiling on the wait, so a server that keeps emitting `loading`
+// forever still fails instead of hanging the recorder.
+const OPEN_MAX_WAIT_MS = 300_000;
 const STOP_TIMEOUT_MS = 8_000;
 const STOP_QUIET_MS = 1_250;
 const RECONNECT_BASE_MS = 250;
@@ -364,14 +370,33 @@ export class GatewayLiveStream {
         const generation = ++this.socketGeneration;
         this.socket = socket;
         let settled = false;
-        const timeout = setTimeout(() => {
+        const openStartedAt = Date.now();
+        let timeout: ReturnType<typeof setTimeout>;
+
+        const failOpen = (reason: string): void => {
           if (settled) {
             return;
           }
           settled = true;
           this.resetSocket(socket);
-          reject(new Error(`gateway live stream open timed out after ${OPEN_TIMEOUT_MS}ms`));
-        }, OPEN_TIMEOUT_MS);
+          reject(new Error(reason));
+        };
+
+        // Restarted on every `loading` frame: the upstream is telling us it is
+        // still working, so silence — not elapsed time — is what we time out
+        // on. A cold STT model load takes minutes; a flat 10s budget cancelled
+        // it mid-flight, and because the load is triggered by this very
+        // connection, cancelling it meant it could never finish. Each retry
+        // restarted from zero and no session could ever start.
+        const armSilenceTimer = (): void => {
+          clearTimeout(timeout);
+          timeout = setTimeout(() => {
+            failOpen(
+              `gateway live stream open timed out after ${OPEN_TIMEOUT_MS}ms without progress`,
+            );
+          }, OPEN_TIMEOUT_MS);
+        };
+        armSilenceTimer();
 
         socket.onopen = () => {
           // The TCP/WebSocket handshake alone is not STT readiness. Audio stays
@@ -387,6 +412,20 @@ export class GatewayLiveStream {
             settled = true;
             this.resetSocket(socket);
             reject(new Error(`gateway live STT rejected startup: ${event.msg}`));
+            return;
+          }
+          if (!settled && event?.type === 'loading') {
+            // Progress, not readiness: the model is still loading. Give it
+            // another silence window rather than cancelling a load that only
+            // this connection can drive to completion — but never past the
+            // absolute ceiling.
+            if (Date.now() - openStartedAt >= OPEN_MAX_WAIT_MS) {
+              failOpen(
+                `gateway live stream still loading after ${OPEN_MAX_WAIT_MS}ms; giving up`,
+              );
+              return;
+            }
+            armSilenceTimer();
             return;
           }
           if (settled || event?.type !== 'ready') {
