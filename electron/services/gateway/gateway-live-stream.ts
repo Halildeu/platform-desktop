@@ -23,6 +23,8 @@ const MAX_PENDING_AUDIO_BYTES = 2 * 1024 * 1024;
 const SOCKET_BUFFER_HIGH_WATER_BYTES = 512 * 1024;
 const SOCKET_BUFFER_LOW_WATER_BYTES = 128 * 1024;
 const BACKPRESSURE_RETRY_MS = 25;
+const ACK_SILENCE_TIMEOUT_MS = 6_000;
+const MAX_ACK_TIMEOUT_RECOVERIES = 3;
 
 function encodeGatewayLivePcm16Frame(input: {
   chunkSeq: number;
@@ -112,6 +114,7 @@ export interface GatewayLiveStreamStopResult {
     | 'timeout'
     | 'socket-close'
     | 'socket-error'
+    | 'ack-timeout'
     | 'buffer-overflow'
     | 'unavailable';
   acknowledged: boolean;
@@ -265,7 +268,9 @@ export class GatewayLiveStream {
   private readonly pendingFrames = new Map<number, PendingAudioFrame>();
   private backpressureTimer: ReturnType<typeof setTimeout> | null = null;
   private backpressured = false;
-  private liveDeliveryDegraded = false;
+  private ackSilenceTimer: ReturnType<typeof setTimeout> | null = null;
+  private ackTimeoutRecoveries = 0;
+  private liveDeliveryDegradedReason: 'ack-timeout' | 'buffer-overflow' | null = null;
   private stopPromise: Promise<GatewayLiveStreamStopResult> | null = null;
   private settleStop: ((result: GatewayLiveStreamStopResult) => void) | null = null;
   private stopTimeout: ReturnType<typeof setTimeout> | null = null;
@@ -326,8 +331,12 @@ export class GatewayLiveStream {
       this.finishStop({ state: 'drained', reason: 'no-audio', acknowledged: false });
       return this.stopPromise;
     }
-    if (this.liveDeliveryDegraded) {
-      this.finishStop({ state: 'degraded', reason: 'buffer-overflow', acknowledged: false });
+    if (this.liveDeliveryDegradedReason) {
+      this.finishStop({
+        state: 'degraded',
+        reason: this.liveDeliveryDegradedReason,
+        acknowledged: false,
+      });
       return this.stopPromise;
     }
     if (!this.ready || !this.socket) {
@@ -354,6 +363,7 @@ export class GatewayLiveStream {
     this.clearOpenTimers();
     this.clearReconnectTimer();
     this.clearBackpressureTimer();
+    this.clearAckSilenceTimer();
     this.clearStopTimers();
     this.resetSocket();
     if (this.settleStop) {
@@ -508,8 +518,8 @@ export class GatewayLiveStream {
     }
     if (this.stopping && event.type === 'drained') {
       this.finishStop(
-        this.liveDeliveryDegraded
-          ? { state: 'degraded', reason: 'buffer-overflow', acknowledged: true }
+        this.liveDeliveryDegradedReason
+          ? { state: 'degraded', reason: this.liveDeliveryDegradedReason, acknowledged: true }
           : { state: 'drained', reason: 'drained', acknowledged: true },
       );
     }
@@ -536,7 +546,7 @@ export class GatewayLiveStream {
   }
 
   private enqueueFrame(chunkSeq: number, encoded: ArrayBuffer): boolean {
-    if (this.liveDeliveryDegraded) {
+    if (this.liveDeliveryDegradedReason) {
       return false;
     }
     const byteLength = encoded.byteLength;
@@ -544,8 +554,8 @@ export class GatewayLiveStream {
       this.pendingFrames.size >= MAX_PENDING_FRAME_COUNT ||
       this.pendingAudioBytes + byteLength > MAX_PENDING_AUDIO_BYTES
     ) {
-      if (!this.liveDeliveryDegraded) {
-        this.liveDeliveryDegraded = true;
+      if (!this.liveDeliveryDegradedReason) {
+        this.liveDeliveryDegradedReason = 'buffer-overflow';
         this.options.onError(
           new Error(
             'gateway live replay buffer is full; canonical REST recording continues without this live frame',
@@ -569,7 +579,12 @@ export class GatewayLiveStream {
     }
     this.pendingFrames.delete(chunkSeq);
     this.pendingAudioBytes -= pending.byteLength;
+    this.ackTimeoutRecoveries = 0;
+    this.clearAckSilenceTimer();
     this.flushPendingFrames();
+    if (this.pendingFrames.size > 0) {
+      this.armAckSilenceTimer(this.socketGeneration);
+    }
   }
 
   private flushPendingFrames(expectedGeneration = this.socketGeneration): boolean {
@@ -605,6 +620,7 @@ export class GatewayLiveStream {
         return sent;
       }
       pending.sentGeneration = expectedGeneration;
+      this.armAckSilenceTimer(expectedGeneration);
       sent = true;
     }
     return sent;
@@ -637,7 +653,14 @@ export class GatewayLiveStream {
   }
 
   private scheduleReconnect(): void {
-    if (this.closed || this.stopping || this.ready || this.connectInFlight || this.reconnectTimer) {
+    if (
+      this.closed ||
+      this.stopping ||
+      this.liveDeliveryDegradedReason ||
+      this.ready ||
+      this.connectInFlight ||
+      this.reconnectTimer
+    ) {
       return;
     }
     if (this.reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
@@ -675,6 +698,7 @@ export class GatewayLiveStream {
     this.ready = false;
     this.clearReconnectTimer();
     this.clearBackpressureTimer();
+    this.clearAckSilenceTimer();
     this.clearStopTimers();
     this.resetSocket();
     this.pendingFrames.clear();
@@ -718,6 +742,63 @@ export class GatewayLiveStream {
     }
   }
 
+  private armAckSilenceTimer(generation: number): void {
+    if (
+      this.ackSilenceTimer ||
+      this.pendingFrames.size === 0 ||
+      this.closed ||
+      this.stopping ||
+      this.liveDeliveryDegradedReason
+    ) {
+      return;
+    }
+    const socket = this.socket;
+    if (!socket || !this.ready || generation !== this.socketGeneration) {
+      return;
+    }
+    this.ackSilenceTimer = setTimeout(() => {
+      this.ackSilenceTimer = null;
+      if (
+        this.socket !== socket ||
+        generation !== this.socketGeneration ||
+        this.pendingFrames.size === 0 ||
+        this.closed ||
+        this.stopping ||
+        this.liveDeliveryDegradedReason
+      ) {
+        return;
+      }
+
+      this.ackTimeoutRecoveries += 1;
+      if (this.ackTimeoutRecoveries >= MAX_ACK_TIMEOUT_RECOVERIES) {
+        this.liveDeliveryDegradedReason = 'ack-timeout';
+        this.options.onError(
+          new Error(
+            `gateway live audio acknowledgements timed out after ${MAX_ACK_TIMEOUT_RECOVERIES} recovery attempts; canonical REST recording continues`,
+          ),
+        );
+        this.pendingFrames.clear();
+        this.pendingAudioBytes = 0;
+        this.resetSocket(socket);
+        return;
+      }
+
+      console.warn('Gateway live audio acknowledgement timed out; reconnecting bounded replay', {
+        pendingFrameCount: this.pendingFrames.size,
+        recoveryAttempt: this.ackTimeoutRecoveries,
+      });
+      this.resetSocket(socket);
+      this.scheduleReconnect();
+    }, ACK_SILENCE_TIMEOUT_MS);
+  }
+
+  private clearAckSilenceTimer(): void {
+    if (this.ackSilenceTimer) {
+      clearTimeout(this.ackSilenceTimer);
+      this.ackSilenceTimer = null;
+    }
+  }
+
   private resetSocket(expected?: GatewaySocket): void {
     const socket = this.socket;
     if (expected && socket !== expected) {
@@ -727,6 +808,7 @@ export class GatewayLiveStream {
     this.ready = false;
     this.backpressured = false;
     this.clearBackpressureTimer();
+    this.clearAckSilenceTimer();
     if (socket) {
       socket.onopen = null;
       socket.onmessage = null;
