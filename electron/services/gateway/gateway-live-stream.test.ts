@@ -244,6 +244,133 @@ describe('GatewayLiveStream', () => {
     stream.close();
   });
 
+  it('reconnects and replays bounded pending frames when audio acknowledgements go silent', async () => {
+    vi.useFakeTimers();
+    const sockets: FakeSocket[] = [];
+    const onError = vi.fn();
+    const stream = new GatewayLiveStream({
+      cfg: { baseUrl: 'https://testai.acik.com' },
+      sessionId: 'SES-1',
+      getJwt: async () => 'JWT',
+      onEvent: vi.fn(),
+      onError,
+      socketFactory: () => {
+        const socket = new FakeSocket();
+        sockets.push(socket);
+        return socket;
+      },
+    });
+
+    const started = stream.start();
+    await vi.runAllTicks();
+    sockets[0].open();
+    sockets[0].message(JSON.stringify({ type: 'ready' }));
+    await started;
+    stream.sendAfterRestAccepted(new Uint8Array([0, 0]), 0, 1);
+    stream.sendAfterRestAccepted(new Uint8Array([0, 0]), 1, 2);
+
+    await vi.advanceTimersByTimeAsync(6_250);
+    await vi.runAllTicks();
+    expect(sockets).toHaveLength(2);
+    sockets[1].open();
+    sockets[1].message(JSON.stringify({ type: 'ready' }));
+    await vi.runAllTicks();
+
+    const replayedSequences = sockets[1].sent.map((frame) =>
+      Number(new DataView(frame as ArrayBuffer).getBigInt64(1, false)),
+    );
+    expect(replayedSequences).toEqual([0, 1]);
+    sockets[1].message(JSON.stringify({ type: 'audio_ack', chunk_seq: 0 }));
+    sockets[1].message(JSON.stringify({ type: 'audio_ack', chunk_seq: 1 }));
+
+    await vi.advanceTimersByTimeAsync(6_250);
+    expect(sockets).toHaveLength(2);
+    expect(onError).not.toHaveBeenCalled();
+    stream.close();
+  });
+
+  it('degrades without an empty reconnect after repeated acknowledgement timeouts', async () => {
+    vi.useFakeTimers();
+    const sockets: FakeSocket[] = [];
+    const onError = vi.fn();
+    const stream = new GatewayLiveStream({
+      cfg: { baseUrl: 'https://testai.acik.com' },
+      sessionId: 'SES-1',
+      getJwt: async () => 'JWT',
+      onEvent: vi.fn(),
+      onError,
+      socketFactory: () => {
+        const socket = new FakeSocket();
+        sockets.push(socket);
+        return socket;
+      },
+    });
+
+    const started = stream.start();
+    await vi.runAllTicks();
+    sockets[0].open();
+    sockets[0].message(JSON.stringify({ type: 'ready' }));
+    await started;
+    stream.sendAfterRestAccepted(new Uint8Array([0, 0]), 0, 1);
+
+    for (let recovery = 1; recovery <= 2; recovery += 1) {
+      await vi.advanceTimersByTimeAsync(6_250);
+      await vi.runAllTicks();
+      expect(sockets).toHaveLength(recovery + 1);
+      sockets[recovery].open();
+      sockets[recovery].message(JSON.stringify({ type: 'ready' }));
+      await vi.runAllTicks();
+    }
+
+    await vi.advanceTimersByTimeAsync(6_000);
+    expect(onError).toHaveBeenCalledWith(
+      expect.objectContaining({ message: expect.stringContaining('acknowledgements timed out') }),
+    );
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(sockets).toHaveLength(3);
+    await expect(stream.stop()).resolves.toEqual({
+      state: 'degraded',
+      reason: 'ack-timeout',
+      acknowledged: false,
+    });
+  });
+
+  it('keeps a long acknowledged recording below the replay bounds', async () => {
+    vi.useFakeTimers();
+    const sockets: FakeSocket[] = [];
+    const onError = vi.fn();
+    const stream = new GatewayLiveStream({
+      cfg: { baseUrl: 'https://testai.acik.com' },
+      sessionId: 'SES-1',
+      getJwt: async () => 'JWT',
+      onEvent: vi.fn(),
+      onError,
+      socketFactory: () => {
+        const socket = new FakeSocket();
+        sockets.push(socket);
+        return socket;
+      },
+    });
+
+    const started = stream.start();
+    await vi.runAllTicks();
+    sockets[0].open();
+    sockets[0].message(JSON.stringify({ type: 'ready' }));
+    await started;
+
+    for (let sequence = 0; sequence < 128; sequence += 1) {
+      expect(stream.sendAfterRestAccepted(new Uint8Array([0, 0]), sequence, sequence + 1)).toBe(
+        true,
+      );
+      sockets[0].message(JSON.stringify({ type: 'audio_ack', chunk_seq: sequence }));
+      await vi.advanceTimersByTimeAsync(1_000);
+    }
+
+    expect(sockets).toHaveLength(1);
+    expect(onError).not.toHaveBeenCalled();
+    stream.close();
+  });
+
   it('fails live delivery visibly when the bounded replay buffer is exhausted', async () => {
     const sockets: FakeSocket[] = [];
     const onError = vi.fn();

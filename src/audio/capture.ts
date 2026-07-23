@@ -144,6 +144,7 @@ export interface RecorderStopResult {
       | 'timeout'
       | 'socket-close'
       | 'socket-error'
+      | 'ack-timeout'
       | 'buffer-overflow'
       | 'unavailable';
     acknowledged: boolean;
