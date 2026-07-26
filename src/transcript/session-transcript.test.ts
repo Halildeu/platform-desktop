@@ -17,6 +17,7 @@ import {
   transcriptStatusLabel,
   upsertTranscriptSegment,
   collapseAssembledFragments,
+  type TranscriptSegment,
 } from './session-transcript';
 
 describe('session transcript state', () => {
