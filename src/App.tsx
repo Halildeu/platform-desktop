@@ -54,6 +54,7 @@ import {
   startTranscriptSession,
   type TranscriptSegmentStatus,
   upsertTranscriptSegment,
+  collapseAssembledFragments,
 } from './transcript/session-transcript';
 
 const MEETING_ID_MISSING_MESSAGE =
@@ -348,6 +349,12 @@ function transcriptStatusFromGateway(status: string): TranscriptSegmentStatus {
       return 'revised';
     case 'STABILIZING':
       return 'stabilizing';
+    // Gateway cumle birlestiricisinin (backend PR #918) okunabilir satiri.
+    // Bu case eklenmeden once UTTERANCE default'a dusup 'draft' sayiliyordu ve
+    // ayri bir eventId tasidigi icin AYRI bir segment yaratiyordu — yani ayni
+    // metin hem parcali hem butun goruntuleniyordu.
+    case 'UTTERANCE':
+      return 'utterance';
     default:
       return 'draft';
   }
@@ -1077,7 +1084,13 @@ function App() {
         ) {
           return current;
         }
-        return upsertTranscriptSegment(current, {
+        // UTTERANCE ise once ondan olusturulan ham parcalari kaldir; aksi
+        // halde birlesmis cumle parcalarin YANINA eklenir ve tekrar olusur.
+        const base =
+          transcriptStatusFromGateway(event.status) === 'utterance'
+            ? collapseAssembledFragments(current, event.sourceEventIds)
+            : current;
+        return upsertTranscriptSegment(base, {
           id: transcriptSegmentIdFromGateway(event),
           speakerLabel: 'Konuşmacı',
           startedAtMs: transcriptTimelineStartedAtMs(event),
