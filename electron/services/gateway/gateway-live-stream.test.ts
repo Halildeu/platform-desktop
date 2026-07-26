@@ -4,6 +4,7 @@ import {
   GATEWAY_LIVE_AUDIO_FRAME_HEADER_BYTES,
   GATEWAY_LIVE_STREAM_OPEN_MAX_WAIT_MS,
   GatewayLiveStream,
+  type GatewayLiveDeliverySummary,
 } from './gateway-live-stream';
 
 class FakeSocket {
@@ -40,6 +41,29 @@ class FakeSocket {
 
 async function waitForSocket(sockets: FakeSocket[], count: number): Promise<void> {
   await vi.waitFor(() => expect(sockets).toHaveLength(count));
+}
+
+/** Chunk sequence carried in the v1 binary frame header. */
+function frameSeq(data: string | ArrayBuffer | ArrayBufferView): number {
+  return Number(new DataView(data as ArrayBuffer).getBigInt64(1, false));
+}
+
+function liveDelivery(
+  overrides: Partial<GatewayLiveDeliverySummary> = {},
+): GatewayLiveDeliverySummary {
+  return {
+    scope: 'live-preview',
+    coverage: 'complete',
+    recovered: false,
+    recoveryEpisodeCount: 0,
+    recoveredEpisodeCount: 0,
+    droppedFrameCount: 0,
+    droppedAudioBytes: 0,
+    firstDroppedSequence: null,
+    lastDroppedSequence: null,
+    causes: [],
+    ...overrides,
+  };
 }
 
 afterEach(() => {
@@ -128,6 +152,7 @@ describe('GatewayLiveStream', () => {
       state: 'drained',
       reason: 'drained',
       acknowledged: true,
+      liveDelivery: liveDelivery(),
     });
   });
 
@@ -162,6 +187,7 @@ describe('GatewayLiveStream', () => {
       state: 'degraded',
       reason: 'timeout',
       acknowledged: false,
+      liveDelivery: liveDelivery(),
     });
   });
 
@@ -192,7 +218,7 @@ describe('GatewayLiveStream', () => {
     const staleClose = sockets[0].onclose;
     sockets[0].failClose();
     expect(stream.sendAfterRestAccepted(new Uint8Array([0, 0]), 1, 2)).toBe(false);
-    await vi.advanceTimersByTimeAsync(250);
+    await vi.advanceTimersByTimeAsync(1_000);
     await vi.runAllTicks();
     expect(sockets).toHaveLength(2);
     sockets[1].open();
@@ -269,7 +295,7 @@ describe('GatewayLiveStream', () => {
     stream.sendAfterRestAccepted(new Uint8Array([0, 0]), 0, 1);
     stream.sendAfterRestAccepted(new Uint8Array([0, 0]), 1, 2);
 
-    await vi.advanceTimersByTimeAsync(6_250);
+    await vi.advanceTimersByTimeAsync(7_000);
     await vi.runAllTicks();
     expect(sockets).toHaveLength(2);
     sockets[1].open();
@@ -289,8 +315,9 @@ describe('GatewayLiveStream', () => {
     stream.close();
   });
 
-  it('degrades without an empty reconnect after repeated acknowledgement timeouts', async () => {
+  it('opens a cooldown circuit after repeated acknowledgement timeouts, then recovers', async () => {
     vi.useFakeTimers();
+    vi.spyOn(Math, 'random').mockReturnValue(0.5);
     const sockets: FakeSocket[] = [];
     const onError = vi.fn();
     const stream = new GatewayLiveStream({
@@ -313,8 +340,10 @@ describe('GatewayLiveStream', () => {
     await started;
     stream.sendAfterRestAccepted(new Uint8Array([0, 0]), 0, 1);
 
-    for (let recovery = 1; recovery <= 2; recovery += 1) {
-      await vi.advanceTimersByTimeAsync(6_250);
+    // Three immediate attempts: each socket completes its handshake and then
+    // goes silent, which is the failure `ready` alone cannot detect.
+    for (let recovery = 1; recovery <= 3; recovery += 1) {
+      await vi.advanceTimersByTimeAsync(9_000);
       await vi.runAllTicks();
       expect(sockets).toHaveLength(recovery + 1);
       sockets[recovery].open();
@@ -322,17 +351,39 @@ describe('GatewayLiveStream', () => {
       await vi.runAllTicks();
     }
 
-    await vi.advanceTimersByTimeAsync(6_000);
+    // Fourth silence exhausts the immediate budget: the circuit opens.
+    await vi.advanceTimersByTimeAsync(9_000);
     expect(onError).toHaveBeenCalledWith(
-      expect.objectContaining({ message: expect.stringContaining('acknowledgements timed out') }),
+      expect.objectContaining({ message: expect.stringContaining('live delivery paused') }),
     );
-    await vi.advanceTimersByTimeAsync(30_000);
-    expect(sockets).toHaveLength(3);
-    await expect(stream.stop()).resolves.toEqual({
-      state: 'degraded',
-      reason: 'ack-timeout',
-      acknowledged: false,
-    });
+
+    // No storm while the circuit is open, however much audio arrives.
+    for (let sequence = 1; sequence <= 100; sequence += 1) {
+      stream.sendAfterRestAccepted(new Uint8Array([0, 0]), sequence, sequence + 1);
+    }
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(sockets).toHaveLength(4);
+
+    // Cooldown expires; the next frame buys exactly one half-open probe.
+    await vi.advanceTimersByTimeAsync(15_000);
+    stream.sendAfterRestAccepted(new Uint8Array([0, 0]), 101, 102);
+    await vi.advanceTimersByTimeAsync(2_500);
+    await vi.runAllTicks();
+    expect(sockets).toHaveLength(5);
+
+    sockets[4].open();
+    sockets[4].message(JSON.stringify({ type: 'ready' }));
+    await vi.runAllTicks();
+    const replayed = sockets[4].sent.filter((entry) => entry instanceof ArrayBuffer);
+    expect(replayed.length).toBeGreaterThan(0);
+    sockets[4].message(JSON.stringify({ type: 'audio_ack', chunk_seq: frameSeq(replayed[0]) }));
+    await vi.runAllTicks();
+
+    // Recovered: live delivery is open again, not dead for the session.
+    const before = sockets[4].sent.length;
+    expect(stream.sendAfterRestAccepted(new Uint8Array([0, 0]), 102, 103)).toBe(true);
+    expect(sockets[4].sent.length).toBeGreaterThan(before);
+    stream.close();
   });
 
   it('keeps a long acknowledged recording below the replay bounds', async () => {
@@ -371,7 +422,239 @@ describe('GatewayLiveStream', () => {
     stream.close();
   });
 
-  it('fails live delivery visibly when the bounded replay buffer is exhausted', async () => {
+  // The headline invariant of #87: a full replay buffer must cost the OLDEST
+  // frames, never the lane itself. Before this, one overflow latched live
+  // delivery off for the rest of the meeting — the user's "after a while it
+  // stops transcribing" report.
+  it('recovers live delivery after a replay-buffer overflow instead of dying', async () => {
+    vi.useFakeTimers();
+    vi.spyOn(Math, 'random').mockReturnValue(0.5);
+    const sockets: FakeSocket[] = [];
+    const stream = new GatewayLiveStream({
+      cfg: { baseUrl: 'https://testai.acik.com' },
+      sessionId: 'SES-1',
+      getJwt: async () => 'JWT',
+      onEvent: vi.fn(),
+      onError: vi.fn(),
+      socketFactory: () => {
+        const socket = new FakeSocket();
+        sockets.push(socket);
+        return socket;
+      },
+    });
+
+    const started = stream.start();
+    await vi.runAllTicks();
+    sockets[0].open();
+    sockets[0].message(JSON.stringify({ type: 'ready' }));
+    await started;
+
+    for (let sequence = 0; sequence < 32; sequence += 1) {
+      expect(stream.sendAfterRestAccepted(new Uint8Array([0, 0]), sequence, sequence + 1)).toBe(
+        true,
+      );
+    }
+    // Frame 32 overflows the 32-frame window.
+    stream.sendAfterRestAccepted(new Uint8Array([0, 0]), 32, 33);
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    await vi.runAllTicks();
+    expect(sockets).toHaveLength(2);
+
+    sockets[1].open();
+    sockets[1].message(JSON.stringify({ type: 'ready' }));
+    await vi.runAllTicks();
+
+    // Recency wins: the replayed window starts past the evicted frame 0 and
+    // still carries the newest frame.
+    const replayed = sockets[1].sent.filter((entry) => entry instanceof ArrayBuffer).map(frameSeq);
+    expect(replayed[0]).toBe(1);
+    expect(replayed).toContain(32);
+    expect(replayed.length).toBeLessThanOrEqual(32);
+
+    sockets[1].message(JSON.stringify({ type: 'audio_ack', chunk_seq: 1 }));
+    await vi.runAllTicks();
+
+    // The lane is alive again.
+    const before = sockets[1].sent.length;
+    expect(stream.sendAfterRestAccepted(new Uint8Array([0, 0]), 33, 34)).toBe(true);
+    expect(sockets[1].sent.length).toBeGreaterThan(before);
+    stream.close();
+  });
+
+  it('announces a replay gap only when the gateway advertises the capability', async () => {
+    vi.useFakeTimers();
+    vi.spyOn(Math, 'random').mockReturnValue(0.5);
+    const sockets: FakeSocket[] = [];
+    const stream = new GatewayLiveStream({
+      cfg: { baseUrl: 'https://testai.acik.com' },
+      sessionId: 'SES-1',
+      getJwt: async () => 'JWT',
+      onEvent: vi.fn(),
+      onError: vi.fn(),
+      socketFactory: () => {
+        const socket = new FakeSocket();
+        sockets.push(socket);
+        return socket;
+      },
+    });
+
+    const started = stream.start();
+    await vi.runAllTicks();
+    sockets[0].open();
+    sockets[0].message(JSON.stringify({ type: 'ready' }));
+    await started;
+
+    for (let sequence = 0; sequence <= 32; sequence += 1) {
+      stream.sendAfterRestAccepted(new Uint8Array([0, 0]), sequence, sequence + 1);
+    }
+    await vi.advanceTimersByTimeAsync(1_000);
+    await vi.runAllTicks();
+
+    // Peer without the capability: replay only, no invented control frame.
+    sockets[1].open();
+    sockets[1].message(JSON.stringify({ type: 'ready' }));
+    await vi.runAllTicks();
+    expect(sockets[1].sent.some((entry) => typeof entry === 'string')).toBe(false);
+
+    sockets[1].failClose();
+    await vi.advanceTimersByTimeAsync(2_000);
+    await vi.runAllTicks();
+
+    // Peer that advertises it: the gap is declared before any replayed audio,
+    // so the decoder closes the previous utterance instead of splicing.
+    sockets[2].open();
+    sockets[2].message(JSON.stringify({ type: 'ready', capabilities: ['audio_discontinuity_v1'] }));
+    await vi.runAllTicks();
+    const firstSent = sockets[2].sent[0];
+    expect(typeof firstSent).toBe('string');
+    expect(JSON.parse(firstSent as string)).toEqual({
+      type: 'audio_discontinuity',
+      version: 1,
+      dropped_from_chunk_seq: 0,
+      dropped_to_chunk_seq: 0,
+      next_chunk_seq: 1,
+    });
+    stream.close();
+  });
+
+  it('reports a recovered overflow as a drained stop with gapped live coverage', async () => {
+    vi.useFakeTimers();
+    vi.spyOn(Math, 'random').mockReturnValue(0.5);
+    const sockets: FakeSocket[] = [];
+    const stream = new GatewayLiveStream({
+      cfg: { baseUrl: 'https://testai.acik.com' },
+      sessionId: 'SES-1',
+      getJwt: async () => 'JWT',
+      onEvent: vi.fn(),
+      onError: vi.fn(),
+      socketFactory: () => {
+        const socket = new FakeSocket();
+        sockets.push(socket);
+        return socket;
+      },
+    });
+
+    const started = stream.start();
+    await vi.runAllTicks();
+    sockets[0].open();
+    sockets[0].message(JSON.stringify({ type: 'ready', capabilities: ['eof'] }));
+    await started;
+
+    for (let sequence = 0; sequence <= 32; sequence += 1) {
+      stream.sendAfterRestAccepted(new Uint8Array([0, 0]), sequence, sequence + 1);
+    }
+    await vi.advanceTimersByTimeAsync(1_000);
+    await vi.runAllTicks();
+    sockets[1].open();
+    sockets[1].message(JSON.stringify({ type: 'ready', capabilities: ['eof'] }));
+    await vi.runAllTicks();
+    for (let sequence = 1; sequence <= 32; sequence += 1) {
+      sockets[1].message(JSON.stringify({ type: 'audio_ack', chunk_seq: sequence }));
+    }
+    await vi.runAllTicks();
+
+    const stopped = stream.stop();
+    await vi.runAllTicks();
+    sockets[1].message(JSON.stringify({ type: 'drained' }));
+
+    // The terminal drain succeeded, so the recording is NOT reported as broken.
+    // The lost live frames travel in `liveDelivery`, where the UI can say
+    // "there was a gap in the live preview" without implying data loss.
+    await expect(stopped).resolves.toEqual({
+      state: 'drained',
+      reason: 'drained',
+      acknowledged: true,
+      liveDelivery: liveDelivery({
+        coverage: 'gapped',
+        recovered: true,
+        recoveryEpisodeCount: 1,
+        recoveredEpisodeCount: 1,
+        droppedFrameCount: 1,
+        droppedAudioBytes: GATEWAY_LIVE_AUDIO_FRAME_HEADER_BYTES + 2,
+        firstDroppedSequence: 0,
+        lastDroppedSequence: 0,
+        causes: ['buffer-overflow'],
+      }),
+    });
+  });
+
+  it('keeps live delivery bounded but alive across a long silent-then-speaking session', async () => {
+    vi.useFakeTimers();
+    vi.spyOn(Math, 'random').mockReturnValue(0.5);
+    const sockets: FakeSocket[] = [];
+    const stream = new GatewayLiveStream({
+      cfg: { baseUrl: 'https://testai.acik.com' },
+      sessionId: 'SES-1',
+      getJwt: async () => 'JWT',
+      onEvent: vi.fn(),
+      onError: vi.fn(),
+      socketFactory: () => {
+        const socket = new FakeSocket();
+        sockets.push(socket);
+        return socket;
+      },
+    });
+
+    const started = stream.start();
+    await vi.runAllTicks();
+    sockets[0].open();
+    sockets[0].message(JSON.stringify({ type: 'ready' }));
+    await started;
+
+    let sequence = 0;
+    // Three independent stall-then-recover cycles, as a long meeting produces.
+    for (let cycle = 0; cycle < 3; cycle += 1) {
+      const socket = sockets[sockets.length - 1];
+      for (let frame = 0; frame < 40; frame += 1, sequence += 1) {
+        stream.sendAfterRestAccepted(new Uint8Array([0, 0]), sequence, sequence + 1);
+      }
+      await vi.advanceTimersByTimeAsync(1_000);
+      await vi.runAllTicks();
+      const next = sockets[sockets.length - 1];
+      if (next !== socket) {
+        next.open();
+        next.message(JSON.stringify({ type: 'ready' }));
+        await vi.runAllTicks();
+      }
+      const pending = next.sent.filter((entry) => entry instanceof ArrayBuffer).map(frameSeq);
+      // The window never grows past its bound, however long the meeting runs.
+      expect(pending.length).toBeLessThanOrEqual(32);
+      for (const seq of pending) {
+        next.message(JSON.stringify({ type: 'audio_ack', chunk_seq: seq }));
+      }
+      await vi.runAllTicks();
+    }
+
+    // Still delivering after all of it — no accumulated debt, no dead lane.
+    const live = sockets[sockets.length - 1];
+    const before = live.sent.length;
+    expect(stream.sendAfterRestAccepted(new Uint8Array([0, 0]), sequence, sequence + 1)).toBe(true);
+    expect(live.sent.length).toBeGreaterThan(before);
+    stream.close();
+  });
+
+  it('does not treat a buffer overflow as a terminal failure', async () => {
     const sockets: FakeSocket[] = [];
     const onError = vi.fn();
     const stream = new GatewayLiveStream({
@@ -398,14 +681,29 @@ describe('GatewayLiveStream', () => {
         true,
       );
     }
-    expect(stream.sendAfterRestAccepted(new Uint8Array([0, 0]), 32, 33)).toBe(false);
-    expect(onError).toHaveBeenCalledWith(
+    stream.sendAfterRestAccepted(new Uint8Array([0, 0]), 32, 33);
+
+    // No terminal "buffer is full" error: overflow is a recoverable delivery
+    // fault, and the user is not told the recording failed.
+    expect(onError).not.toHaveBeenCalledWith(
       expect.objectContaining({ message: expect.stringContaining('replay buffer is full') }),
     );
+
+    // Stopping mid-recovery still names the cause honestly, and the lost frames
+    // are reported as live-preview coverage — not as a broken recording.
     await expect(stream.stop()).resolves.toEqual({
       state: 'degraded',
       reason: 'buffer-overflow',
       acknowledged: false,
+      liveDelivery: liveDelivery({
+        coverage: 'gapped',
+        recoveryEpisodeCount: 1,
+        droppedFrameCount: 1,
+        droppedAudioBytes: GATEWAY_LIVE_AUDIO_FRAME_HEADER_BYTES + 2,
+        firstDroppedSequence: 0,
+        lastDroppedSequence: 0,
+        causes: ['buffer-overflow'],
+      }),
     });
   });
 
@@ -433,7 +731,7 @@ describe('GatewayLiveStream', () => {
     await started;
     sockets[0].message(JSON.stringify({ type: 'error', msg: 'upstream reset' }));
 
-    await vi.advanceTimersByTimeAsync(250);
+    await vi.advanceTimersByTimeAsync(1_000);
     await vi.runAllTicks();
     expect(sockets).toHaveLength(2);
     expect(onError).toHaveBeenCalledWith(
@@ -471,6 +769,7 @@ describe('GatewayLiveStream', () => {
       state: 'degraded',
       reason: 'timeout',
       acknowledged: false,
+      liveDelivery: liveDelivery(),
     });
   });
 
@@ -504,6 +803,7 @@ describe('GatewayLiveStream', () => {
       state: 'degraded',
       reason: 'quiet',
       acknowledged: false,
+      liveDelivery: liveDelivery(),
     });
   });
 
