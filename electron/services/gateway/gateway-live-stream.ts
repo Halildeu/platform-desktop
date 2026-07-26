@@ -21,6 +21,8 @@ const SOCKET_BUFFER_HIGH_WATER_BYTES = 512 * 1024;
 const SOCKET_BUFFER_LOW_WATER_BYTES = 128 * 1024;
 const BACKPRESSURE_RETRY_MS = 25;
 const ACK_SILENCE_TIMEOUT_MS = 6_000;
+// Token fetch happens before any open timer exists, so it needs its own bound.
+const TOKEN_DEADLINE_MS = 15_000;
 
 // Recovery budget. Deliberately *not* a session-lifetime counter: a three-hour
 // meeting must not accumulate debt from an outage in its first minute. The
@@ -344,6 +346,9 @@ export class GatewayLiveStream {
   private socketGeneration = 0;
   private connectInFlight: Promise<void> | null = null;
   private connectToken = 0;
+  private started = false;
+  // At most one budget-spending failure per socket generation.
+  private faultedGeneration: number | null = null;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private latestRestSequence = -1;
   private ready = false;
@@ -375,7 +380,8 @@ export class GatewayLiveStream {
   // Gap announcement, recomputed per socket generation — never carried over.
   private discontinuitySupported = false;
   private discontinuitySentGeneration: number | null = null;
-  private pendingDiscontinuity: { from: number; to: number } | null = null;
+  private pendingDroppedFrames = 0;
+  private announcedDiscontinuityBoundary: number | null = null;
   private stopPromise: Promise<GatewayLiveStreamStopResult> | null = null;
   private settleStop: ((result: GatewayLiveStreamStopResult) => void) | null = null;
   private stopTimeout: ReturnType<typeof setTimeout> | null = null;
@@ -393,6 +399,10 @@ export class GatewayLiveStream {
     if (this.closed || this.stopping) {
       throw new Error('gateway live stream is closed');
     }
+    // Lifecycle, kept apart from delivery health: before `start()` there is no
+    // connection to recover, so audio handed in early must be buffered rather
+    // than treated as a delivery failure.
+    this.started = true;
     await this.connect();
   }
 
@@ -475,12 +485,38 @@ export class GatewayLiveStream {
     }
   }
 
+  private async withTokenDeadline(pending: Promise<string>): Promise<string> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([
+        pending,
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(
+            () =>
+              reject(
+                new Error(`gateway live stream token did not arrive within ${TOKEN_DEADLINE_MS}ms`),
+              ),
+            TOKEN_DEADLINE_MS,
+          );
+        }),
+      ]);
+    } finally {
+      if (timer) {
+        clearTimeout(timer);
+      }
+    }
+  }
+
   private connect(): Promise<void> {
     if (this.connectInFlight) {
       return this.connectInFlight;
     }
     const operation = (async (): Promise<void> => {
-      const jwt = await this.options.getJwt();
+      // Bounded: `getJwt()` runs *before* any open timer exists, so a token
+      // promise that never settles would pin `connectInFlight` forever, block
+      // every future recovery, and leave `start()` unresolvable — no timer
+      // could rescue it because none has been armed yet.
+      const jwt = await this.withTokenDeadline(this.options.getJwt());
       if (this.closed || this.stopping) {
         throw new Error('gateway live stream closed while waiting for token');
       }
@@ -594,11 +630,16 @@ export class GatewayLiveStream {
     // `connectInFlight` permanently set and silently block every later attempt.
     this.connectInFlight = operation;
     const token = ++this.connectToken;
-    void operation.finally(() => {
+    const clear = (): void => {
       if (this.connectToken === token) {
         this.connectInFlight = null;
       }
-    });
+    };
+    // `.then(clear, clear)` rather than `.finally(clear)`: a rejected
+    // `operation` makes the promise *derived* by `finally` reject too, and
+    // nobody handles that one — callers catch `operation` itself. That derived
+    // rejection surfaced as an unhandled error and failed CI.
+    void operation.then(clear, clear);
     return operation;
   }
 
@@ -654,7 +695,7 @@ export class GatewayLiveStream {
     }
     if (!this.closed) {
       this.options.onError(new Error(`gateway live stream ${reason}; REST transcript continues`));
-      this.beginRecoveryEpisode(reason);
+      this.noteDeliveryFault(reason);
     }
   }
 
@@ -702,9 +743,10 @@ export class GatewayLiveStream {
 
     if (droppedCount > 0 && firstDropped !== null && lastDropped !== null) {
       this.noteDroppedFrames(droppedCount, droppedBytes, firstDropped, lastDropped);
-      // The window only fills when delivery has stalled, so treat it as a
-      // delivery fault and reconnect — but never as a terminal one.
-      this.beginRecoveryEpisode('buffer-overflow');
+      // Flag the lane as behind, but do NOT tear the socket down: it may be
+      // perfectly alive and simply slower than the speaker. A genuinely stalled
+      // socket is caught by the acknowledgement watchdog instead.
+      this.ensureRecoveryEpisode('buffer-overflow');
     }
   }
 
@@ -716,12 +758,12 @@ export class GatewayLiveStream {
     }
     this.lastDroppedSequence = to;
     this.deliveryCauses.add('buffer-overflow');
-    this.pendingDiscontinuity = this.pendingDiscontinuity
-      ? {
-          from: Math.min(this.pendingDiscontinuity.from, from),
-          to: Math.max(this.pendingDiscontinuity.to, to),
-        }
-      : { from, to };
+    // A COUNT, not a range. Coalescing successive drops into `min..max` would
+    // sweep in sequences that were already acknowledged between them and
+    // declare delivered audio lost — wrong on the wire, where the upstream acts
+    // on it. `first/last` stay in the local summary, where "first/last observed"
+    // is an honest claim.
+    this.pendingDroppedFrames += count;
     // A fresh gap must be announced again on whichever generation replays next.
     this.discontinuitySentGeneration = null;
   }
@@ -762,10 +804,14 @@ export class GatewayLiveStream {
       this.stableSinceMs = Date.now();
     }
     this.acksSinceRecovery += 1;
-    // The upstream accepted a frame past the announced gap, so the announcement
-    // is complete. Writing the message to the socket was never proof of that.
-    if (this.pendingDiscontinuity && chunkSeq >= this.pendingDiscontinuity.to) {
-      this.pendingDiscontinuity = null;
+    // The upstream accepted a frame at or past the announced boundary, so the
+    // announcement is complete. Writing the message was never proof of that.
+    if (
+      this.announcedDiscontinuityBoundary !== null &&
+      chunkSeq >= this.announcedDiscontinuityBoundary
+    ) {
+      this.pendingDroppedFrames = 0;
+      this.announcedDiscontinuityBoundary = null;
     }
     this.renewBudgetIfStable();
   }
@@ -845,7 +891,7 @@ export class GatewayLiveStream {
    */
   private announceDiscontinuity(socket: GatewaySocket, generation: number): boolean {
     if (
-      !this.pendingDiscontinuity ||
+      this.pendingDroppedFrames === 0 ||
       !this.discontinuitySupported ||
       this.discontinuitySentGeneration === generation
     ) {
@@ -860,18 +906,22 @@ export class GatewayLiveStream {
         JSON.stringify({
           type: 'audio_discontinuity',
           version: AUDIO_DISCONTINUITY_VERSION,
-          dropped_from_chunk_seq: this.pendingDiscontinuity.from,
-          dropped_to_chunk_seq: this.pendingDiscontinuity.to,
+          // Authoritative: the decoder-reset boundary. The count is advisory
+          // telemetry — it is exact, but the upstream only needs to know that
+          // audio before `next_chunk_seq` will never arrive.
           next_chunk_seq: next.value,
+          dropped_frame_count: this.pendingDroppedFrames,
         }),
       );
     } catch {
       this.handleSocketFailure(socket, 'socket-error');
       return false;
     }
-    // Sent, not yet confirmed: `pendingDiscontinuity` clears only when an
-    // acknowledgement past the gap proves the upstream accepted it.
+    // Sent, not yet confirmed: writing to a socket proves nothing. The gap
+    // clears only when an acknowledgement at or past the boundary shows the
+    // upstream actually accepted it.
     this.discontinuitySentGeneration = generation;
+    this.announcedDiscontinuityBoundary = next.value;
     return true;
   }
 
@@ -902,28 +952,20 @@ export class GatewayLiveStream {
   }
 
   /**
-   * Enter recovery for a bounded, jittered retry episode.
+   * Mark delivery as unhealthy WITHOUT touching the socket or spending budget.
    *
-   * Idempotent while an episode is already in flight — restarting the episode on
-   * every failing frame is precisely how a reconnect storm begins.
+   * This is what a full replay window reports. An overflow says "delivery is
+   * behind", not "this socket is broken": while speech continues the window can
+   * be full on every single frame, and tearing the socket down each time would
+   * kill each fresh connection before it could ever collect an acknowledgement —
+   * a livelock with exactly the symptom this class exists to prevent.
    */
-  private beginRecoveryEpisode(cause: GatewayLiveDeliveryCause): void {
+  private ensureRecoveryEpisode(cause: GatewayLiveDeliveryCause): void {
     this.deliveryCauses.add(cause);
-    if (this.closed || this.stopping) {
+    if (this.closed || this.stopping || !this.started) {
       return;
     }
-    if (this.delivery.kind === 'degraded') {
-      // The circuit is open; its cooldown owns the schedule and new audio
-      // reopens it. Nothing to do here.
-      return;
-    }
-    if (this.delivery.kind === 'recovering') {
-      // Already retrying, but this is a *fresh* fault — most often a socket that
-      // completed its handshake and then went silent. Drop it and take the next
-      // attempt, otherwise the episode stalls on a `ready` socket that will
-      // never acknowledge anything.
-      this.resetSocket();
-      this.scheduleRecoveryAttempt();
+    if (this.delivery.kind !== 'healthy') {
       return;
     }
     this.episodeCounter += 1;
@@ -937,6 +979,30 @@ export class GatewayLiveStream {
       episodeId: this.episodeCounter,
       attempt: 0,
     };
+  }
+
+  /**
+   * Report that the CURRENT socket failed: drop it and spend one retry attempt.
+   *
+   * Deduped per socket generation — a burst of faults from one dying socket
+   * (close + error + a pending ack timeout) must cost a single attempt, not the
+   * whole budget.
+   */
+  private noteDeliveryFault(cause: GatewayLiveDeliveryCause): void {
+    this.ensureRecoveryEpisode(cause);
+    this.deliveryCauses.add(cause);
+    if (this.closed || this.stopping || !this.started) {
+      return;
+    }
+    if (this.delivery.kind === 'degraded') {
+      // The circuit is open; its cooldown owns the schedule and new audio
+      // reopens it.
+      return;
+    }
+    if (this.faultedGeneration === this.socketGeneration) {
+      return;
+    }
+    this.faultedGeneration = this.socketGeneration;
     this.resetSocket();
     this.scheduleRecoveryAttempt();
   }
@@ -1011,12 +1077,18 @@ export class GatewayLiveStream {
    * dead network for nothing.
    */
   private considerRecoveryProgress(): void {
-    if (this.closed || this.stopping || this.connectInFlight || this.reconnectTimer) {
+    if (
+      this.closed ||
+      this.stopping ||
+      !this.started ||
+      this.connectInFlight ||
+      this.reconnectTimer
+    ) {
       return;
     }
     const state = this.delivery;
     if (state.kind === 'healthy') {
-      this.beginRecoveryEpisode('socket-close');
+      this.noteDeliveryFault('socket-close');
       return;
     }
     if (state.kind === 'recovering') {
@@ -1146,7 +1218,7 @@ export class GatewayLiveStream {
       console.warn('Gateway live audio acknowledgement timed out; recovering bounded replay', {
         pendingFrameCount: this.pendingFrames.size,
       });
-      this.beginRecoveryEpisode('ack-timeout');
+      this.noteDeliveryFault('ack-timeout');
     }, ACK_SILENCE_TIMEOUT_MS);
   }
 
