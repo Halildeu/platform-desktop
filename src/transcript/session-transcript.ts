@@ -2,12 +2,7 @@
 // OKUNABILIR satir. Ham akustik parcalar 'draft' olarak gelir ve bir cumle
 // tamamlaninca UTTERANCE ile degistirilir. Bu ayrim olmadan kullanici ayni
 // metni hem parcali hem butun gorur (cift satir).
-export type TranscriptSegmentStatus =
-  | 'draft'
-  | 'stabilizing'
-  | 'final'
-  | 'revised'
-  | 'utterance';
+export type TranscriptSegmentStatus = 'draft' | 'stabilizing' | 'final' | 'revised' | 'utterance';
 
 export type TranscriptLifecycle =
   | 'idle'
