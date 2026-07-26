@@ -190,12 +190,27 @@ interface PendingAudioFrame {
 
 type GatewaySocketFactory = (url: string, jwt: string) => GatewaySocket;
 
+/**
+ * Live delivery health, for surfacing to the user.
+ *
+ * `recovering` is deliberately quiet: a blip that self-heals in under a second
+ * while the canonical REST upload continues is not something to alarm anyone
+ * about. Only `degraded` — the circuit actually open for a cooldown — is worth
+ * saying out loud, and `healthy` must take it back.
+ */
+export interface GatewayLiveDeliveryStatus {
+  kind: 'healthy' | 'recovering' | 'degraded';
+  cause?: GatewayLiveDeliveryCause;
+  retryInMs?: number;
+}
+
 export interface GatewayLiveStreamOptions {
   cfg: GatewayConfig;
   sessionId: string;
   getJwt: () => Promise<string>;
   onEvent: (event: GatewayLiveServerEvent) => void;
   onError: (error: Error) => void;
+  onDeliveryStatus?: (status: GatewayLiveDeliveryStatus) => void;
   socketFactory?: GatewaySocketFactory;
 }
 
@@ -694,7 +709,10 @@ export class GatewayLiveStream {
       return;
     }
     if (!this.closed) {
-      this.options.onError(new Error(`gateway live stream ${reason}; REST transcript continues`));
+      // Deliberately NOT an onError: a transient drop that the circuit breaker
+      // heals in well under a second is noise, not news. The user hears about
+      // it only if the circuit actually opens (see `openCircuit`).
+      console.warn(`Gateway live stream ${reason}; recovering, REST transcript continues`);
       this.noteDeliveryFault(reason);
     }
   }
@@ -800,6 +818,9 @@ export class GatewayLiveStream {
       this.delivery = { kind: 'healthy' };
       this.acksSinceRecovery = 0;
       this.stableSinceMs = Date.now();
+      // Recovery is proven by a real acknowledgement, so any warning the user is
+      // still looking at can be taken back.
+      this.options.onDeliveryStatus?.({ kind: 'healthy' });
     } else if (this.stableSinceMs === null) {
       this.stableSinceMs = Date.now();
     }
@@ -979,6 +1000,7 @@ export class GatewayLiveStream {
       episodeId: this.episodeCounter,
       attempt: 0,
     };
+    this.options.onDeliveryStatus?.({ kind: 'recovering', cause });
   }
 
   /**
@@ -1063,12 +1085,9 @@ export class GatewayLiveStream {
       probeClaimedEpisode: null,
       cooldownLevel: this.cooldownLevel,
     };
-    this.options.onError(
-      new Error(
-        `gateway live delivery paused after ${MAX_IMMEDIATE_RECOVERY_ATTEMPTS} recovery attempts (${cause}); ` +
-          `canonical REST recording continues and live delivery retries in ~${Math.round(waitMs / 1000)}s`,
-      ),
-    );
+    // Now it is worth saying out loud: live delivery is paused for a cooldown
+    // the user will actually notice.
+    this.options.onDeliveryStatus?.({ kind: 'degraded', cause, retryInMs: waitMs });
   }
 
   /**

@@ -222,6 +222,9 @@ function installElectronApiMock(recorderConfig: {
       onTranscriptError: vi.fn((_callback: (event: TestTranscriptGatewayError) => void) => {
         return vi.fn();
       }),
+      onTranscriptRecovered: vi.fn((_callback: (event: { sessionId: string }) => void) => {
+        return vi.fn();
+      }),
     },
   };
 }

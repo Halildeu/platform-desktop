@@ -163,6 +163,13 @@ const electronAPI = {
       ipcRenderer.on('audio:transcript-error', listener);
       return () => ipcRenderer.removeListener('audio:transcript-error', listener);
     },
+    onTranscriptRecovered: (callback: (event: { sessionId: string }) => void): (() => void) => {
+      const listener = (_event: IpcRendererEvent, payload: { sessionId: string }): void => {
+        callback(payload);
+      };
+      ipcRenderer.on('audio:transcript-recovered', listener);
+      return () => ipcRenderer.removeListener('audio:transcript-recovered', listener);
+    },
   },
   auth: {
     // Token RENDERER'a verilmez — yalnız durum (loggedIn/expiresAt) döner.

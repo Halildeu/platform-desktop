@@ -320,12 +320,14 @@ describe('GatewayLiveStream', () => {
     vi.spyOn(Math, 'random').mockReturnValue(0.5);
     const sockets: FakeSocket[] = [];
     const onError = vi.fn();
+    const statuses: Array<{ kind: string }> = [];
     const stream = new GatewayLiveStream({
       cfg: { baseUrl: 'https://testai.acik.com' },
       sessionId: 'SES-1',
       getJwt: async () => 'JWT',
       onEvent: vi.fn(),
       onError,
+      onDeliveryStatus: (status) => statuses.push(status),
       socketFactory: () => {
         const socket = new FakeSocket();
         sockets.push(socket);
@@ -351,11 +353,11 @@ describe('GatewayLiveStream', () => {
       await vi.advanceTimersByTimeAsync(0);
     }
 
-    // Fourth silence exhausts the immediate budget: the circuit opens.
+    // Fourth silence exhausts the immediate budget: the circuit opens. The pause
+    // travels on the delivery-status channel, not as an error — see the
+    // dedicated banner tests below.
     await vi.advanceTimersByTimeAsync(9_000);
-    expect(onError).toHaveBeenCalledWith(
-      expect.objectContaining({ message: expect.stringContaining('live delivery paused') }),
-    );
+    expect(statuses.map((s) => s.kind)).toEqual(['recovering', 'degraded']);
 
     // No storm while the circuit is open, however much audio arrives.
     for (let sequence = 1; sequence <= 100; sequence += 1) {
@@ -540,6 +542,95 @@ describe('GatewayLiveStream', () => {
     expect(stream.sendAfterRestAccepted(new Uint8Array([0, 0]), 35, 36)).toBe(true);
     expect(sockets[0].sent.length).toBeGreaterThan(before);
     expect(sockets).toHaveLength(1);
+    stream.close();
+  });
+
+  // A banner that never clears is worse than no banner: the user saw a live
+  // alarm for 26 minutes while the transcript was only 9 seconds behind.
+  it('stays silent through transient recovery and takes the warning back', async () => {
+    vi.useFakeTimers();
+    vi.spyOn(Math, 'random').mockReturnValue(0.5);
+    const sockets: FakeSocket[] = [];
+    const onError = vi.fn();
+    const statuses: Array<{ kind: string; retryInMs?: number }> = [];
+    const stream = new GatewayLiveStream({
+      cfg: { baseUrl: 'https://testai.acik.com' },
+      sessionId: 'SES-1',
+      getJwt: async () => 'JWT',
+      onEvent: vi.fn(),
+      onError,
+      onDeliveryStatus: (status) => statuses.push(status),
+      socketFactory: () => {
+        const socket = new FakeSocket();
+        sockets.push(socket);
+        return socket;
+      },
+    });
+
+    const started = stream.start();
+    await vi.advanceTimersByTimeAsync(0);
+    sockets[0].open();
+    sockets[0].message(JSON.stringify({ type: 'ready' }));
+    await started;
+    stream.sendAfterRestAccepted(new Uint8Array([0, 0]), 0, 1);
+
+    // A blip the circuit breaker heals in under a second must NOT alarm anyone.
+    sockets[0].failClose();
+    await vi.advanceTimersByTimeAsync(1_000);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(onError).not.toHaveBeenCalled();
+    expect(statuses.map((s) => s.kind)).toEqual(['recovering']);
+
+    sockets[1].open();
+    sockets[1].message(JSON.stringify({ type: 'ready' }));
+    await vi.advanceTimersByTimeAsync(0);
+    sockets[1].message(JSON.stringify({ type: 'audio_ack', chunk_seq: 0 }));
+    await vi.advanceTimersByTimeAsync(0);
+
+    // Recovery is proven by a real acknowledgement — the warning is retracted.
+    expect(statuses.map((s) => s.kind)).toEqual(['recovering', 'healthy']);
+    expect(onError).not.toHaveBeenCalled();
+    stream.close();
+  });
+
+  it('announces a degraded pause only once the circuit actually opens', async () => {
+    vi.useFakeTimers();
+    vi.spyOn(Math, 'random').mockReturnValue(0.5);
+    const sockets: FakeSocket[] = [];
+    const statuses: Array<{ kind: string; retryInMs?: number }> = [];
+    const stream = new GatewayLiveStream({
+      cfg: { baseUrl: 'https://testai.acik.com' },
+      sessionId: 'SES-1',
+      getJwt: async () => 'JWT',
+      onEvent: vi.fn(),
+      onError: vi.fn(),
+      onDeliveryStatus: (status) => statuses.push(status),
+      socketFactory: () => {
+        const socket = new FakeSocket();
+        sockets.push(socket);
+        return socket;
+      },
+    });
+
+    const started = stream.start();
+    await vi.advanceTimersByTimeAsync(0);
+    sockets[0].open();
+    sockets[0].message(JSON.stringify({ type: 'ready' }));
+    await started;
+    stream.sendAfterRestAccepted(new Uint8Array([0, 0]), 0, 1);
+
+    for (let recovery = 1; recovery <= 3; recovery += 1) {
+      await vi.advanceTimersByTimeAsync(9_000);
+      await vi.advanceTimersByTimeAsync(0);
+      sockets[recovery].open();
+      sockets[recovery].message(JSON.stringify({ type: 'ready' }));
+      await vi.advanceTimersByTimeAsync(0);
+    }
+    await vi.advanceTimersByTimeAsync(9_000);
+
+    // One `recovering` for the episode, then one `degraded` carrying the wait.
+    expect(statuses.map((s) => s.kind)).toEqual(['recovering', 'degraded']);
+    expect(statuses[1].retryInMs).toBe(30_000);
     stream.close();
   });
 
