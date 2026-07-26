@@ -25,6 +25,7 @@ import {
 } from '../services/gateway/gateway-client.js';
 import {
   GatewayLiveStream,
+  type GatewayLiveDeliveryStatus,
   type GatewayLiveServerEvent,
   type GatewayLiveStreamStopResult,
 } from '../services/gateway/gateway-live-stream.js';
@@ -253,6 +254,36 @@ function transcriptErrorMessage(error: Error): string {
     return 'Transkript teslim endpointi bu audio-gateway imageinda yok; gateway rollout bekleniyor.';
   }
   return `Transkript akışı alınamadı: ${error.message}`;
+}
+
+/**
+ * Surface live-delivery health, and — critically — take the warning back.
+ *
+ * A transient reconnect is silent: the circuit breaker heals it in well under a
+ * second while the canonical REST upload never stops, so a red banner would be
+ * pure noise. Only an open circuit is announced, and recovery clears it. The
+ * previous behaviour warned on every single socket blip and never cleared,
+ * which left a permanent alarm on screen for a stream that was working.
+ */
+function emitLiveDeliveryStatus(
+  send: RendererSend | null,
+  sessionId: string,
+  status: GatewayLiveDeliveryStatus,
+): void {
+  if (status.kind === 'recovering') {
+    return;
+  }
+  if (status.kind === 'healthy') {
+    send?.('audio:transcript-recovered', { sessionId });
+    return;
+  }
+  const retrySeconds = Math.max(1, Math.round((status.retryInMs ?? 0) / 1000));
+  send?.('audio:transcript-error', {
+    sessionId,
+    message:
+      `Canlı transkript geçici olarak duraklatıldı (${status.cause ?? 'bağlantı'}); ` +
+      `kayıt kesintisiz sürüyor, ~${retrySeconds} sn içinde yeniden denenecek.`,
+  });
 }
 
 function isTranscriptReadTimeout(error: Error): boolean {
@@ -889,6 +920,7 @@ export function registerAudioIpc(): void {
             onEvent: (liveEvent) =>
               emitGatewayLiveTranscriptEvent(send, sessionId, normalizedMeetingId, liveEvent),
             onError: (streamError) => emitTranscriptError(send, sessionId, streamError),
+            onDeliveryStatus: (status) => emitLiveDeliveryStatus(send, sessionId, status),
           });
           startingLiveStream = liveStream;
           try {

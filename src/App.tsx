@@ -1114,6 +1114,18 @@ function App() {
         return { ...current, error: event.message };
       });
     });
+    // Recovery must be able to take the warning back. Without this the banner
+    // stayed on screen for the rest of the recording even though live delivery
+    // had healed seconds later.
+    const offTranscriptRecovered = window.electronAPI?.audio.onTranscriptRecovered?.((event) => {
+      setTranscriptSession((current) => {
+        const gatewaySessionId = current.gatewaySessionId ?? current.sessionId;
+        if (!gatewaySessionId || event.sessionId !== gatewaySessionId || current.error === null) {
+          return current;
+        }
+        return { ...current, error: null };
+      });
+    });
     const notifyRendererUnload = (): void => {
       window.electronAPI?.audio.rendererUnloaded?.();
     };
@@ -1124,6 +1136,7 @@ function App() {
       notifyRendererUnload();
       offTranscriptEvent?.();
       offTranscriptError?.();
+      offTranscriptRecovered?.();
       window.removeEventListener('beforeunload', notifyRendererUnload);
     };
   }, []);
