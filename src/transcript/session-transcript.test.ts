@@ -16,6 +16,8 @@ import {
   startTranscriptSession,
   transcriptStatusLabel,
   upsertTranscriptSegment,
+  collapseAssembledFragments,
+  type TranscriptSegment,
 } from './session-transcript';
 
 describe('session transcript state', () => {
@@ -840,5 +842,79 @@ describe('session transcript state', () => {
         label: 'Kalite kapısı açık',
       },
     });
+  });
+});
+
+describe('cümle birleştirme (gateway UTTERANCE)', () => {
+  const fragment = (id: string, text: string, startedAtMs: number): TranscriptSegment => ({
+    id,
+    speakerLabel: 'Konuşmacı',
+    startedAtMs,
+    status: 'draft',
+    text,
+    source: 'gateway-events',
+  });
+
+  it('UTTERANCE geldiğinde ham parçalar ekrandan kalkar — aynı metin iki kez görünmez', () => {
+    // Kullanıcının bildirdiği asıl şikâyet: "aynı cümleyi on satırda okuyorsun".
+    // Gateway parçaları ayrı eventId ile yayınlar; toplanmazsa hem parçalar
+    // hem birleşmiş cümle ekranda kalır.
+    let state = initialTranscriptSession();
+    state = upsertTranscriptSegment(state, fragment('e1', 'Bugün toplantıda', 1000));
+    state = upsertTranscriptSegment(state, fragment('e2', 'bütçeyi konuştuk.', 2000));
+    expect(state.segments).toHaveLength(2);
+
+    state = collapseAssembledFragments(state, ['e1', 'e2']);
+    state = upsertTranscriptSegment(state, {
+      id: 'u1',
+      speakerLabel: 'Konuşmacı',
+      startedAtMs: 1000,
+      status: 'utterance',
+      text: 'Bugün toplantıda bütçeyi konuştuk.',
+      source: 'gateway-events',
+    });
+
+    expect(state.segments).toHaveLength(1);
+    expect(state.segments[0].status).toBe('utterance');
+    expect(state.segments[0].text).toBe('Bugün toplantıda bütçeyi konuştuk.');
+  });
+
+  it('sourceEventIds boşsa hiçbir şey silinmez (fail-safe)', () => {
+    // Yanlışlıkla alakasız satır kaldırmaktansa geçici tekrar yeğlenir.
+    let state = initialTranscriptSession();
+    state = upsertTranscriptSegment(state, fragment('e1', 'bir parça', 1000));
+    expect(collapseAssembledFragments(state, undefined).segments).toHaveLength(1);
+    expect(collapseAssembledFragments(state, []).segments).toHaveLength(1);
+  });
+
+  it('final/revised parçalar KORUNUR — doğruluk otoritesi okunabilirliği yener', () => {
+    // Batch STT bir parçayı final'e yükselttiyse, cümle birleştirici onu
+    // silmemeli: birleştirici okunabilirlik sağlar, batch doğruluk sağlar.
+    let state = initialTranscriptSession();
+    state = upsertTranscriptSegment(state, {
+      ...fragment('e1', 'düzeltilmiş kesin metin', 1000),
+      status: 'final',
+    });
+    state = upsertTranscriptSegment(state, fragment('e2', 'ham parça', 2000));
+
+    state = collapseAssembledFragments(state, ['e1', 'e2']);
+
+    expect(state.segments).toHaveLength(1);
+    expect(state.segments[0].id).toBe('e1');
+    expect(state.segments[0].status).toBe('final');
+  });
+
+  it('UTTERANCE bir final segmenti EZMEZ (STATUS_RANK sırası)', () => {
+    let state = initialTranscriptSession();
+    state = upsertTranscriptSegment(state, {
+      ...fragment('x1', 'kesin metin', 1000),
+      status: 'final',
+    });
+    state = upsertTranscriptSegment(state, {
+      ...fragment('x1', 'birleşmiş metin', 1000),
+      status: 'utterance',
+    });
+    expect(state.segments[0].status).toBe('final');
+    expect(state.segments[0].text).toBe('kesin metin');
   });
 });

@@ -354,6 +354,15 @@ export interface TranscriptGatewayEvent {
   sttLanguage?: string | null;
   durationSeconds?: number | null;
   correlationId?: string | null;
+  /**
+   * Gateway cumle birlestirici (backend PR #918) alanlari.
+   * UTTERANCE olaylarinda dolu gelir; DRAFT'ta bos kalir.
+   * `sourceEventIds` hangi ham parcalarin bu cumleye katlandigini
+   * soyler — istemci o parcalari ekrandan kaldirmak icin kullanir,
+   * aksi halde ayni metin hem parcali hem butun gorunur.
+   */
+  assemblyReason?: string | null;
+  sourceEventIds?: string[];
 }
 
 export interface TranscriptEventsPage {

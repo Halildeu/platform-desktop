@@ -586,7 +586,7 @@ function transcriptStatusCounts(
       counts[segment.status] += 1;
       return counts;
     },
-    { draft: 0, stabilizing: 0, final: 0, revised: 0 },
+    { draft: 0, stabilizing: 0, final: 0, revised: 0, utterance: 0 },
   );
 }
 

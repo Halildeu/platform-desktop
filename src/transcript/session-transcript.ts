@@ -1,4 +1,8 @@
-export type TranscriptSegmentStatus = 'draft' | 'stabilizing' | 'final' | 'revised';
+// 'utterance' = gateway cumle birlestiricisinin (backend PR #918) urettigi
+// OKUNABILIR satir. Ham akustik parcalar 'draft' olarak gelir ve bir cumle
+// tamamlaninca UTTERANCE ile degistirilir. Bu ayrim olmadan kullanici ayni
+// metni hem parcali hem butun gorur (cift satir).
+export type TranscriptSegmentStatus = 'draft' | 'stabilizing' | 'final' | 'revised' | 'utterance';
 
 export type TranscriptLifecycle =
   | 'idle'
@@ -170,8 +174,12 @@ export interface TranscriptSourceReadiness {
 const STATUS_RANK: Record<TranscriptSegmentStatus, number> = {
   draft: 0,
   stabilizing: 1,
-  final: 2,
-  revised: 3,
+  // 'utterance' ham parcalari (draft/stabilizing) gecersiz kilar, ancak
+  // final/revised'i EZMEZ: cumle birlestirici okunabilirlik saglar, batch STT
+  // ise dogruluk saglar — dogruluk daha yuksek otoritedir.
+  utterance: 2,
+  final: 3,
+  revised: 4,
 };
 
 const REPORT_READY_MIN_WORDS = 20;
@@ -406,6 +414,39 @@ export function failTranscriptSession(
   };
 }
 
+/**
+ * Bir UTTERANCE geldiginde, ondan olusturulan ham parcalari ekrandan kaldirir.
+ *
+ * NEDEN: gateway cumle birlestiricisi (backend PR #918) parcalari YENI bir
+ * eventId altinda yayinlar. Parcalar silinmezse kullanici ayni metni iki kez
+ * gorur — once bolunmus, sonra butun. Kullanicinin bildirdigi asil sikayet
+ * ("ayni cumleyi on satirda okuyorsun") tam olarak budur.
+ *
+ * `sourceEventIds` bos ise hicbir sey silinmez (fail-safe): yanlislikla
+ * alakasiz satir kaldirmaktansa gecici bir tekrar gostermek yeglenir.
+ */
+export function collapseAssembledFragments(
+  state: TranscriptSessionState,
+  sourceEventIds: readonly string[] | undefined,
+): TranscriptSessionState {
+  if (!sourceEventIds || sourceEventIds.length === 0) {
+    return state;
+  }
+  const collapsed = new Set(sourceEventIds);
+  const remaining = state.segments.filter((segment) => {
+    if (!collapsed.has(segment.id)) {
+      return true;
+    }
+    // Yalniz HAM parcalar kaldirilir. Bir parca bu arada final/revised'e
+    // yukseldiyse korunur — dogruluk otoritesi okunabilirligi yener.
+    return segment.status === 'final' || segment.status === 'revised';
+  });
+  if (remaining.length === state.segments.length) {
+    return state;
+  }
+  return { ...state, segments: remaining };
+}
+
 export function upsertTranscriptSegment(
   state: TranscriptSessionState,
   segment: TranscriptSegment,
@@ -603,6 +644,8 @@ export function transcriptStatusLabel(status: TranscriptSegmentStatus): string {
       return 'Final';
     case 'revised':
       return 'Revize';
+    case 'utterance':
+      return 'Cümle';
   }
 }
 
