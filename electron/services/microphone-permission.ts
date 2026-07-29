@@ -16,6 +16,7 @@ type RequestPermission = () => Promise<boolean>;
 
 export class MicrophonePermissionBroker {
   private requestInFlight: Promise<MicrophonePermissionState> | null = null;
+  private sessionDecision: MicrophonePermissionState | null = null;
 
   constructor(
     private readonly platform: string,
@@ -29,6 +30,9 @@ export class MicrophonePermissionBroker {
     }
 
     const status = this.readPermissionStatus();
+    if (status === 'not-determined' && this.sessionDecision) {
+      return this.sessionDecision;
+    }
     return {
       status,
       granted: status === 'granted',
@@ -46,7 +50,19 @@ export class MicrophonePermissionBroker {
     }
 
     this.requestInFlight = this.requestPermission()
-      .then(() => this.status())
+      .then((granted) => {
+        const refreshed = this.status();
+        if (refreshed.status !== 'not-determined') {
+          return refreshed;
+        }
+
+        this.sessionDecision = {
+          status: granted ? 'granted' : 'denied',
+          granted,
+          canRequest: false,
+        };
+        return this.sessionDecision;
+      })
       .finally(() => {
         this.requestInFlight = null;
       });
