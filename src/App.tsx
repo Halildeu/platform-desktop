@@ -77,6 +77,14 @@ export const CANONICAL_RESULT_DURABLE_RETRY_MAX_DELAY_MS = 15 * 60_000;
 export const CANONICAL_RESULT_DURABLE_RETRY_JITTER_RATIO = 0.2;
 const LIFECYCLE_RECONCILIATION_MAX_ATTEMPTS = 6;
 const LIFECYCLE_RECONCILIATION_BASE_DELAY_MS = 1_000;
+export const LIFECYCLE_RECONCILIATION_DURABLE_RETRY_MS = 60_000;
+
+function isLifecycleReconciliationError(message: string): boolean {
+  return (
+    message.startsWith('Bekleyen kayıt durumu') ||
+    /^Bekleyen \d+ kayıt durumu arka planda yeniden denenecek\.$/.test(message)
+  );
+}
 const GATEWAY_LIVE_CORRELATION_ID = 'gateway-live';
 
 type CanonicalResultRetryReason = 'disabled' | 'not_ready' | 'recoverable_error';
@@ -539,6 +547,7 @@ function App() {
   const [audioRms, setAudioRms] = useState<number | null>(null);
   const [lastAudioAtMs, setLastAudioAtMs] = useState<number | null>(null);
   const recorderRef = useRef<Recorder | null>(null);
+  const startInFlightRef = useRef(false);
   const stopInFlightRef = useRef(false);
   const contractPendingRef = useRef(false);
   const liveStreamHasEventsRef = useRef(false);
@@ -1014,7 +1023,39 @@ function App() {
     }
     let cancelled = false;
     let retryTimer: number | null = null;
+    let reconciliationInFlight = false;
+    let immediateRetryRequested = false;
+    const clearRetryTimer = (): void => {
+      if (retryTimer !== null) {
+        window.clearTimeout(retryTimer);
+        retryTimer = null;
+      }
+    };
+    const runtimeCanReconcile = (): boolean =>
+      navigator.onLine !== false && document.visibilityState !== 'hidden';
+    const scheduleRetry = (attempt: number, delayMs: number): void => {
+      clearRetryTimer();
+      retryTimer = window.setTimeout(() => {
+        retryTimer = null;
+        void reconcile(attempt);
+      }, delayMs);
+    };
     const reconcile = async (attempt: number): Promise<void> => {
+      if (cancelled) {
+        return;
+      }
+      if (!runtimeCanReconcile()) {
+        immediateRetryRequested = true;
+        return;
+      }
+      if (reconciliationInFlight) {
+        immediateRetryRequested = true;
+        return;
+      }
+      immediateRetryRequested = false;
+      reconciliationInFlight = true;
+      let nextAttempt: number | null = null;
+      let nextDelayMs: number | null = null;
       try {
         const outcome = await window.electronAPI?.audio.reconcileLifecycle();
         if (cancelled || !outcome) {
@@ -1027,11 +1068,16 @@ function App() {
           );
         }
         if (outcome.remaining === 0) {
+          setError((current) => (isLifecycleReconciliationError(current) ? '' : current));
           return;
         }
         if (attempt >= LIFECYCLE_RECONCILIATION_MAX_ATTEMPTS - 1) {
-          setError(`Bekleyen ${outcome.remaining} kayıt durumu daha sonra yeniden denenecek.`);
-          return;
+          setError(`Bekleyen ${outcome.remaining} kayıt durumu arka planda yeniden denenecek.`);
+          nextAttempt = 0;
+          nextDelayMs = LIFECYCLE_RECONCILIATION_DURABLE_RETRY_MS;
+        } else {
+          nextAttempt = attempt + 1;
+          nextDelayMs = LIFECYCLE_RECONCILIATION_BASE_DELAY_MS * 2 ** attempt;
         }
       } catch (error) {
         if (cancelled) {
@@ -1039,25 +1085,54 @@ function App() {
         }
         if (attempt >= LIFECYCLE_RECONCILIATION_MAX_ATTEMPTS - 1) {
           setError(
-            `Bekleyen kayıt durumu meeting-service ile eşitlenemedi: ${
+            `Bekleyen kayıt durumu arka planda meeting-service ile eşitlenemedi: ${
               error instanceof Error ? error.message : String(error)
             }`,
           );
-          return;
+          nextAttempt = 0;
+          nextDelayMs = LIFECYCLE_RECONCILIATION_DURABLE_RETRY_MS;
+        } else {
+          nextAttempt = attempt + 1;
+          nextDelayMs = LIFECYCLE_RECONCILIATION_BASE_DELAY_MS * 2 ** attempt;
+        }
+      } finally {
+        reconciliationInFlight = false;
+        if (!cancelled) {
+          if (immediateRetryRequested && runtimeCanReconcile()) {
+            immediateRetryRequested = false;
+            clearRetryTimer();
+            void reconcile(0);
+          } else if (nextAttempt !== null && nextDelayMs !== null) {
+            scheduleRetry(nextAttempt, nextDelayMs);
+          }
         }
       }
-      retryTimer = window.setTimeout(
-        () => void reconcile(attempt + 1),
-        LIFECYCLE_RECONCILIATION_BASE_DELAY_MS * 2 ** attempt,
-      );
     };
+    const retryImmediately = (): void => {
+      if (!runtimeCanReconcile()) {
+        return;
+      }
+      clearRetryTimer();
+      if (reconciliationInFlight) {
+        immediateRetryRequested = true;
+        return;
+      }
+      void reconcile(0);
+    };
+    const handleVisibilityChange = (): void => {
+      if (document.visibilityState !== 'hidden') {
+        retryImmediately();
+      }
+    };
+    window.addEventListener('online', retryImmediately);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
     void reconcile(0);
     void loadRecentMeetings();
     return () => {
       cancelled = true;
-      if (retryTimer !== null) {
-        window.clearTimeout(retryTimer);
-      }
+      clearRetryTimer();
+      window.removeEventListener('online', retryImmediately);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
   }, [loadRecentMeetings, loggedIn]);
 
@@ -1308,6 +1383,10 @@ function App() {
   };
 
   const handleStart = async (): Promise<void> => {
+    if (startInFlightRef.current) {
+      return;
+    }
+    startInFlightRef.current = true;
     setError('');
     setStartPending(true);
     cancelCanonicalResultWork();
@@ -1469,6 +1548,7 @@ function App() {
       setTranscriptSession((current) => failTranscriptSession(current, message));
       setMeetingIntelligence((current) => failMeetingIntelligence(current, message));
     } finally {
+      startInFlightRef.current = false;
       setStartPending(false);
     }
   };
