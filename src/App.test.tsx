@@ -324,6 +324,11 @@ describe('App recorder readiness', () => {
     await waitFor(() => {
       expect(window.electronAPI?.audio.reconcileLifecycle).toHaveBeenCalledTimes(1);
     });
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(window.electronAPI?.audio.reconcileLifecycle).toHaveBeenCalledTimes(1);
   });
 
   it('coalesces visibility and online retries while reconciliation is in flight', async () => {

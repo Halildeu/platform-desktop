@@ -1052,6 +1052,7 @@ function App() {
         immediateRetryRequested = true;
         return;
       }
+      immediateRetryRequested = false;
       reconciliationInFlight = true;
       let nextAttempt: number | null = null;
       let nextDelayMs: number | null = null;
