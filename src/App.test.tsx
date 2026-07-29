@@ -34,6 +34,7 @@ import App, {
   CANONICAL_RESULT_FOLLOW_UP_TIMEOUT_MS,
   CANONICAL_RESULT_POLL_DELAYS_MS,
   CANONICAL_RESULT_REQUEST_TIMEOUT_MS,
+  LIFECYCLE_RECONCILIATION_DURABLE_RETRY_MS,
   canonicalResultDurableRetryDelayMs,
 } from './App';
 
@@ -261,6 +262,113 @@ function mockReadyLiveSttStream(): void {
 }
 
 describe('App recorder readiness', () => {
+  it('keeps retrying a durable lifecycle after the bounded startup window', async () => {
+    installElectronApiMock({
+      meetingId: null,
+      deviceId: 'desktop-1',
+      ready: false,
+      reason: 'RECORDER_MEETING_ID tanimli degil.',
+    });
+    vi.useFakeTimers();
+    vi.mocked(window.electronAPI!.audio.reconcileLifecycle)
+      .mockResolvedValueOnce({ ok: false, processed: 1, remaining: 1, terminalized: 0 })
+      .mockResolvedValueOnce({ ok: false, processed: 1, remaining: 1, terminalized: 0 })
+      .mockResolvedValueOnce({ ok: false, processed: 1, remaining: 1, terminalized: 0 })
+      .mockResolvedValueOnce({ ok: false, processed: 1, remaining: 1, terminalized: 0 })
+      .mockResolvedValueOnce({ ok: false, processed: 1, remaining: 1, terminalized: 0 })
+      .mockResolvedValueOnce({ ok: false, processed: 1, remaining: 1, terminalized: 0 })
+      .mockResolvedValue({ ok: true, processed: 1, remaining: 0, terminalized: 0 });
+
+    render(<App />);
+    await act(async () => {
+      await Promise.resolve();
+    });
+    for (const delayMs of [1_000, 2_000, 4_000, 8_000, 16_000]) {
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(delayMs);
+      });
+    }
+
+    expect(window.electronAPI?.audio.reconcileLifecycle).toHaveBeenCalledTimes(6);
+    expect(
+      screen.getByText('Bekleyen 1 kayıt durumu arka planda yeniden denenecek.'),
+    ).toBeInTheDocument();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(LIFECYCLE_RECONCILIATION_DURABLE_RETRY_MS);
+    });
+
+    expect(window.electronAPI?.audio.reconcileLifecycle).toHaveBeenCalledTimes(7);
+    expect(screen.queryByText(/Bekleyen 1 kayıt durumu/)).not.toBeInTheDocument();
+  });
+
+  it('retries lifecycle reconciliation immediately when the network returns', async () => {
+    let online = false;
+    vi.spyOn(window.navigator, 'onLine', 'get').mockImplementation(() => online);
+    installElectronApiMock({
+      meetingId: null,
+      deviceId: 'desktop-1',
+      ready: false,
+      reason: 'RECORDER_MEETING_ID tanimli degil.',
+    });
+
+    render(<App />);
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(window.electronAPI?.audio.reconcileLifecycle).not.toHaveBeenCalled();
+
+    online = true;
+    act(() => window.dispatchEvent(new Event('online')));
+
+    await waitFor(() => {
+      expect(window.electronAPI?.audio.reconcileLifecycle).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it('coalesces visibility and online retries while reconciliation is in flight', async () => {
+    installElectronApiMock({
+      meetingId: null,
+      deviceId: 'desktop-1',
+      ready: false,
+      reason: 'RECORDER_MEETING_ID tanimli degil.',
+    });
+    let resolveFirst: (value: {
+      ok: boolean;
+      processed: number;
+      remaining: number;
+      terminalized: number;
+    }) => void = () => undefined;
+    vi.mocked(window.electronAPI!.audio.reconcileLifecycle)
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveFirst = resolve;
+          }),
+      )
+      .mockResolvedValue({ ok: true, processed: 1, remaining: 0, terminalized: 0 });
+
+    render(<App />);
+    await waitFor(() => {
+      expect(window.electronAPI?.audio.reconcileLifecycle).toHaveBeenCalledTimes(1);
+    });
+
+    act(() => {
+      window.dispatchEvent(new Event('online'));
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+    expect(window.electronAPI?.audio.reconcileLifecycle).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      resolveFirst({ ok: false, processed: 1, remaining: 1, terminalized: 0 });
+      await Promise.resolve();
+    });
+
+    await waitFor(() => {
+      expect(window.electronAPI?.audio.reconcileLifecycle).toHaveBeenCalledTimes(2);
+    });
+  });
+
   it('canonical meetingId yoksa meeting contract oluşturma aksiyonunu açar', async () => {
     installElectronApiMock({
       meetingId: null,
