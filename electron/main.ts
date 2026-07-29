@@ -43,6 +43,7 @@ import {
   notifyRecordingFinished,
   notifyRecordingStarted,
 } from './services/notifications.js';
+import { MicrophonePermissionBroker } from './services/microphone-permission.js';
 import { TrayManager } from './services/tray-manager.js';
 import { writeReleaseSmokeEvidence } from './services/release-smoke-evidence.js';
 import { resolveWindowBounds, type WindowBounds } from './services/window-bounds.js';
@@ -60,6 +61,11 @@ let isQuitting = false;
 const DEFAULT_BOUNDS: WindowBounds = { x: 0, y: 0, width: 1280, height: 800 };
 const APP_PROTOCOL = 'meeting-intelligence';
 const RELEASE_SMOKE_READY = 'MEETING_INTELLIGENCE_RELEASE_SMOKE_READY';
+const microphonePermission = new MicrophonePermissionBroker(
+  process.platform,
+  () => systemPreferences.getMediaAccessStatus('microphone'),
+  () => systemPreferences.askForMediaAccess('microphone'),
+);
 
 function showMainWindow(): void {
   if (!mainWindow) {
@@ -173,34 +179,8 @@ function createMainWindow(): void {
 // IPC handlers (sample — extend in electron/ipc/*)
 ipcMain.handle('app:version', () => app.getVersion());
 
-function microphonePermissionStatus(): {
-  status: 'granted' | 'denied' | 'restricted' | 'not-determined' | 'unknown';
-  granted: boolean;
-  canRequest: boolean;
-} {
-  if (process.platform !== 'darwin') {
-    // Windows and Linux use Chromium's getUserMedia permission flow. Claiming
-    // "granted" before that prompt would make the product surface dishonest.
-    return { status: 'unknown', granted: false, canRequest: true };
-  }
-
-  const status = systemPreferences.getMediaAccessStatus('microphone');
-  return {
-    status,
-    granted: status === 'granted',
-    canRequest: status === 'not-determined',
-  };
-}
-
-ipcMain.handle('audio:permission-status', () => microphonePermissionStatus());
-ipcMain.handle('audio:request-permission', async () => {
-  const current = microphonePermissionStatus();
-  if (process.platform !== 'darwin' || current.status !== 'not-determined') {
-    return current;
-  }
-  await systemPreferences.askForMediaAccess('microphone');
-  return microphonePermissionStatus();
-});
+ipcMain.handle('audio:permission-status', () => microphonePermission.status());
+ipcMain.handle('audio:request-permission', () => microphonePermission.request());
 
 ipcMain.handle('app:get-auto-launch', () => isAutoLaunchEnabled());
 ipcMain.handle('app:set-auto-launch', (_event, enabled: boolean) => {

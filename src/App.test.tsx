@@ -918,6 +918,50 @@ describe('App recorder readiness', () => {
     expect(startRecording).not.toHaveBeenCalled();
   });
 
+  it('es zamanli kayit baslatma olaylarini tek mikrofon izin isteginde birlestirir', async () => {
+    installElectronApiMock({
+      meetingId: '22222222-2222-4222-8222-222222222222',
+      deviceId: 'desktop-1',
+      ready: true,
+      reason: null,
+    });
+    vi.mocked(window.electronAPI!.audio.permissionStatus).mockResolvedValue({
+      status: 'not-determined',
+      granted: false,
+      canRequest: true,
+    });
+    let resolvePermission: (value: {
+      status: 'granted';
+      granted: true;
+      canRequest: false;
+    }) => void = () => {
+      throw new Error('permission resolver was not initialized');
+    };
+    vi.mocked(window.electronAPI!.audio.requestPermission).mockReturnValue(
+      new Promise((resolve) => {
+        resolvePermission = resolve;
+      }),
+    );
+
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Kaydet' }));
+    const consentButton = screen.getByRole('button', { name: 'Onaylıyorum — Kaydı Başlat' });
+    fireEvent.click(consentButton);
+    fireEvent.click(consentButton);
+
+    await waitFor(() =>
+      expect(window.electronAPI!.audio.requestPermission).toHaveBeenCalledTimes(1),
+    );
+    expect(startRecording).not.toHaveBeenCalled();
+
+    resolvePermission({
+      status: 'granted',
+      granted: true,
+      canRequest: false,
+    });
+  });
+
   it('gateway transcript eventlerini canli transcript zaman cizelgesine yazar', async () => {
     installElectronApiMock({
       meetingId: '22222222-2222-4222-8222-222222222222',

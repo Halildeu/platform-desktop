@@ -547,6 +547,7 @@ function App() {
   const [audioRms, setAudioRms] = useState<number | null>(null);
   const [lastAudioAtMs, setLastAudioAtMs] = useState<number | null>(null);
   const recorderRef = useRef<Recorder | null>(null);
+  const startInFlightRef = useRef(false);
   const stopInFlightRef = useRef(false);
   const contractPendingRef = useRef(false);
   const liveStreamHasEventsRef = useRef(false);
@@ -1381,6 +1382,10 @@ function App() {
   };
 
   const handleStart = async (): Promise<void> => {
+    if (startInFlightRef.current) {
+      return;
+    }
+    startInFlightRef.current = true;
     setError('');
     setStartPending(true);
     cancelCanonicalResultWork();
@@ -1542,6 +1547,7 @@ function App() {
       setTranscriptSession((current) => failTranscriptSession(current, message));
       setMeetingIntelligence((current) => failMeetingIntelligence(current, message));
     } finally {
+      startInFlightRef.current = false;
       setStartPending(false);
     }
   };
