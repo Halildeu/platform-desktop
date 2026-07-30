@@ -191,6 +191,96 @@ describe('GatewayLiveStream', () => {
     });
   });
 
+  it('keeps the gateway socket open for the negotiated terminal budget', async () => {
+    vi.useFakeTimers();
+    const sockets: FakeSocket[] = [];
+    const stream = new GatewayLiveStream({
+      cfg: { baseUrl: 'https://testai.acik.com' },
+      sessionId: 'SES-1',
+      getJwt: async () => 'JWT',
+      onEvent: vi.fn(),
+      onError: vi.fn(),
+      socketFactory: () => {
+        const socket = new FakeSocket();
+        sockets.push(socket);
+        return socket;
+      },
+    });
+
+    const started = stream.start();
+    await vi.advanceTimersByTimeAsync(0);
+    sockets[0].open();
+    sockets[0].message(
+      JSON.stringify({
+        type: 'ready',
+        capabilities: ['eof'],
+        terminal_timeout_ms: 60_000,
+      }),
+    );
+    await started;
+    stream.sendAfterRestAccepted(new Uint8Array([0, 0]), 0, 1);
+    sockets[0].message(JSON.stringify({ type: 'audio_ack', chunk_seq: 0 }));
+
+    const stopped = stream.stop();
+    let settled = false;
+    void stopped.then(() => {
+      settled = true;
+    });
+
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(settled).toBe(false);
+    expect(sockets[0].readyState).toBe(1);
+
+    sockets[0].message(JSON.stringify({ type: 'eof_ack' }));
+    sockets[0].message(JSON.stringify({ type: 'drained' }));
+    await expect(stopped).resolves.toEqual({
+      state: 'drained',
+      reason: 'drained',
+      acknowledged: true,
+      liveDelivery: liveDelivery(),
+    });
+  });
+
+  it('bounds an excessive gateway terminal timeout', async () => {
+    vi.useFakeTimers();
+    const sockets: FakeSocket[] = [];
+    const stream = new GatewayLiveStream({
+      cfg: { baseUrl: 'https://testai.acik.com' },
+      sessionId: 'SES-1',
+      getJwt: async () => 'JWT',
+      onEvent: vi.fn(),
+      onError: vi.fn(),
+      socketFactory: () => {
+        const socket = new FakeSocket();
+        sockets.push(socket);
+        return socket;
+      },
+    });
+
+    const started = stream.start();
+    await vi.advanceTimersByTimeAsync(0);
+    sockets[0].open();
+    sockets[0].message(
+      JSON.stringify({
+        type: 'ready',
+        capabilities: ['eof'],
+        terminal_timeout_ms: 600_000,
+      }),
+    );
+    await started;
+    stream.sendAfterRestAccepted(new Uint8Array([0, 0]), 0, 1);
+    sockets[0].message(JSON.stringify({ type: 'audio_ack', chunk_seq: 0 }));
+
+    const stopped = stream.stop();
+    await vi.advanceTimersByTimeAsync(120_000);
+    await expect(stopped).resolves.toEqual({
+      state: 'degraded',
+      reason: 'timeout',
+      acknowledged: false,
+      liveDelivery: liveDelivery(),
+    });
+  });
+
   it('replays unacknowledged REST-accepted frames after reconnect, including handshake audio', async () => {
     vi.useFakeTimers();
     const sockets: FakeSocket[] = [];
