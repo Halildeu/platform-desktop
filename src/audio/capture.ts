@@ -409,8 +409,12 @@ export async function startRecording(
   } | null = null;
   if (!recorderStartupError) {
     try {
+      const gatewayStart =
+        options.liveSttContextTerms && options.liveSttContextTerms.length > 0
+          ? api.audio.start(meetingId, deviceId, options.liveSttContextTerms)
+          : api.audio.start(meetingId, deviceId);
       session = await withTimeout(
-        api.audio.start(meetingId, deviceId),
+        gatewayStart,
         RECORDER_START_IPC_TIMEOUT_MS,
         'Audio gateway oturumu zaman aşımına uğradı.',
         (lateSession) => {

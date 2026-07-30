@@ -161,6 +161,8 @@ vi.mock('../services/gateway/transcript-event-subscription', () => ({
 }));
 
 vi.mock('../services/gateway/gateway-live-stream', () => ({
+  normalizeGatewayLiveContextTerms: (value: unknown) =>
+    Array.isArray(value) ? value.map(String) : [],
   GatewayLiveStream: class MockGatewayLiveStream {
     constructor(args: unknown) {
       mocks.gatewayLiveStreamCtor(args);
@@ -744,12 +746,14 @@ describe('audio IPC recorder consent gate', () => {
       { sender: { id: 7, send: rendererSend } },
       meetingId,
       deviceId,
+      ['Zeynep Akkılıç', 'Faz 24'],
     )) as { captureId: string };
 
     expect(mocks.gatewayLiveStreamCtor).toHaveBeenCalledWith(
       expect.objectContaining({
         cfg: { baseUrl: 'https://gw.example.com' },
         sessionId: 'SES-1',
+        contextTerms: ['Zeynep Akkılıç', 'Faz 24'],
         getJwt: expect.any(Function),
         onEvent: expect.any(Function),
         onError: expect.any(Function),

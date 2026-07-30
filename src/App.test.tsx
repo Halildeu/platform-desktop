@@ -395,10 +395,9 @@ describe('App recorder readiness', () => {
     ).not.toBeInTheDocument();
     expect(screen.getByText('Toplantı çıktısı bekleniyor')).toBeInTheDocument();
 
-    const button = screen.getByRole('button', {
-      name: 'Meeting contract oluştur',
-    });
-    expect(button).toBeEnabled();
+    expect(screen.getByRole('textbox', { name: 'Toplantı başlığı' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Yeni toplantı oluştur' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Kaydet' })).toBeDisabled();
   });
 
   it('meeting-service contract olusturunca recorder config hazir olur', async () => {
@@ -411,13 +410,17 @@ describe('App recorder readiness', () => {
 
     render(<App />);
 
-    await userEvent.click(await screen.findByRole('button', { name: 'Meeting contract oluştur' }));
+    await userEvent.type(
+      await screen.findByRole('textbox', { name: 'Toplantı başlığı' }),
+      'Faz 24 haftalık ürün toplantısı',
+    );
+    await userEvent.click(screen.getByRole('button', { name: 'Yeni toplantı oluştur' }));
 
     await waitFor(() => {
       expect(window.electronAPI?.meeting.createContract).toHaveBeenCalledWith(
         expect.objectContaining({
-          title: expect.stringContaining('Faz 24 desktop recording'),
-          description: 'Faz 24 desktop recorder live contract.',
+          title: 'Faz 24 haftalık ürün toplantısı',
+          description: 'Meeting Intelligence desktop recording.',
         }),
       );
     });
@@ -450,7 +453,10 @@ describe('App recorder readiness', () => {
 
     render(<App />);
 
-    const button = await screen.findByRole('button', { name: 'Meeting contract oluştur' });
+    fireEvent.change(await screen.findByRole('textbox', { name: 'Toplantı başlığı' }), {
+      target: { value: 'Faz 24 karar toplantısı' },
+    });
+    const button = screen.getByRole('button', { name: 'Yeni toplantı oluştur' });
     fireEvent.click(button);
     fireEvent.click(button);
 
