@@ -91,6 +91,7 @@ type LiveSttServerEvent =
       partial_mode?: 'stable-v1';
       capabilities?: string[];
       supports_eof?: boolean;
+      terminal_timeout_ms?: number;
     }
   | { type: 'eof_ack' | 'drained' }
   | { type: 'debug' }
@@ -109,7 +110,9 @@ const RECONNECT_MAX_DELAY_MS = 2_000;
 const ACTIVE_AUDIO_RMS = 0.0008;
 const ACTIVE_AUDIO_TRANSCRIPT_STALL_MS = 12_000;
 const STOP_DRAIN_AUDIO_RMS = 0.0005;
-const STOP_DRAIN_TIMEOUT_MS = 8_000;
+const STOP_DRAIN_TIMEOUT_FALLBACK_MS = 8_000;
+const STOP_DRAIN_TIMEOUT_MAX_MS = 120_000;
+const STOP_DRAIN_TRANSPORT_MARGIN_MS = 5_000;
 const STOP_FINAL_QUIET_MS = 1_250;
 const EOF_CAPABILITY = 'eof';
 const MIN_FALLBACK_DRAFT_WORDS = 2;
@@ -203,6 +206,23 @@ function parseEvent(data: unknown): LiveSttServerEvent | null {
   } catch {
     return null;
   }
+}
+
+function negotiatedStopDrainTimeoutMs(terminalTimeoutMs: unknown): number {
+  if (
+    typeof terminalTimeoutMs !== 'number' ||
+    !Number.isFinite(terminalTimeoutMs) ||
+    terminalTimeoutMs <= 0
+  ) {
+    return STOP_DRAIN_TIMEOUT_FALLBACK_MS;
+  }
+  return Math.min(
+    STOP_DRAIN_TIMEOUT_MAX_MS,
+    Math.max(
+      STOP_DRAIN_TIMEOUT_FALLBACK_MS,
+      Math.ceil(terminalTimeoutMs) + STOP_DRAIN_TRANSPORT_MARGIN_MS,
+    ),
+  );
 }
 
 function segmentText(event: LiveSttServerPartial): string {
@@ -806,6 +826,7 @@ export function connectLiveSttStream(
   let reconnectAttempts = 0;
   let stablePartialMode = false;
   let eofSupported = false;
+  let stopDrainTimeoutMs = STOP_DRAIN_TIMEOUT_FALLBACK_MS;
   let eofRequested = false;
   let activeAudioSinceLastFinal = false;
   let sentActiveAudio = false;
@@ -1011,6 +1032,7 @@ export function connectLiveSttStream(
         stablePartialMode = event.partial_mode === 'stable-v1';
         eofSupported =
           event.supports_eof === true || event.capabilities?.includes(EOF_CAPABILITY) === true;
+        stopDrainTimeoutMs = negotiatedStopDrainTimeoutMs(event.terminal_timeout_ms);
         reconnectAttempts = 0;
         lastUsableTranscriptAtMs = Date.now();
         if (!stopping) {
@@ -1310,7 +1332,7 @@ export function connectLiveSttStream(
       stopTimeoutTimer = setTimeout(() => {
         stopTimeoutTimer = null;
         settleStop({ state: 'degraded', reason: 'timeout', acknowledged: false });
-      }, STOP_DRAIN_TIMEOUT_MS);
+      }, stopDrainTimeoutMs);
 
       flushPending();
       requestEofIfSupported();

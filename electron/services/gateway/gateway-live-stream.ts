@@ -13,7 +13,9 @@ const OPEN_TIMEOUT_MS = 10_000;
 // Absolute ceiling on the wait, so a server that keeps emitting `loading`
 // forever still fails instead of hanging the recorder.
 export const GATEWAY_LIVE_STREAM_OPEN_MAX_WAIT_MS = 300_000;
-const STOP_TIMEOUT_MS = 8_000;
+const STOP_TIMEOUT_FALLBACK_MS = 8_000;
+const STOP_TIMEOUT_MAX_MS = 120_000;
+const STOP_TIMEOUT_TRANSPORT_MARGIN_MS = 5_000;
 const STOP_QUIET_MS = 1_250;
 const MAX_PENDING_FRAME_COUNT = 32;
 const MAX_PENDING_AUDIO_BYTES = 2 * 1024 * 1024;
@@ -107,6 +109,7 @@ export type GatewayLiveServerEvent =
       capabilities?: string[];
       supports_eof?: boolean;
       partial_mode?: string;
+      terminal_timeout_ms?: number;
     }
   | {
       type: 'partial';
@@ -228,6 +231,19 @@ function optionalFiniteNumber(value: unknown): value is number | undefined {
   return value === undefined || (typeof value === 'number' && Number.isFinite(value));
 }
 
+function negotiatedStopTimeoutMs(terminalTimeoutMs: number | undefined): number {
+  if (terminalTimeoutMs === undefined || terminalTimeoutMs <= 0) {
+    return STOP_TIMEOUT_FALLBACK_MS;
+  }
+  return Math.min(
+    STOP_TIMEOUT_MAX_MS,
+    Math.max(
+      STOP_TIMEOUT_FALLBACK_MS,
+      Math.ceil(terminalTimeoutMs) + STOP_TIMEOUT_TRANSPORT_MARGIN_MS,
+    ),
+  );
+}
+
 function nonNegativeSequence(value: unknown): value is number {
   return Number.isSafeInteger(value) && (value as number) >= 0;
 }
@@ -260,6 +276,9 @@ function parseServerEvent(data: unknown): GatewayLiveServerEvent | null {
       if (parsed.partial_mode !== undefined && typeof parsed.partial_mode !== 'string') {
         return null;
       }
+      if (!optionalFiniteNumber(parsed.terminal_timeout_ms)) {
+        return null;
+      }
       return {
         type: 'ready',
         ...(parsed.capabilities === undefined
@@ -267,6 +286,9 @@ function parseServerEvent(data: unknown): GatewayLiveServerEvent | null {
           : { capabilities: parsed.capabilities as string[] }),
         ...(parsed.supports_eof === undefined ? {} : { supports_eof: parsed.supports_eof }),
         ...(parsed.partial_mode === undefined ? {} : { partial_mode: parsed.partial_mode }),
+        ...(parsed.terminal_timeout_ms === undefined
+          ? {}
+          : { terminal_timeout_ms: parsed.terminal_timeout_ms }),
       };
     }
     if (parsed.type === 'partial') {
@@ -371,6 +393,7 @@ export class GatewayLiveStream {
   private closed = false;
   private eofSent = false;
   private eofSupported = false;
+  private stopTimeoutMs = STOP_TIMEOUT_FALLBACK_MS;
   private pendingAudioBytes = 0;
   private readonly pendingFrames = new Map<number, PendingAudioFrame>();
   private backpressureTimer: ReturnType<typeof setTimeout> | null = null;
@@ -475,7 +498,7 @@ export class GatewayLiveStream {
 
     this.stopTimeout = setTimeout(() => {
       this.finishStop({ state: 'degraded', reason: 'timeout', acknowledged: false });
-    }, STOP_TIMEOUT_MS);
+    }, this.stopTimeoutMs);
 
     this.flushPendingFrames();
     if (this.pendingFrames.size === 0) {
@@ -667,6 +690,7 @@ export class GatewayLiveStream {
     if (event.type === 'ready') {
       this.eofSupported =
         event.supports_eof === true || event.capabilities?.includes('eof') === true;
+      this.stopTimeoutMs = negotiatedStopTimeoutMs(event.terminal_timeout_ms);
       // Recomputed per generation, never carried over from a previous socket:
       // the peer behind a reconnect may not be the same build.
       this.discontinuitySupported =

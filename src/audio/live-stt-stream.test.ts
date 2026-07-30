@@ -1680,6 +1680,62 @@ describe('connectLiveSttStream', () => {
     });
   });
 
+  it('honors the negotiated terminal budget instead of closing after the legacy timeout', async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal('WebSocket', FakeWebSocket);
+
+    const stream = connectLiveSttStream('ws://127.0.0.1:18220/ws/stream');
+    const ws = FakeWebSocket.instances[0];
+    ws?.open();
+    ws?.message({
+      type: 'ready',
+      capabilities: ['eof'],
+      terminal_timeout_ms: 60_000,
+    });
+    stream.send(new Float32Array([0.01]));
+
+    const stopPromise = stream.stop();
+    let settled = false;
+    void stopPromise.then(() => {
+      settled = true;
+    });
+
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(settled).toBe(false);
+    expect(ws?.readyState).toBe(FakeWebSocket.OPEN);
+
+    ws?.message({ type: 'eof_ack' });
+    ws?.message({ type: 'drained' });
+    await expect(stopPromise).resolves.toEqual({
+      state: 'drained',
+      reason: 'drained',
+      acknowledged: true,
+    });
+  });
+
+  it('bounds an excessive negotiated terminal timeout', async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal('WebSocket', FakeWebSocket);
+
+    const stream = connectLiveSttStream('ws://127.0.0.1:18220/ws/stream');
+    const ws = FakeWebSocket.instances[0];
+    ws?.open();
+    ws?.message({
+      type: 'ready',
+      capabilities: ['eof'],
+      terminal_timeout_ms: 600_000,
+    });
+    stream.send(new Float32Array([0.01]));
+
+    const stopPromise = stream.stop();
+    await vi.advanceTimersByTimeAsync(120_000);
+    await expect(stopPromise).resolves.toEqual({
+      state: 'degraded',
+      reason: 'timeout',
+      acknowledged: false,
+    });
+  });
+
   it('keeps draining status when a connecting socket becomes ready after stop', async () => {
     vi.useFakeTimers();
     vi.stubGlobal('WebSocket', FakeWebSocket);
