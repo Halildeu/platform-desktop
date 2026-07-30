@@ -136,6 +136,46 @@ describe('connectLiveSttStream', () => {
     stream.close();
   });
 
+  it('sends bounded context before buffered audio when context-v1 is advertised', () => {
+    vi.stubGlobal('WebSocket', FakeWebSocket);
+    const stream = connectLiveSttStream('ws://127.0.0.1:18220/ws/stream', {
+      contextTerms: ['Zeynep Akkılıç', 'Halil Koçoğlu'],
+    });
+    const ws = FakeWebSocket.instances[0];
+
+    stream.send(new Float32Array([0.1, 0.2]));
+    ws?.open();
+    ws?.message({ type: 'ready', capabilities: ['eof', 'context-v1'] });
+
+    expect(ws?.sent).toHaveLength(2);
+    expect(ws?.sent[0]).toBe(
+      JSON.stringify({
+        type: 'context',
+        terms: ['Zeynep Akkılıç', 'Halil Koçoğlu'],
+      }),
+    );
+    expect(ws?.sent[1]).toBeInstanceOf(ArrayBuffer);
+
+    stream.close();
+  });
+
+  it('does not send context when the server omits context-v1', () => {
+    vi.stubGlobal('WebSocket', FakeWebSocket);
+    const stream = connectLiveSttStream('ws://127.0.0.1:18220/ws/stream', {
+      contextTerms: ['Zeynep Akkılıç'],
+    });
+    const ws = FakeWebSocket.instances[0];
+
+    stream.send(new Float32Array([0.1, 0.2]));
+    ws?.open();
+    ws?.message({ type: 'ready', capabilities: ['eof'] });
+
+    expect(ws?.sent).toHaveLength(1);
+    expect(ws?.sent[0]).toBeInstanceOf(ArrayBuffer);
+
+    stream.close();
+  });
+
   it('keeps one minute of direct audio buffered while stream models are loading', () => {
     vi.stubGlobal('WebSocket', FakeWebSocket);
 
@@ -1915,6 +1955,35 @@ describe('connectLiveSttStream', () => {
 
     expect(onReady).toHaveBeenCalledTimes(2);
     expect(second?.sent).toHaveLength(1);
+
+    stream.close();
+  });
+
+  it('resends the same in-memory context before audio after reconnect', () => {
+    vi.useFakeTimers();
+    vi.stubGlobal('WebSocket', FakeWebSocket);
+    const sourceTerms = ['Zeynep Akkılıç'];
+    const stream = connectLiveSttStream('ws://127.0.0.1:18220/ws/stream', {
+      contextTerms: sourceTerms,
+    });
+    sourceTerms[0] = 'mutated after connect';
+    const first = FakeWebSocket.instances[0];
+
+    first?.open();
+    first?.message({ type: 'ready', capabilities: ['context-v1'] });
+    stream.send(new Float32Array([0.1, 0.2]));
+    expect(first?.sent[0]).toBe(JSON.stringify({ type: 'context', terms: ['Zeynep Akkılıç'] }));
+    expect(first?.sent[1]).toBeInstanceOf(ArrayBuffer);
+
+    first?.close();
+    stream.send(new Float32Array([0.3, 0.4]));
+    vi.advanceTimersByTime(250);
+    const second = FakeWebSocket.instances[1];
+    second?.open();
+    second?.message({ type: 'ready', capabilities: ['context-v1'] });
+
+    expect(second?.sent[0]).toBe(JSON.stringify({ type: 'context', terms: ['Zeynep Akkılıç'] }));
+    expect(second?.sent[1]).toBeInstanceOf(ArrayBuffer);
 
     stream.close();
   });
