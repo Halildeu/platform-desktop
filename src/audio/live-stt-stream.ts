@@ -30,6 +30,7 @@ export interface LiveSttStreamStatusEvent {
 }
 
 export interface LiveSttStreamCallbacks {
+  contextTerms?: readonly string[];
   onReady?: () => void;
   onStatus?: (event: LiveSttStreamStatusEvent) => void;
   onTranscriptEvent?: (event: LiveSttTranscriptEvent) => void;
@@ -115,6 +116,7 @@ const STOP_DRAIN_TIMEOUT_MAX_MS = 120_000;
 const STOP_DRAIN_TRANSPORT_MARGIN_MS = 5_000;
 const STOP_FINAL_QUIET_MS = 1_250;
 const EOF_CAPABILITY = 'eof';
+const CONTEXT_CAPABILITY = 'context-v1';
 const MIN_FALLBACK_DRAFT_WORDS = 2;
 const MAX_RECENT_FINAL_WORDS = 24;
 const ROLLING_CONTINUATION_MIN_PREVIOUS_WORDS = 4;
@@ -818,6 +820,7 @@ export function connectLiveSttStream(
   streamUrl: string,
   callbacks: LiveSttStreamCallbacks = {},
 ): LiveSttStreamConnection {
+  const contextTerms = callbacks.contextTerms ? [...callbacks.contextTerms] : [];
   let ws: WebSocket | null = null;
   const pendingFrames: Float32Array[] = [];
   let ready = false;
@@ -1035,6 +1038,9 @@ export function connectLiveSttStream(
         stopDrainTimeoutMs = negotiatedStopDrainTimeoutMs(event.terminal_timeout_ms);
         reconnectAttempts = 0;
         lastUsableTranscriptAtMs = Date.now();
+        if (event.capabilities?.includes(CONTEXT_CAPABILITY) === true && contextTerms.length > 0) {
+          socket.send(JSON.stringify({ type: 'context', terms: contextTerms }));
+        }
         if (!stopping) {
           emitStatus({ status: 'ready' });
           callbacks.onReady?.();

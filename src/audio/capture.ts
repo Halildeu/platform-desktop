@@ -153,6 +153,7 @@ export interface RecorderStopResult {
 
 export interface StartRecordingOptions {
   liveSttStreamUrl?: string | null;
+  liveSttContextTerms?: readonly string[];
   onLiveStreamReady?: () => void;
   onLiveStreamStatus?: (event: LiveSttStreamStatusEvent) => void;
   onAudioActivity?: (activity: { rms: number; capturedAtMs: number }) => void;
@@ -440,6 +441,7 @@ export async function startRecording(
   if (options.liveSttStreamUrl) {
     try {
       liveStream = connectLiveSttStream(options.liveSttStreamUrl, {
+        contextTerms: options.liveSttContextTerms,
         onReady: options.onLiveStreamReady,
         onStatus: options.onLiveStreamStatus,
         onTranscriptEvent: options.onLiveTranscriptEvent,

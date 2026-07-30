@@ -1243,6 +1243,51 @@ describe('App recorder readiness', () => {
     expect(screen.getAllByRole('article')).toHaveLength(2);
   });
 
+  it('passes trusted current meeting-title context to the direct STT stream', async () => {
+    const meetingId = '22222222-2222-4222-8222-222222222222';
+    installElectronApiMock({
+      meetingId,
+      deviceId: 'desktop-1',
+      ready: true,
+      reason: null,
+      liveSttStreamUrl: 'ws://127.0.0.1:18220/ws/stream',
+      liveSttStreamReason: null,
+    });
+    vi.mocked(window.electronAPI!.meeting.listRecent).mockResolvedValue({
+      meetings: [recentMeeting(meetingId, 'Zeynep Akkılıç - Halil Koçoğlu Faz 24')],
+      page: 0,
+      size: 20,
+      totalElements: 1,
+      totalPages: 1,
+    });
+    vi.mocked(startRecording).mockResolvedValue({
+      sessionId: 'SES-CONTEXT',
+      transcriptSessionId: 'SES-CONTEXT',
+      hasLoopback: false,
+      stop: vi.fn(),
+      onError: vi.fn(),
+      pause: vi.fn(),
+      resume: vi.fn(),
+      isPaused: vi.fn(() => false),
+    });
+
+    render(<App />);
+
+    await screen.findByText(/Zeynep Akkılıç - Halil Koçoğlu Faz 24/);
+    fireEvent.click(await screen.findByRole('button', { name: 'Kaydet' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Onaylıyorum — Kaydı Başlat' }));
+
+    await screen.findByText('Kayıt başladı (yalnız mikrofon, oturum SES-CONTEXT)');
+    expect(vi.mocked(startRecording).mock.calls[0]?.[2]?.liveSttContextTerms).toEqual([
+      'Zeynep Akkılıç - Halil Koçoğlu Faz 24',
+      'Zeynep',
+      'Akkılıç',
+      'Halil',
+      'Koçoğlu',
+      'Faz',
+    ]);
+  });
+
   it('direct stream seyrek kaldiginda gateway final fallback satirini kabul eder', async () => {
     installElectronApiMock({
       meetingId: '22222222-2222-4222-8222-222222222222',

@@ -15,6 +15,7 @@ import {
   type LiveSttPreflightState,
 } from './audio/live-stt-preflight';
 import type { LiveSttStreamStatusEvent, LiveSttTranscriptEvent } from './audio/live-stt-stream';
+import { meetingTitleContextTerms } from './audio/live-stt-context';
 import {
   ConsentDialog,
   CONSENT_VERSION,
@@ -98,6 +99,7 @@ interface CanonicalResultLoadOptions {
 
 interface RecorderRuntimeConfig {
   meetingId: string | null;
+  meetingTitle?: string | null;
   deviceId: string;
   ready: boolean;
   reason: string | null;
@@ -1233,6 +1235,7 @@ function App() {
   const bindReadyMeetingContract = (contract: MeetingContract): void => {
     const cfg: RecorderRuntimeConfig = {
       meetingId: contract.id,
+      meetingTitle: contract.title,
       deviceId: recorderConfig?.deviceId ?? 'desktop-1',
       ready: true,
       reason: null,
@@ -1430,6 +1433,10 @@ function App() {
       }
       const meetingId = recorderConfig.meetingId;
       const deviceId = recorderConfig.deviceId;
+      const meetingTitle =
+        recorderConfig.meetingTitle ??
+        recentMeetings.find((meeting) => meeting.id === meetingId)?.title ??
+        null;
       canonicalRunBeforeRecordingRef.current = {
         meetingId,
         analysisRunId:
@@ -1448,6 +1455,7 @@ function App() {
       pendingLiveTranscriptEventsRef.current = [];
       const rec = await startRecordingWithTimeout(meetingId, deviceId, {
         liveSttStreamUrl: liveSttStreamUrlForSession,
+        liveSttContextTerms: meetingTitleContextTerms(meetingTitle),
         onLiveStreamReady: () => {
           setLiveStreamReady(true);
         },
