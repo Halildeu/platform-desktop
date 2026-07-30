@@ -25,6 +25,7 @@ import {
 } from '../services/gateway/gateway-client.js';
 import {
   GatewayLiveStream,
+  normalizeGatewayLiveContextTerms,
   type GatewayLiveDeliveryStatus,
   type GatewayLiveServerEvent,
   type GatewayLiveStreamStopResult,
@@ -755,6 +756,7 @@ export function registerAudioIpc(): void {
       event,
       meetingId: unknown,
       deviceId: unknown,
+      contextTerms: unknown,
     ): Promise<{ sessionId: string; transcriptSessionId: string; captureId: string }> => {
       if (!pendingConsent) {
         throw new Error('consent required before recording');
@@ -778,9 +780,10 @@ export function registerAudioIpc(): void {
         if (!consent) {
           throw new Error('consent required before recording');
         }
-        pendingConsent = null;
         const normalizedMeetingId = requireMeetingId(meetingId);
         const normalizedDeviceId = requireIdentifier(deviceId, 'deviceId');
+        const normalizedContextTerms = normalizeGatewayLiveContextTerms(contextTerms);
+        pendingConsent = null;
         const captureId = randomUUID();
         const cfg = loadGatewayConfig();
         let consentAccessToken: string;
@@ -916,6 +919,7 @@ export function registerAudioIpc(): void {
           liveStream = new GatewayLiveStream({
             cfg,
             sessionId,
+            contextTerms: normalizedContextTerms,
             getJwt: () => getValidAccessToken(),
             onEvent: (liveEvent) =>
               emitGatewayLiveTranscriptEvent(send, sessionId, normalizedMeetingId, liveEvent),

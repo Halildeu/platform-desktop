@@ -248,10 +248,15 @@ describe('startRecording', () => {
     setUserAgent('Mozilla/5.0 (Macintosh; Intel Mac OS X 15_5)');
     const { micTrack, getDisplayMedia } = installBrowserAudioMocks();
 
-    const recorder = await startRecording('meeting-1', 'desktop-1');
+    const recorder = await startRecording('meeting-1', 'desktop-1', {
+      liveSttContextTerms: ['Zeynep Akkılıç', 'Faz 24'],
+    });
 
     expect(getDisplayMedia).not.toHaveBeenCalled();
-    expect(window.electronAPI?.audio.start).toHaveBeenCalledWith('meeting-1', 'desktop-1');
+    expect(window.electronAPI?.audio.start).toHaveBeenCalledWith('meeting-1', 'desktop-1', [
+      'Zeynep Akkılıç',
+      'Faz 24',
+    ]);
     expect(recorder.hasLoopback).toBe(false);
     expect(window.electronAPI?.audio.cancelCapture).not.toHaveBeenCalled();
 

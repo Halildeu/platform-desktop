@@ -515,6 +515,7 @@ function App() {
   const [stopping, setStopping] = useState(false);
   const [startPending, setStartPending] = useState(false);
   const [contractPending, setContractPending] = useState(false);
+  const [meetingTitleDraft, setMeetingTitleDraft] = useState('');
   const [showConsent, setShowConsent] = useState(false);
   const [recorderConfig, setRecorderConfig] = useState<RecorderRuntimeConfig | null>(null);
   const [transcriptSession, setTranscriptSession] = useState(initialTranscriptSession);
@@ -1221,6 +1222,7 @@ function App() {
   const handleLogin = async (): Promise<void> => {
     setBusy(true);
     setError('');
+    setStatus('');
     try {
       const s = await window.electronAPI?.auth.login();
       setLoggedIn(s?.loggedIn ?? false);
@@ -1292,6 +1294,11 @@ function App() {
     if (contractPendingRef.current) {
       return;
     }
+    const title = meetingTitleDraft.trim();
+    if (!title) {
+      setError('Toplantı başlığı gerekli.');
+      return;
+    }
     contractPendingRef.current = true;
     setError('');
     setStatus('');
@@ -1299,14 +1306,15 @@ function App() {
     try {
       const scheduledStart = new Date().toISOString();
       const contract = await window.electronAPI?.meeting.createContract({
-        title: `Faz 24 desktop recording ${scheduledStart}`,
-        description: 'Faz 24 desktop recorder live contract.',
+        title,
+        description: 'Meeting Intelligence desktop recording.',
         scheduledStart,
       });
       if (!contract) {
         throw new Error('meeting-service response empty');
       }
       bindReadyMeetingContract(contract);
+      setMeetingTitleDraft('');
     } catch (e) {
       const message = `Meeting contract oluşturulamadı: ${(e as Error).message}`;
       setError(message);
@@ -1876,24 +1884,35 @@ function App() {
                     Giriş yapıldı. Kayıt için canonical meetingId bekleniyor.
                   </p>
                 )}
+                <div className="meeting-create-field">
+                  <label htmlFor="meeting-title">Toplantı başlığı</label>
+                  <div className="meeting-create-row">
+                    <input
+                      id="meeting-title"
+                      type="text"
+                      value={meetingTitleDraft}
+                      maxLength={512}
+                      autoComplete="off"
+                      onChange={(event) => setMeetingTitleDraft(event.target.value)}
+                    />
+                    <button
+                      className="secondary-action"
+                      type="button"
+                      onClick={() => void handleCreateMeetingContract()}
+                      disabled={contractPending || meetingTitleDraft.trim().length === 0}
+                    >
+                      {contractPending ? 'Oluşturuluyor...' : 'Yeni toplantı oluştur'}
+                    </button>
+                  </div>
+                </div>
                 <div className="control-actions">
                   <button
                     className="primary-action"
                     type="button"
-                    onClick={
-                      recorderConfig?.ready
-                        ? handleRecordClick
-                        : () => void handleCreateMeetingContract()
-                    }
-                    disabled={startPending || contractPending}
+                    onClick={handleRecordClick}
+                    disabled={!recorderConfig?.ready || startPending || contractPending}
                   >
-                    {startPending
-                      ? 'Başlatılıyor...'
-                      : contractPending
-                        ? 'Contract oluşturuluyor...'
-                        : recorderConfig?.ready
-                          ? 'Kaydet'
-                          : 'Meeting contract oluştur'}
+                    {startPending ? 'Başlatılıyor...' : 'Kaydet'}
                   </button>
                   <button
                     className="secondary-action"

@@ -33,6 +33,10 @@ const TOKEN_DEADLINE_MS = 15_000;
 const MAX_IMMEDIATE_RECOVERY_ATTEMPTS = 3;
 const IMMEDIATE_RECOVERY_DELAYS_MS = [500, 1_000, 2_000] as const;
 const RECOVERY_JITTER_RATIO = 0.2;
+const MAX_CONTEXT_TERMS = 32;
+const MAX_CONTEXT_TERM_CHARS = 64;
+const MAX_CONTEXT_TOTAL_CHARS = 512;
+const ALLOWED_CONTEXT_TERM = /^[\p{L}\p{M}\p{N} .'-]+$/u;
 // When immediate attempts are exhausted the circuit opens instead of dying.
 // Cooldown grows, so a genuinely broken network settles at one probe every five
 // minutes rather than a reconnect storm.
@@ -210,11 +214,48 @@ export interface GatewayLiveDeliveryStatus {
 export interface GatewayLiveStreamOptions {
   cfg: GatewayConfig;
   sessionId: string;
+  contextTerms?: readonly string[];
   getJwt: () => Promise<string>;
   onEvent: (event: GatewayLiveServerEvent) => void;
   onError: (error: Error) => void;
   onDeliveryStatus?: (status: GatewayLiveDeliveryStatus) => void;
   socketFactory?: GatewaySocketFactory;
+}
+
+export function normalizeGatewayLiveContextTerms(value: unknown): string[] {
+  if (value === undefined) {
+    return [];
+  }
+  if (!Array.isArray(value) || value.length > MAX_CONTEXT_TERMS) {
+    throw new Error('gateway live context terms must be a bounded list');
+  }
+  const terms: string[] = [];
+  const seen = new Set<string>();
+  let totalChars = 0;
+  for (const candidate of value) {
+    if (typeof candidate !== 'string' || /[\p{Cc}\p{Cf}\p{Co}\p{Cs}\p{Cn}]/u.test(candidate)) {
+      throw new Error('gateway live context term is invalid');
+    }
+    const term = candidate.normalize('NFKC').replace(/\s+/g, ' ').trim();
+    if (
+      term.length === 0 ||
+      term.length > MAX_CONTEXT_TERM_CHARS ||
+      !ALLOWED_CONTEXT_TERM.test(term)
+    ) {
+      throw new Error('gateway live context term is invalid');
+    }
+    const key = term.toLocaleLowerCase('tr-TR');
+    if (seen.has(key)) {
+      continue;
+    }
+    totalChars += term.length;
+    if (totalChars > MAX_CONTEXT_TOTAL_CHARS) {
+      throw new Error('gateway live context terms exceed total character limit');
+    }
+    seen.add(key);
+    terms.push(term);
+  }
+  return terms;
 }
 
 function defaultSocketFactory(url: string, jwt: string): GatewaySocket {
@@ -379,6 +420,7 @@ type LiveDeliveryState =
 export class GatewayLiveStream {
   private readonly options: GatewayLiveStreamOptions;
   private readonly socketFactory: GatewaySocketFactory;
+  private readonly contextTerms: readonly string[];
   private socket: GatewaySocket | null = null;
   private socketGeneration = 0;
   private connectInFlight: Promise<void> | null = null;
@@ -431,6 +473,7 @@ export class GatewayLiveStream {
   constructor(options: GatewayLiveStreamOptions) {
     this.options = options;
     this.socketFactory = options.socketFactory ?? defaultSocketFactory;
+    this.contextTerms = normalizeGatewayLiveContextTerms(options.contextTerms);
   }
 
   async start(): Promise<void> {
@@ -638,6 +681,17 @@ export class GatewayLiveStream {
             failOpen(
               `gateway live stream did not become ready within ${GATEWAY_LIVE_STREAM_OPEN_MAX_WAIT_MS}ms`,
             );
+            return;
+          }
+          try {
+            if (
+              this.contextTerms.length > 0 &&
+              event.capabilities?.includes('context-v1') === true
+            ) {
+              socket.send(JSON.stringify({ type: 'context', terms: this.contextTerms }));
+            }
+          } catch {
+            failOpen('gateway live stream context relay failed');
             return;
           }
           settled = true;

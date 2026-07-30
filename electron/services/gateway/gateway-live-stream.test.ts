@@ -4,6 +4,7 @@ import {
   GATEWAY_LIVE_AUDIO_FRAME_HEADER_BYTES,
   GATEWAY_LIVE_STREAM_OPEN_MAX_WAIT_MS,
   GatewayLiveStream,
+  normalizeGatewayLiveContextTerms,
   type GatewayLiveDeliverySummary,
 } from './gateway-live-stream';
 
@@ -71,12 +72,25 @@ afterEach(() => {
 });
 
 describe('GatewayLiveStream', () => {
+  it('normalizes bounded context without retaining duplicates or unsafe terms', () => {
+    expect(
+      normalizeGatewayLiveContextTerms(['  Çağrı   Öztürk ', 'çağrı öztürk', 'Proje-24']),
+    ).toEqual(['Çağrı Öztürk', 'Proje-24']);
+    expect(() => normalizeGatewayLiveContextTerms(['unsafe/'])).toThrow(
+      'gateway live context term is invalid',
+    );
+    expect(() => normalizeGatewayLiveContextTerms(['line\u0000feed'])).toThrow(
+      'gateway live context term is invalid',
+    );
+  });
+
   it('keeps bearer in the main-process handshake and sends the backend v1 frame', async () => {
     const sockets: FakeSocket[] = [];
     const handshakes: Array<{ url: string; jwt: string }> = [];
     const stream = new GatewayLiveStream({
       cfg: { baseUrl: 'https://testai.acik.com' },
       sessionId: 'SES-1',
+      contextTerms: ['  Çağrı   Öztürk ', 'Proje-24'],
       getJwt: async () => 'JWT',
       onEvent: vi.fn(),
       onError: vi.fn(),
@@ -91,7 +105,9 @@ describe('GatewayLiveStream', () => {
     const started = stream.start();
     await waitForSocket(sockets, 1);
     sockets[0].open();
-    sockets[0].message(JSON.stringify({ type: 'ready' }));
+    sockets[0].message(
+      JSON.stringify({ type: 'ready', capabilities: ['eof', 'source-ranges-v1', 'context-v1'] }),
+    );
     await started;
 
     expect(handshakes).toEqual([
@@ -101,7 +117,8 @@ describe('GatewayLiveStream', () => {
       },
     ]);
     expect(stream.sendAfterRestAccepted(new Uint8Array([0x34, 0x12]), 0, 123)).toBe(true);
-    const frame = sockets[0].sent[0] as ArrayBuffer;
+    expect(sockets[0].sent[0]).toBe('{"type":"context","terms":["Çağrı Öztürk","Proje-24"]}');
+    const frame = sockets[0].sent[1] as ArrayBuffer;
     const view = new DataView(frame);
     expect(view.getUint8(0)).toBe(1);
     expect(view.getBigInt64(1, false)).toBe(0n);

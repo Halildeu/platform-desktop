@@ -79,6 +79,47 @@ body {
   flex-wrap: wrap;
 }
 
+.meeting-create-field {
+  display: grid;
+  gap: 6px;
+  margin: 0 0 14px;
+}
+
+.meeting-create-field label {
+  color: #334155;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.meeting-create-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+}
+
+.meeting-create-row input {
+  min-width: 0;
+  height: 38px;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  background: #ffffff;
+  color: #111827;
+  font: inherit;
+  padding: 0 10px;
+}
+
+.meeting-create-row input:focus {
+  border-color: #0f766e;
+  box-shadow: 0 0 0 3px rgba(15, 118, 110, 0.12);
+  outline: none;
+}
+
+@media (max-width: 560px) {
+  .meeting-create-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
 button {
   min-height: 38px;
   border-radius: 6px;
