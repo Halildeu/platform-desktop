@@ -2148,6 +2148,57 @@ describe('App canonical Meeting Intelligence read', () => {
 describe('App recent meeting result navigation', () => {
   const RECORDER_MEETING_ID = '22222222-2222-4222-8222-222222222222';
 
+  it('binds a selected meeting as the recorder target when startup has no target', async () => {
+    installElectronApiMock({
+      meetingId: null,
+      deviceId: 'desktop-1',
+      ready: false,
+      reason:
+        'RECORDER_MEETING_ID tanimli degil; kayit icin meeting-service MeetingResponse.id gerekli.',
+    });
+    vi.mocked(window.electronAPI!.meeting.listRecent).mockResolvedValue({
+      meetings: [recentMeeting(CANONICAL_MEETING_ID, 'Planlı toplantı')],
+      page: 0,
+      size: 20,
+      totalElements: 1,
+      totalPages: 1,
+    });
+    vi.mocked(startRecording).mockResolvedValue({
+      sessionId: 'SES-SELECTED-TARGET',
+      transcriptSessionId: 'SES-SELECTED-TARGET',
+      sttProvider: 'speechmatics',
+      hasLoopback: false,
+      stop: vi.fn(),
+      onError: vi.fn(),
+      pause: vi.fn(),
+      resume: vi.fn(),
+      isPaused: vi.fn(() => false),
+    });
+
+    render(<App />);
+
+    const picker = await screen.findByRole('combobox', { name: 'Görüntülenecek toplantı' });
+    await screen.findByRole('option', { name: /Planlı toplantı/ });
+    await userEvent.selectOptions(picker, CANONICAL_MEETING_ID);
+    await userEvent.selectOptions(
+      screen.getByRole('combobox', { name: 'Transkripsiyon sağlayıcısı' }),
+      'speechmatics',
+    );
+
+    const recordButton = screen.getByRole('button', { name: 'Kaydet' });
+    expect(recordButton).toBeEnabled();
+    await userEvent.click(recordButton);
+    await userEvent.click(screen.getByRole('button', { name: 'Onaylıyorum — Kaydı Başlat' }));
+
+    await waitFor(() => {
+      expect(startRecording).toHaveBeenCalledWith(
+        CANONICAL_MEETING_ID,
+        'desktop-1',
+        expect.objectContaining({ sttProvider: 'speechmatics' }),
+      );
+    });
+  });
+
   it('opens a persisted historical result without changing the recorder target', async () => {
     installElectronApiMock({
       meetingId: RECORDER_MEETING_ID,

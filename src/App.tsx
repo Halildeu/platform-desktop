@@ -1281,6 +1281,19 @@ function App() {
     cancelCanonicalResultWork();
     canonicalRunBeforeRecordingRef.current = null;
     setCanonicalResultError(null);
+    const selectedMeeting = recentMeetings.find((meeting) => meeting.id === meetingId);
+    setRecorderConfig((current) => {
+      if (!current || current.ready || !isContractCreationExpected(current.reason)) {
+        return current;
+      }
+      return {
+        ...current,
+        meetingId,
+        meetingTitle: selectedMeeting?.title,
+        ready: true,
+        reason: null,
+      };
+    });
     setTranscriptSession((current) => {
       if (current.meetingId === meetingId) {
         return current;
