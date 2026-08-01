@@ -385,19 +385,16 @@ describe('App recorder readiness', () => {
     render(<App />);
 
     expect(
-      await screen.findByText('Giriş yapıldı. Kayıt için canonical meetingId bekleniyor.'),
+      await screen.findByText('Mevcut bir toplantıyı seçin veya yeni bir toplantı planlayın.'),
     ).toBeInTheDocument();
-    expect(screen.getAllByText('Beklemede')).toHaveLength(2);
-    expect(screen.queryByText('Blokeli')).not.toBeInTheDocument();
-    expect(screen.queryByText('RECORDER_MEETING_ID tanimli degil.')).not.toBeInTheDocument();
-    expect(
-      screen.queryByText('Meeting intelligence için canonical meetingId yok.'),
-    ).not.toBeInTheDocument();
-    expect(screen.getByText('Toplantı çıktısı bekleniyor')).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Canlı Transkript' })).not.toBeInTheDocument();
+    expect(screen.queryByText('Kelime/dk')).not.toBeInTheDocument();
+    expect(screen.queryByText('JWT claim özeti')).not.toBeInTheDocument();
 
+    await userEvent.click(screen.getByRole('button', { name: 'Toplantı planla' }));
     expect(screen.getByRole('textbox', { name: 'Toplantı başlığı' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Yeni toplantı oluştur' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: 'Kaydet' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Toplantıyı oluştur' })).toBeDisabled();
+    expect(screen.queryByRole('button', { name: 'Kaydet' })).not.toBeInTheDocument();
   });
 
   it('meeting-service contract olusturunca recorder config hazir olur', async () => {
@@ -410,17 +407,24 @@ describe('App recorder readiness', () => {
 
     render(<App />);
 
+    await userEvent.click(await screen.findByRole('button', { name: 'Toplantı planla' }));
     await userEvent.type(
       await screen.findByRole('textbox', { name: 'Toplantı başlığı' }),
       'Faz 24 haftalık ürün toplantısı',
     );
-    await userEvent.click(screen.getByRole('button', { name: 'Yeni toplantı oluştur' }));
+    await userEvent.type(
+      screen.getByRole('textbox', { name: 'Açıklama' }),
+      'Haftalık ürün gündemi',
+    );
+    await userEvent.click(screen.getByRole('button', { name: 'Toplantıyı oluştur' }));
 
     await waitFor(() => {
       expect(window.electronAPI?.meeting.createContract).toHaveBeenCalledWith(
         expect.objectContaining({
           title: 'Faz 24 haftalık ürün toplantısı',
-          description: 'Meeting Intelligence desktop recording.',
+          description: 'Haftalık ürün gündemi',
+          scheduledStart: expect.any(String),
+          scheduledEnd: expect.any(String),
         }),
       );
     });
@@ -495,10 +499,11 @@ describe('App recorder readiness', () => {
 
     render(<App />);
 
+    fireEvent.click(await screen.findByRole('button', { name: 'Toplantı planla' }));
     fireEvent.change(await screen.findByRole('textbox', { name: 'Toplantı başlığı' }), {
       target: { value: 'Faz 24 karar toplantısı' },
     });
-    const button = screen.getByRole('button', { name: 'Yeni toplantı oluştur' });
+    const button = screen.getByRole('button', { name: 'Toplantıyı oluştur' });
     fireEvent.click(button);
     fireEvent.click(button);
 

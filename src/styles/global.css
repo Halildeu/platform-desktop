@@ -54,6 +54,11 @@ body {
   min-height: 100%;
 }
 
+.recorder-shell--planning {
+  grid-template-columns: minmax(0, 720px);
+  justify-content: center;
+}
+
 .control-panel,
 .transcript-panel,
 .summary-panel {
@@ -65,6 +70,129 @@ body {
 .control-panel {
   align-self: start;
   padding: 18px;
+}
+
+.meeting-launchpad-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.meeting-launchpad-heading h2,
+.meeting-planner-heading h2 {
+  margin: 0;
+  font-size: 17px;
+}
+
+.meeting-launchpad-heading p,
+.meeting-planner-heading p {
+  margin: 5px 0 0;
+  color: #64748b;
+  line-height: 1.45;
+}
+
+.meeting-planner {
+  display: grid;
+  flex: 1 1 100%;
+  gap: 14px;
+  width: 100%;
+  padding: 16px;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  background: #f8fafc;
+}
+
+.meeting-launchpad-heading:has(.meeting-planner) {
+  display: block;
+}
+
+.meeting-planner-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.meeting-planner-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.meeting-planner-field {
+  display: grid;
+  gap: 6px;
+}
+
+.meeting-planner-field--wide {
+  grid-column: 1 / -1;
+}
+
+.meeting-planner-field > span {
+  color: #334155;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.meeting-planner-field input,
+.meeting-planner-field textarea,
+.meeting-planner-field select {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  background: #ffffff;
+  color: #111827;
+  font: inherit;
+  padding: 9px 10px;
+}
+
+.meeting-planner-field input,
+.meeting-planner-field select {
+  height: 40px;
+}
+
+.meeting-planner-field textarea {
+  resize: vertical;
+}
+
+.meeting-planner-field input:focus,
+.meeting-planner-field textarea:focus,
+.meeting-planner-field select:focus {
+  border-color: #0f766e;
+  box-shadow: 0 0 0 3px rgba(15, 118, 110, 0.12);
+  outline: none;
+}
+
+.meeting-planner-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.meeting-planner-error {
+  margin: 0;
+  color: #b91c1c;
+}
+
+.logout-action {
+  width: 100%;
+  margin-top: 14px;
+}
+
+.diagnostics,
+.meeting-target-details {
+  margin-top: 14px;
+  color: #64748b;
+  font-size: 12px;
+}
+
+.diagnostics summary,
+.meeting-target-details summary {
+  cursor: pointer;
+  font-weight: 700;
 }
 
 .control-copy {
@@ -151,6 +279,19 @@ body {
 }
 
 @media (max-width: 560px) {
+  .meeting-launchpad-heading,
+  .meeting-planner-heading {
+    flex-direction: column;
+  }
+
+  .meeting-planner-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .meeting-planner-field--wide {
+    grid-column: auto;
+  }
+
   .meeting-create-row {
     grid-template-columns: minmax(0, 1fr);
   }
