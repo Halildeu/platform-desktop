@@ -3,19 +3,24 @@ import { describe, expect, it } from 'vitest';
 import { meetingTitleContextTerms } from './live-stt-context';
 
 describe('meetingTitleContextTerms', () => {
-  it('keeps the bounded meeting title and name-like tokens in memory', () => {
+  it('keeps bounded name-like phrases without generic meeting-title words', () => {
     expect(meetingTitleContextTerms('Zeynep Akkılıç - Halil Koçoğlu Faz 24')).toEqual([
-      'Zeynep Akkılıç - Halil Koçoğlu Faz 24',
+      'Zeynep Akkılıç',
       'Zeynep',
       'Akkılıç',
+      'Halil Koçoğlu',
       'Halil',
       'Koçoğlu',
-      'Faz',
     ]);
   });
 
   it('normalizes duplicates without locale-sensitive collisions', () => {
-    expect(meetingTitleContextTerms('İpek İPEK')).toEqual(['İpek İPEK', 'İpek']);
+    expect(meetingTitleContextTerms('İpek İPEK')).toEqual(['İpek']);
+  });
+
+  it('does not turn generic or mixed-alphanumeric titles into hotwords', () => {
+    expect(meetingTitleContextTerms('Faz 24 Test4 Bütçe Review')).toEqual([]);
+    expect(meetingTitleContextTerms('ACIK Platform - Q3 weekly')).toEqual(['ACIK']);
   });
 
   it('rejects control characters and overlong titles', () => {

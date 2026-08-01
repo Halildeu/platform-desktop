@@ -151,6 +151,7 @@ PR-desktop-02 is merged through the stacked PRs #17-#20. Current behavior:
   UUID without exposing the JWT to the renderer. Random desktop-generated meeting IDs and legacy
   `MTG-*` codes are forbidden.
 - Capture: renderer captures microphone plus best-effort system audio/loopback. The Electron display-media handler is fail-closed unless a bounded recorder capture lease is active and the request comes from the main renderer frame.
+- STT context: trusted meeting titles contribute only bounded name-like phrases/tokens; the full title, numeric/mixed identifiers, and generic meeting words are not sent as hotwords.
 - Encoding: AudioWorklet emits PCM16 / 16kHz / mono chunks.
 - Transport: main process sends REST chunks to `audio-gateway-service` (`POST /sessions` → `POST /sessions/{id}/chunks` → `POST /finish`) using the login JWT.
 - KVKK boundary: raw audio is not cached to local disk by default. Consent text has a real `sha256:<64 hex>` digest derived from the canonical rendered consent text.

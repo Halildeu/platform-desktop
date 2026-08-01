@@ -1332,12 +1332,12 @@ describe('App recorder readiness', () => {
 
     await screen.findByText('Kayıt başladı (yalnız mikrofon, oturum SES-CONTEXT)');
     expect(vi.mocked(startRecording).mock.calls[0]?.[2]?.liveSttContextTerms).toEqual([
-      'Zeynep Akkılıç - Halil Koçoğlu Faz 24',
+      'Zeynep Akkılıç',
       'Zeynep',
       'Akkılıç',
+      'Halil Koçoğlu',
       'Halil',
       'Koçoğlu',
-      'Faz',
     ]);
   });
 
