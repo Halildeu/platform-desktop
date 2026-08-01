@@ -3,8 +3,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { loadKeycloakConfig } from './keycloak-config';
 import {
   buildAuthorizationUrl,
+  isReauthenticationRequired,
   loopbackRedirectUri,
+  refreshAccessToken,
   revokeRefreshToken,
+  TokenRefreshError,
   toTokenSet,
 } from './oauth-flow';
 
@@ -80,4 +83,22 @@ describe('oauth-flow (saf)', () => {
     expect(body.get('client_id')).toBe('platform-desktop');
     expect(body.get('refresh_token')).toBe('REFRESH-TOKEN');
   });
+
+  it.each([
+    [400, true],
+    [401, true],
+    [429, false],
+    [503, false],
+  ])(
+    'classifies refresh HTTP %i without reading or logging the response body',
+    async (status, terminal) => {
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status }));
+
+      const error = await refreshAccessToken(cfg, 'ROTATING-REFRESH').catch((cause) => cause);
+
+      expect(error).toBeInstanceOf(TokenRefreshError);
+      expect(isReauthenticationRequired(error)).toBe(terminal);
+      expect(error).toMatchObject({ status });
+    },
+  );
 });
