@@ -17,6 +17,24 @@ import { desktopFetch } from '../net/desktop-fetch.js';
 
 const TOKEN_HTTP_TIMEOUT_MS = 10_000;
 
+export class TokenRefreshError extends Error {
+  readonly status: number;
+
+  constructor(status: number) {
+    super(`token refresh failed: ${status}`);
+    this.name = 'TokenRefreshError';
+    this.status = status;
+  }
+
+  get reauthenticationRequired(): boolean {
+    return this.status === 400 || this.status === 401;
+  }
+}
+
+export function isReauthenticationRequired(error: unknown): boolean {
+  return error instanceof TokenRefreshError && error.reauthenticationRequired;
+}
+
 /** Loopback redirect URI (RFC 8252): http://127.0.0.1:<port>/callback */
 export function loopbackRedirectUri(port: number): string {
   return `http://127.0.0.1:${port}/callback`;
@@ -105,7 +123,7 @@ export async function refreshAccessToken(
     signal: AbortSignal.timeout(TOKEN_HTTP_TIMEOUT_MS),
   });
   if (!res.ok) {
-    throw new Error(`token refresh failed: ${res.status}`);
+    throw new TokenRefreshError(res.status);
   }
   return toTokenSet((await res.json()) as OidcTokenResponse);
 }
