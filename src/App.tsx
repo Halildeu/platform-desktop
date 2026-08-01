@@ -5,6 +5,7 @@ import {
   RECORDER_START_OPERATION_TIMEOUT_MS,
   type AudioCapturePreflightState,
   type Recorder,
+  type SttProvider,
   startRecording,
   testAudioCaptureWorklet,
 } from './audio/capture';
@@ -515,6 +516,7 @@ function App() {
   const [stopping, setStopping] = useState(false);
   const [startPending, setStartPending] = useState(false);
   const [contractPending, setContractPending] = useState(false);
+  const [sttProvider, setSttProvider] = useState<SttProvider>('internal');
   const [meetingTitleDraft, setMeetingTitleDraft] = useState('');
   const [showConsent, setShowConsent] = useState(false);
   const [recorderConfig, setRecorderConfig] = useState<RecorderRuntimeConfig | null>(null);
@@ -1421,8 +1423,9 @@ function App() {
       if (!capturePreflight.ok) {
         throw new Error(capturePreflight.message);
       }
-      const liveSttStreamUrlForSession = recorderConfig.liveSttStreamUrl;
-      if (recorderConfig.gatewayLiveStreamEnabled) {
+      const liveSttStreamUrlForSession =
+        sttProvider === 'internal' ? recorderConfig.liveSttStreamUrl : null;
+      if (sttProvider === 'internal' && recorderConfig.gatewayLiveStreamEnabled) {
         setLiveStreamPreflight({
           status: 'checking',
           message: 'Yetkili Gateway canlı akışı oturumla bağlanıyor...',
@@ -1430,7 +1433,7 @@ function App() {
           elapsedMs: null,
           stage: null,
         });
-      } else if (recorderConfig.liveSttStreamUrl) {
+      } else if (sttProvider === 'internal' && recorderConfig.liveSttStreamUrl) {
         setLiveStreamPreflight({
           status: 'checking',
           message: 'Direct STT kayıt sırasında bağlanacak...',
@@ -1462,6 +1465,7 @@ function App() {
       transcriptSessionIdRef.current = null;
       pendingLiveTranscriptEventsRef.current = [];
       const rec = await startRecordingWithTimeout(meetingId, deviceId, {
+        sttProvider,
         liveSttStreamUrl: liveSttStreamUrlForSession,
         liveSttContextTerms: meetingTitleContextTerms(meetingTitle),
         onLiveStreamReady: () => {
@@ -1858,6 +1862,9 @@ function App() {
             ) : recording ? (
               <>
                 <p className="control-copy">{paused ? 'Kayıt duraklatıldı.' : 'Kayıt sürüyor.'}</p>
+                <p className="provider-readback">
+                  Transkripsiyon: {sttProvider === 'speechmatics' ? 'Speechmatics' : 'Dahili STT'}
+                </p>
                 <button
                   className="secondary-action"
                   type="button"
@@ -1905,6 +1912,18 @@ function App() {
                     </button>
                   </div>
                 </div>
+                <label className="stt-provider-field" htmlFor="stt-provider">
+                  <span>Transkripsiyon sağlayıcısı</span>
+                  <select
+                    id="stt-provider"
+                    value={sttProvider}
+                    disabled={startPending || contractPending || showConsent}
+                    onChange={(event) => setSttProvider(event.target.value as SttProvider)}
+                  >
+                    <option value="internal">Dahili STT</option>
+                    <option value="speechmatics">Speechmatics</option>
+                  </select>
+                </label>
                 <div className="control-actions">
                   <button
                     className="primary-action"

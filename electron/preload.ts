@@ -136,8 +136,13 @@ const electronAPI = {
       meetingId: string,
       deviceId: string,
       contextTerms?: readonly string[],
-    ): Promise<{ sessionId: string; transcriptSessionId: string; captureId: string }> =>
-      ipcRenderer.invoke('audio:start', meetingId, deviceId, contextTerms),
+      sttProvider?: 'internal' | 'speechmatics',
+    ): Promise<{
+      sessionId: string;
+      transcriptSessionId: string;
+      captureId: string;
+      sttProvider?: 'internal' | 'speechmatics';
+    }> => ipcRenderer.invoke('audio:start', meetingId, deviceId, contextTerms, sttProvider),
     sendChunk: (payload: {
       captureId: string;
       bytes: Uint8Array;

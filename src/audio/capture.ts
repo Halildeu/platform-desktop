@@ -117,6 +117,7 @@ export async function testAudioCaptureWorklet(
 export interface Recorder {
   sessionId: string;
   transcriptSessionId: string | null;
+  sttProvider?: SttProvider;
   hasLoopback: boolean;
   gatewayActive?: boolean;
   gatewayError?: string | null;
@@ -130,6 +131,8 @@ export interface Recorder {
   isPaused: () => boolean;
   onError: (handler: (err: Error) => void) => void;
 }
+
+export type SttProvider = 'internal' | 'speechmatics';
 
 export interface RecorderStopResult {
   liveStt: LiveSttStopResult | null;
@@ -152,6 +155,7 @@ export interface RecorderStopResult {
 }
 
 export interface StartRecordingOptions {
+  sttProvider?: SttProvider;
   liveSttStreamUrl?: string | null;
   liveSttContextTerms?: readonly string[];
   onLiveStreamReady?: () => void;
@@ -406,11 +410,13 @@ export async function startRecording(
     sessionId: string;
     transcriptSessionId: string;
     captureId: string;
+    sttProvider?: SttProvider;
   } | null = null;
   if (!recorderStartupError) {
     try {
-      const gatewayStart =
-        options.liveSttContextTerms && options.liveSttContextTerms.length > 0
+      const gatewayStart = options.sttProvider
+        ? api.audio.start(meetingId, deviceId, options.liveSttContextTerms, options.sttProvider)
+        : options.liveSttContextTerms && options.liveSttContextTerms.length > 0
           ? api.audio.start(meetingId, deviceId, options.liveSttContextTerms)
           : api.audio.start(meetingId, deviceId);
       session = await withTimeout(
@@ -629,6 +635,7 @@ export async function startRecording(
   return {
     sessionId,
     transcriptSessionId: session?.transcriptSessionId ?? null,
+    sttProvider: session?.sttProvider ?? options.sttProvider ?? 'internal',
     hasLoopback: loopback !== null,
     gatewayActive: captureId !== null,
     gatewayError: recorderStartupError,

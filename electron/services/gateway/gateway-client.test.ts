@@ -200,14 +200,19 @@ describe('gateway-client HTTP fetch wrapper', () => {
   it('startSession posts session metadata as PCM16/16k/mono', async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
-      json: async () => ({ sessionId: 'SES-9', chunkUploadUrl: '/c', finishUrl: '/f' }),
+      json: async () => ({
+        sessionId: 'SES-9',
+        sttProvider: 'speechmatics',
+        chunkUploadUrl: '/c',
+        finishUrl: '/f',
+      }),
     });
     vi.stubGlobal('fetch', fetchMock);
 
     const info = await startSession(
       cfg,
       'JWT',
-      { meetingId, deviceId: 'dev1', language: 'tr' },
+      { meetingId, deviceId: 'dev1', language: 'tr', sttProvider: 'speechmatics' },
       'IK',
     );
     expect(info.sessionId).toBe('SES-9');
@@ -221,6 +226,7 @@ describe('gateway-client HTTP fetch wrapper', () => {
       audioFormat: 'PCM16',
       sampleRateHz: 16000,
       channels: 1,
+      sttProvider: 'speechmatics',
     });
   });
 
@@ -229,7 +235,7 @@ describe('gateway-client HTTP fetch wrapper', () => {
       'fetch',
       vi.fn().mockResolvedValue({
         ok: true,
-        json: async () => ({ sessionId: '../foreign' }),
+        json: async () => ({ sessionId: '../foreign', sttProvider: 'internal' }),
       }),
     );
 

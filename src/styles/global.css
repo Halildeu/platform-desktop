@@ -91,6 +91,42 @@ body {
   font-weight: 700;
 }
 
+.stt-provider-field {
+  display: grid;
+  gap: 6px;
+  margin: 0 0 14px;
+}
+
+.stt-provider-field > span {
+  color: #334155;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.stt-provider-field select {
+  width: 100%;
+  min-width: 0;
+  height: 38px;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  background: #ffffff;
+  color: #17202a;
+  font: inherit;
+  padding: 0 10px;
+}
+
+.stt-provider-field select:focus {
+  border-color: #0f766e;
+  box-shadow: 0 0 0 3px rgba(15, 118, 110, 0.12);
+  outline: none;
+}
+
+.provider-readback {
+  margin: -6px 0 14px;
+  color: #64748b;
+  font-size: 12px;
+}
+
 .meeting-create-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;

@@ -10,7 +10,7 @@ const otherMeetingId = '33333333-3333-4333-8333-333333333333';
 function mockFetch() {
   const fetchMock = vi.fn(async (url: string) => {
     if (url.endsWith('/sessions')) {
-      return { ok: true, json: async () => ({ sessionId: 'SES-1' }) };
+      return { ok: true, json: async () => ({ sessionId: 'SES-1', sttProvider: 'internal' }) };
     }
     if (url.endsWith('/finish')) {
       return {
@@ -62,7 +62,10 @@ describe('ChunkSender (seq state machine)', () => {
           name: 'TimeoutError',
         });
       }
-      return { ok: true, json: async () => ({ sessionId: 'SES-recovered' }) };
+      return {
+        ok: true,
+        json: async () => ({ sessionId: 'SES-recovered', sttProvider: 'internal' }),
+      };
     });
     vi.stubGlobal('fetch', fetchMock);
 
@@ -123,7 +126,7 @@ describe('ChunkSender (seq state machine)', () => {
     const seenSeq: string[] = [];
     const fetchMock = vi.fn(async (url: string, opts?: RequestInit) => {
       if (url.endsWith('/sessions')) {
-        return { ok: true, json: async () => ({ sessionId: 'SES-1' }) };
+        return { ok: true, json: async () => ({ sessionId: 'SES-1', sttProvider: 'internal' }) };
       }
       await new Promise((resolve) => {
         setTimeout(resolve, 5);
@@ -156,7 +159,7 @@ describe('ChunkSender (seq state machine)', () => {
     const finishKeys: string[] = [];
     const fetchMock = vi.fn(async (url: string, opts?: RequestInit) => {
       if (url.endsWith('/sessions')) {
-        return { ok: true, json: async () => ({ sessionId: 'SES-1' }) };
+        return { ok: true, json: async () => ({ sessionId: 'SES-1', sttProvider: 'internal' }) };
       }
       if (url.endsWith('/finish')) {
         finishKeys.push((opts?.headers as Record<string, string>)['Idempotency-Key']);
