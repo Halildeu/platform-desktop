@@ -24,6 +24,7 @@ import {
   CONSENT_LOCALE,
 } from './components/ConsentDialog';
 import { MeetingResultPicker, type RecentMeetingsStatus } from './components/MeetingResultPicker';
+import { MeetingPlanner, type MeetingPlan } from './components/MeetingPlanner';
 import { SummaryPanel, type CanonicalResultLoadStatus } from './components/SummaryPanel';
 import type {
   MeetingIntelligenceReadOutcome,
@@ -517,7 +518,7 @@ function App() {
   const [startPending, setStartPending] = useState(false);
   const [contractPending, setContractPending] = useState(false);
   const [sttProvider, setSttProvider] = useState<SttProvider>('internal');
-  const [meetingTitleDraft, setMeetingTitleDraft] = useState('');
+  const [meetingPlannerOpen, setMeetingPlannerOpen] = useState(false);
   const [showConsent, setShowConsent] = useState(false);
   const [recorderConfig, setRecorderConfig] = useState<RecorderRuntimeConfig | null>(null);
   const [transcriptSession, setTranscriptSession] = useState(initialTranscriptSession);
@@ -1292,13 +1293,8 @@ function App() {
     setMeetingIntelligence((current) => bindMeetingIntelligenceTarget(current, { meetingId }));
   };
 
-  const handleCreateMeetingContract = async (): Promise<void> => {
+  const handleCreateMeetingContract = async (plan: MeetingPlan): Promise<void> => {
     if (contractPendingRef.current) {
-      return;
-    }
-    const title = meetingTitleDraft.trim();
-    if (!title) {
-      setError('Toplantı başlığı gerekli.');
       return;
     }
     contractPendingRef.current = true;
@@ -1306,17 +1302,18 @@ function App() {
     setStatus('');
     setContractPending(true);
     try {
-      const scheduledStart = new Date().toISOString();
       const contract = await window.electronAPI?.meeting.createContract({
-        title,
-        description: 'Meeting Intelligence desktop recording.',
-        scheduledStart,
+        title: plan.title,
+        description: plan.description || 'Meeting Intelligence desktop recording.',
+        scheduledStart: plan.scheduledStart,
+        scheduledEnd: plan.scheduledEnd,
       });
       if (!contract) {
         throw new Error('meeting-service response empty');
       }
+      setSttProvider(plan.sttProvider);
       bindReadyMeetingContract(contract);
-      setMeetingTitleDraft('');
+      setMeetingPlannerOpen(false);
     } catch (e) {
       const message = `Meeting contract oluşturulamadı: ${(e as Error).message}`;
       setError(message);
@@ -1838,6 +1835,8 @@ function App() {
     );
   };
 
+  const hasMeetingWorkspace = loggedIn && Boolean(meetingIntelligence.meetingId);
+
   return (
     <div className="app-root">
       <header className="app-header">
@@ -1845,7 +1844,10 @@ function App() {
         <span className="version">v{version}</span>
       </header>
       <main className="app-main">
-        <section className="recorder-shell" aria-label="Recorder çalışma alanı">
+        <section
+          className={`recorder-shell${hasMeetingWorkspace ? '' : ' recorder-shell--planning'}`}
+          aria-label="Toplantı çalışma alanı"
+        >
           <div className="control-panel">
             {!loggedIn ? (
               <>
@@ -1884,63 +1886,52 @@ function App() {
               </>
             ) : (
               <>
-                {recorderConfig?.ready ? (
-                  <p className="control-copy">Giriş yapıldı. Toplantı kaydına hazır.</p>
-                ) : (
-                  <p className="control-copy">
-                    Giriş yapıldı. Kayıt için canonical meetingId bekleniyor.
-                  </p>
-                )}
-                <div className="meeting-create-field">
-                  <label htmlFor="meeting-title">Toplantı başlığı</label>
-                  <div className="meeting-create-row">
-                    <input
-                      id="meeting-title"
-                      type="text"
-                      value={meetingTitleDraft}
-                      maxLength={512}
-                      autoComplete="off"
-                      onChange={(event) => setMeetingTitleDraft(event.target.value)}
-                    />
-                    <button
-                      className="secondary-action"
-                      type="button"
-                      onClick={() => void handleCreateMeetingContract()}
-                      disabled={contractPending || meetingTitleDraft.trim().length === 0}
-                    >
-                      {contractPending ? 'Oluşturuluyor...' : 'Yeni toplantı oluştur'}
-                    </button>
+                <div className="meeting-launchpad-heading">
+                  <div>
+                    <h2>{hasMeetingWorkspace ? 'Toplantı hazır' : 'Toplantılar'}</h2>
+                    <p>
+                      {hasMeetingWorkspace
+                        ? 'Kaydı başlatabilir veya başka bir toplantı seçebilirsiniz.'
+                        : 'Mevcut bir toplantıyı seçin veya yeni bir toplantı planlayın.'}
+                    </p>
                   </div>
+                  <MeetingPlanner
+                    open={meetingPlannerOpen}
+                    pending={contractPending}
+                    sttProvider={sttProvider}
+                    onOpen={() => setMeetingPlannerOpen(true)}
+                    onCancel={() => setMeetingPlannerOpen(false)}
+                    onSubmit={(plan) => void handleCreateMeetingContract(plan)}
+                  />
                 </div>
-                <label className="stt-provider-field" htmlFor="stt-provider">
-                  <span>Transkripsiyon sağlayıcısı</span>
-                  <select
-                    id="stt-provider"
-                    value={sttProvider}
-                    disabled={startPending || contractPending || showConsent}
-                    onChange={(event) => setSttProvider(event.target.value as SttProvider)}
-                  >
-                    <option value="internal">Dahili STT</option>
-                    <option value="speechmatics">Speechmatics</option>
-                  </select>
-                </label>
-                <div className="control-actions">
-                  <button
-                    className="primary-action"
-                    type="button"
-                    onClick={handleRecordClick}
-                    disabled={!recorderConfig?.ready || startPending || contractPending}
-                  >
-                    {startPending ? 'Başlatılıyor...' : 'Kaydet'}
-                  </button>
-                  <button
-                    className="secondary-action"
-                    type="button"
-                    onClick={() => void handleLogout()}
-                  >
-                    Çıkış
-                  </button>
-                </div>
+                {hasMeetingWorkspace && !meetingPlannerOpen ? (
+                  <>
+                    <p className="control-copy">Giriş yapıldı. Toplantı kaydına hazır.</p>
+                    <label className="stt-provider-field" htmlFor="stt-provider">
+                      <span>Transkripsiyon sağlayıcısı</span>
+                      <select
+                        id="stt-provider"
+                        value={sttProvider}
+                        disabled={startPending || contractPending || showConsent}
+                        onChange={(event) => setSttProvider(event.target.value as SttProvider)}
+                      >
+                        <option value="internal">Dahili STT</option>
+                        <option value="speechmatics">Speechmatics</option>
+                      </select>
+                    </label>
+                    <div className="control-actions">
+                      <button
+                        className="primary-action"
+                        type="button"
+                        aria-label="Kaydet"
+                        onClick={handleRecordClick}
+                        disabled={!recorderConfig?.ready || startPending || contractPending}
+                      >
+                        {startPending ? 'Başlatılıyor...' : 'Kaydı başlat'}
+                      </button>
+                    </div>
+                  </>
+                ) : null}
               </>
             )}
             {status ? <p className="status">{status}</p> : null}
@@ -1960,9 +1951,18 @@ function App() {
                 onRefresh={() => void loadRecentMeetings()}
               />
             ) : null}
-            {claims ? (
-              <section className="claims">
-                <h2>JWT claim özeti</h2>
+            {loggedIn ? (
+              <button
+                className="secondary-action logout-action"
+                type="button"
+                onClick={() => void handleLogout()}
+              >
+                Çıkış
+              </button>
+            ) : null}
+            {claims && hasMeetingWorkspace ? (
+              <details className="claims diagnostics">
+                <summary>Teknik oturum ayrıntıları</summary>
                 <dl>
                   <dt>aud</dt>
                   <dd>{Array.isArray(claims.aud) ? claims.aud.join(', ') : (claims.aud ?? '-')}</dd>
@@ -1977,88 +1977,90 @@ function App() {
                   <dt>exp</dt>
                   <dd>{claims.exp ? new Date(claims.exp * 1000).toLocaleString() : '-'}</dd>
                 </dl>
-              </section>
+              </details>
             ) : null}
           </div>
-          <div className="intelligence-workspace">
-            <TranscriptPanel
-              session={transcriptSession}
-              stream={{
-                directConfigured: Boolean(
-                  recorderConfig?.gatewayLiveStreamEnabled || recorderConfig?.liveSttStreamUrl,
-                ),
-                mode: recorderConfig?.gatewayLiveStreamEnabled
-                  ? 'gateway-live'
-                  : recorderConfig?.liveSttStreamUrl
-                    ? 'direct-live'
-                    : 'gateway-events',
-                directReady: liveStreamReady,
-                directStatus: liveStreamStatus,
-                directActive: liveStreamActive,
-                audioRms,
-                audioActive: typeof audioRms === 'number' && audioRms >= ACTIVE_AUDIO_RMS,
-                lastAudioAtMs,
-                disabledReason: recorderConfig?.liveSttStreamReason ?? null,
-                preflight: liveStreamPreflight,
-                capturePreflight: audioCapturePreflight,
-                onPreflight: recording ? undefined : () => void handleLiveStreamPreflight(),
-              }}
-              onSegmentTextChange={handleTranscriptSegmentTextChange}
-              onSegmentReviewed={handleTranscriptSegmentReviewed}
-            />
-            <SummaryPanel
-              intelligence={meetingIntelligence}
-              transcript={transcriptSession}
-              autoSubmitMeetingAi={meetingIntelligence.status === 'waiting'}
-              canonicalResultStatus={canonicalResultStatus}
-              canonicalResultError={canonicalResultError}
-              canonicalResultAutoRetrying={canonicalResultRetryReason !== 'disabled'}
-              onCanonicalResultRetry={
-                meetingIntelligence.meetingId
-                  ? () =>
-                      void loadCanonicalMeetingResult(meetingIntelligence.meetingId!, {
-                        pollUntilReady: true,
-                        previousAnalysisRunId: canonicalAnalysisRunBaseline(
-                          meetingIntelligence.result?.analysisRunId ?? null,
-                          canonicalRunBeforeRecordingRef.current?.meetingId ===
+          {hasMeetingWorkspace ? (
+            <div className="intelligence-workspace">
+              <TranscriptPanel
+                session={transcriptSession}
+                stream={{
+                  directConfigured: Boolean(
+                    recorderConfig?.gatewayLiveStreamEnabled || recorderConfig?.liveSttStreamUrl,
+                  ),
+                  mode: recorderConfig?.gatewayLiveStreamEnabled
+                    ? 'gateway-live'
+                    : recorderConfig?.liveSttStreamUrl
+                      ? 'direct-live'
+                      : 'gateway-events',
+                  directReady: liveStreamReady,
+                  directStatus: liveStreamStatus,
+                  directActive: liveStreamActive,
+                  audioRms,
+                  audioActive: typeof audioRms === 'number' && audioRms >= ACTIVE_AUDIO_RMS,
+                  lastAudioAtMs,
+                  disabledReason: recorderConfig?.liveSttStreamReason ?? null,
+                  preflight: liveStreamPreflight,
+                  capturePreflight: audioCapturePreflight,
+                  onPreflight: recording ? undefined : () => void handleLiveStreamPreflight(),
+                }}
+                onSegmentTextChange={handleTranscriptSegmentTextChange}
+                onSegmentReviewed={handleTranscriptSegmentReviewed}
+              />
+              <SummaryPanel
+                intelligence={meetingIntelligence}
+                transcript={transcriptSession}
+                autoSubmitMeetingAi={meetingIntelligence.status === 'waiting'}
+                canonicalResultStatus={canonicalResultStatus}
+                canonicalResultError={canonicalResultError}
+                canonicalResultAutoRetrying={canonicalResultRetryReason !== 'disabled'}
+                onCanonicalResultRetry={
+                  meetingIntelligence.meetingId
+                    ? () =>
+                        void loadCanonicalMeetingResult(meetingIntelligence.meetingId!, {
+                          pollUntilReady: true,
+                          previousAnalysisRunId: canonicalAnalysisRunBaseline(
+                            meetingIntelligence.result?.analysisRunId ?? null,
+                            canonicalRunBeforeRecordingRef.current?.meetingId ===
+                              meetingIntelligence.meetingId
+                              ? canonicalRunBeforeRecordingRef.current.analysisRunId
+                              : null,
+                          ),
+                          generatedNotBeforeMs:
+                            canonicalRunBeforeRecordingRef.current?.meetingId ===
                             meetingIntelligence.meetingId
-                            ? canonicalRunBeforeRecordingRef.current.analysisRunId
-                            : null,
-                        ),
-                        generatedNotBeforeMs:
-                          canonicalRunBeforeRecordingRef.current?.meetingId ===
-                          meetingIntelligence.meetingId
-                            ? canonicalRunBeforeRecordingRef.current.recordingStartedAtMs
-                            : null,
-                        resetDurableBackoff: true,
-                      })
-                  : undefined
-              }
-              onMeetingAiSubmitted={() => {
-                if (meetingIntelligence.meetingId) {
-                  void loadCanonicalMeetingResult(meetingIntelligence.meetingId, {
-                    pollUntilReady: true,
-                    previousAnalysisRunId: canonicalAnalysisRunBaseline(
-                      meetingIntelligence.result?.analysisRunId ?? null,
-                      canonicalRunBeforeRecordingRef.current?.meetingId ===
-                        meetingIntelligence.meetingId
-                        ? canonicalRunBeforeRecordingRef.current.analysisRunId
-                        : null,
-                    ),
-                    generatedNotBeforeMs:
-                      canonicalRunBeforeRecordingRef.current?.meetingId ===
-                      meetingIntelligence.meetingId
-                        ? canonicalRunBeforeRecordingRef.current.recordingStartedAtMs
-                        : null,
-                    resetDurableBackoff: true,
-                  });
+                              ? canonicalRunBeforeRecordingRef.current.recordingStartedAtMs
+                              : null,
+                          resetDurableBackoff: true,
+                        })
+                    : undefined
                 }
-              }}
-              onMeetingAiError={(message) =>
-                setMeetingIntelligence((current) => failMeetingIntelligence(current, message))
-              }
-            />
-          </div>
+                onMeetingAiSubmitted={() => {
+                  if (meetingIntelligence.meetingId) {
+                    void loadCanonicalMeetingResult(meetingIntelligence.meetingId, {
+                      pollUntilReady: true,
+                      previousAnalysisRunId: canonicalAnalysisRunBaseline(
+                        meetingIntelligence.result?.analysisRunId ?? null,
+                        canonicalRunBeforeRecordingRef.current?.meetingId ===
+                          meetingIntelligence.meetingId
+                          ? canonicalRunBeforeRecordingRef.current.analysisRunId
+                          : null,
+                      ),
+                      generatedNotBeforeMs:
+                        canonicalRunBeforeRecordingRef.current?.meetingId ===
+                        meetingIntelligence.meetingId
+                          ? canonicalRunBeforeRecordingRef.current.recordingStartedAtMs
+                          : null,
+                      resetDurableBackoff: true,
+                    });
+                  }
+                }}
+                onMeetingAiError={(message) =>
+                  setMeetingIntelligence((current) => failMeetingIntelligence(current, message))
+                }
+              />
+            </div>
+          ) : null}
         </section>
       </main>
       {showConsent ? (

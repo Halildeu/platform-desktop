@@ -54,7 +54,7 @@ export function MeetingResultPicker({
     <section className="meeting-result-picker" aria-labelledby="meeting-result-picker-title">
       <div className="meeting-result-picker-header">
         <div>
-          <h2 id="meeting-result-picker-title">Toplantı çıktıları</h2>
+          <h2 id="meeting-result-picker-title">Toplantı listesi</h2>
           <p>
             {status === 'ready'
               ? `${meetings.length} gösteriliyor${
@@ -81,8 +81,9 @@ export function MeetingResultPicker({
       ) : null}
 
       <label className="meeting-result-picker-field">
-        <span>Görüntülenecek toplantı</span>
+        <span>Toplantı seçin</span>
         <select
+          aria-label="Görüntülenecek toplantı"
           value={selectedMeetingId ?? ''}
           onChange={(event) => {
             if (event.target.value) {
@@ -111,18 +112,23 @@ export function MeetingResultPicker({
         </select>
       </label>
 
-      <dl className="meeting-targets">
-        <div>
-          <dt>Görüntülenen</dt>
-          <dd>{shortMeetingId(selectedMeetingId)}</dd>
-        </div>
-        <div>
-          <dt>Kayıt hedefi</dt>
-          <dd>{shortMeetingId(recordingMeetingId)}</dd>
-        </div>
-      </dl>
-      {targetsDiffer ? (
-        <p className="meeting-target-note">Geçmiş çıktı açık; aktif kayıt hedefi değişmedi.</p>
+      {selectedMeetingId ? (
+        <details className="meeting-target-details">
+          <summary>Teknik hedefler</summary>
+          <dl className="meeting-targets">
+            <div>
+              <dt>Görüntülenen</dt>
+              <dd>{shortMeetingId(selectedMeetingId)}</dd>
+            </div>
+            <div>
+              <dt>Kayıt hedefi</dt>
+              <dd>{shortMeetingId(recordingMeetingId)}</dd>
+            </div>
+          </dl>
+          {targetsDiffer ? (
+            <p className="meeting-target-note">Geçmiş çıktı açık; aktif kayıt hedefi değişmedi.</p>
+          ) : null}
+        </details>
       ) : null}
       {selectionLocked ? (
         <p className="meeting-target-note">
