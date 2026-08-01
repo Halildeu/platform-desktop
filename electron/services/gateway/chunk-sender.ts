@@ -13,6 +13,7 @@ import {
   newIdempotencyKey,
   sendChunk,
   startSession,
+  type SttProvider,
 } from './gateway-client.js';
 
 export type SessionState = 'idle' | 'active' | 'finished';
@@ -31,6 +32,7 @@ export class ChunkSender {
   private state: SessionState = 'idle';
   private tail: Promise<unknown> = Promise.resolve();
   private failed: Error | null = null;
+  private sttProvider: SttProvider | null = null;
 
   constructor(
     private readonly cfg: GatewayConfig,
@@ -46,11 +48,16 @@ export class ChunkSender {
     return this.seq + 1;
   }
 
+  getSttProvider(): SttProvider | null {
+    return this.sttProvider;
+  }
+
   async start(
     meetingId: string,
     deviceId: string,
     language = 'tr',
     idempotencyKey = newIdempotencyKey(),
+    sttProvider: SttProvider = 'internal',
   ): Promise<string> {
     if (this.state === 'active') {
       throw new Error('session already active');
@@ -59,7 +66,12 @@ export class ChunkSender {
     let info: Awaited<ReturnType<typeof startSession>> | null = null;
     for (let attempt = 1; attempt <= START_MAX_ATTEMPTS; attempt += 1) {
       try {
-        info = await startSession(this.cfg, jwt, { meetingId, deviceId, language }, idempotencyKey);
+        info = await startSession(
+          this.cfg,
+          jwt,
+          { meetingId, deviceId, language, sttProvider },
+          idempotencyKey,
+        );
         break;
       } catch (error) {
         if (error instanceof GatewaySessionStartRejectedError) {
@@ -82,6 +94,7 @@ export class ChunkSender {
     this.sessionId = info.sessionId;
     this.seq = -1;
     this.failed = null;
+    this.sttProvider = info.sttProvider;
     this.tail = Promise.resolve();
     this.state = 'active';
     return info.sessionId;

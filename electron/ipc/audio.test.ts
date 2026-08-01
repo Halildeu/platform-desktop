@@ -433,7 +433,7 @@ describe('audio IPC recorder consent gate', () => {
       consentTextHash,
       locale: 'tr-TR',
     });
-    expect(mocks.senderStart).toHaveBeenCalledWith(meetingId, deviceId, 'tr', 'IK-1');
+    expect(mocks.senderStart).toHaveBeenCalledWith(meetingId, deviceId, 'tr', 'IK-1', 'internal');
     expect(mocks.recordConsent.mock.invocationCallOrder[0]).toBeLessThan(
       mocks.senderStart.mock.invocationCallOrder[0],
     );
@@ -710,6 +710,7 @@ describe('audio IPC recorder consent gate', () => {
       sessionId: 'SES-new',
       transcriptSessionId: '33333333-3333-4333-8333-333333333333',
       captureId: expect.any(String),
+      sttProvider: 'internal',
     });
 
     expect(mocks.pendingLifecycles).toEqual([
@@ -791,6 +792,39 @@ describe('audio IPC recorder consent gate', () => {
       mocks.senderFinish.mock.invocationCallOrder[0],
     );
     expect(mocks.gatewayLiveStreamClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps Speechmatics sessions on the provider-selected REST path', async () => {
+    mocks.loadRecorderRuntimeConfig.mockReturnValue({
+      meetingId,
+      deviceId,
+      ready: true,
+      reason: null,
+      liveSttStreamUrl: null,
+      liveSttStreamReason: null,
+      gatewayLiveStreamEnabled: true,
+    });
+    await acceptConsent();
+
+    const started = (await startHandler()(
+      { sender: { id: 8, send: vi.fn() } },
+      meetingId,
+      deviceId,
+      [],
+      'speechmatics',
+    )) as { captureId: string; sttProvider: string };
+
+    expect(started.sttProvider).toBe('speechmatics');
+    expect(mocks.senderStart).toHaveBeenCalledWith(
+      meetingId,
+      deviceId,
+      'tr',
+      'IK-1',
+      'speechmatics',
+    );
+    expect(mocks.gatewayLiveStreamCtor).not.toHaveBeenCalled();
+
+    await finishHandler()({}, started.captureId);
   });
 
   it('rejects chunks larger than the bounded two-second PCM16 contract', async () => {

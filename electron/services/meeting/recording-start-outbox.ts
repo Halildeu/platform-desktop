@@ -8,12 +8,16 @@ const CAPTURE_ID_PATTERN =
 const IDENTIFIER_PATTERN = /^[A-Za-z0-9._:-]{1,128}$/;
 const IDEMPOTENCY_KEY_PATTERN = /^[a-f0-9]{32}$/;
 const LANGUAGE_PATTERN = /^[a-z]{2}(-[A-Z]{2})?$/;
+const STT_PROVIDER_PATTERN = /^(internal|speechmatics)$/;
+
+export type SttProvider = 'internal' | 'speechmatics';
 
 export interface PendingRecordingStart {
   meetingId: string;
   captureId: string;
   deviceId: string;
   language: string;
+  sttProvider: SttProvider;
   startedAt: string;
   idempotencyKey: string;
   gatewayFinishIdempotencyKey: string;
@@ -50,6 +54,10 @@ function validate(value: unknown): PendingRecordingStart {
   if (typeof record.language !== 'string' || !LANGUAGE_PATTERN.test(record.language)) {
     throw new Error('pending recording start language is invalid');
   }
+  const sttProvider = record.sttProvider ?? 'internal';
+  if (typeof sttProvider !== 'string' || !STT_PROVIDER_PATTERN.test(sttProvider)) {
+    throw new Error('pending recording start sttProvider is invalid');
+  }
   if (
     typeof record.idempotencyKey !== 'string' ||
     !IDEMPOTENCY_KEY_PATTERN.test(record.idempotencyKey)
@@ -70,6 +78,7 @@ function validate(value: unknown): PendingRecordingStart {
     captureId: record.captureId,
     deviceId: record.deviceId,
     language: record.language,
+    sttProvider: sttProvider as SttProvider,
     startedAt: new Date(record.startedAt).toISOString(),
     idempotencyKey: record.idempotencyKey,
     gatewayFinishIdempotencyKey: record.gatewayFinishIdempotencyKey,

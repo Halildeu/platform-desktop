@@ -21,6 +21,7 @@ import {
   newIdempotencyKey,
   recordConsent,
   startSession,
+  type SttProvider,
   type TranscriptGatewayEvent,
 } from '../services/gateway/gateway-client.js';
 import {
@@ -77,6 +78,7 @@ interface ActiveRecording {
   captureId: string;
   meetingId: string;
   externalSessionId: string;
+  sttProvider: SttProvider;
   canonicalStartedAt: string;
   canonicalEndedAt: string | null;
   gatewayFinished: boolean;
@@ -159,6 +161,16 @@ function requireLocale(value: unknown): string {
     throw new Error('locale must be ISO language or language-region');
   }
   return locale;
+}
+
+function requireSttProvider(value: unknown): SttProvider {
+  if (value === undefined) {
+    return 'internal';
+  }
+  if (value !== 'internal' && value !== 'speechmatics') {
+    throw new Error('sttProvider must be internal or speechmatics');
+  }
+  return value;
 }
 
 function requireActive(captureId: unknown): ActiveRecording {
@@ -399,6 +411,7 @@ async function recoverPendingStart(intent: PendingRecordingStart): Promise<void>
         meetingId: intent.meetingId,
         deviceId: intent.deviceId,
         language: intent.language,
+        sttProvider: intent.sttProvider,
       },
       intent.idempotencyKey,
     );
@@ -757,7 +770,13 @@ export function registerAudioIpc(): void {
       meetingId: unknown,
       deviceId: unknown,
       contextTerms: unknown,
-    ): Promise<{ sessionId: string; transcriptSessionId: string; captureId: string }> => {
+      sttProvider: unknown,
+    ): Promise<{
+      sessionId: string;
+      transcriptSessionId: string;
+      captureId: string;
+      sttProvider: SttProvider;
+    }> => {
       if (!pendingConsent) {
         throw new Error('consent required before recording');
       }
@@ -783,6 +802,7 @@ export function registerAudioIpc(): void {
         const normalizedMeetingId = requireMeetingId(meetingId);
         const normalizedDeviceId = requireIdentifier(deviceId, 'deviceId');
         const normalizedContextTerms = normalizeGatewayLiveContextTerms(contextTerms);
+        const normalizedSttProvider = requireSttProvider(sttProvider);
         pendingConsent = null;
         const captureId = randomUUID();
         const cfg = loadGatewayConfig();
@@ -814,6 +834,7 @@ export function registerAudioIpc(): void {
           captureId,
           deviceId: normalizedDeviceId,
           language: 'tr',
+          sttProvider: normalizedSttProvider,
           startedAt: canonicalStartedAt,
           idempotencyKey: startIdempotencyKey,
           gatewayFinishIdempotencyKey,
@@ -825,6 +846,7 @@ export function registerAudioIpc(): void {
             normalizedDeviceId,
             startIntent.language,
             startIntent.idempotencyKey,
+            startIntent.sttProvider,
           );
         } catch (error) {
           if (error instanceof GatewaySessionStartRejectedError) {
@@ -915,7 +937,10 @@ export function registerAudioIpc(): void {
         const send = rendererSend(event);
         const runtimeConfig = loadRecorderRuntimeConfig();
         let liveStream: GatewayLiveStream | null = null;
-        if (runtimeConfig.gatewayLiveStreamEnabled === true) {
+        if (
+          runtimeConfig.gatewayLiveStreamEnabled === true &&
+          startIntent.sttProvider === 'internal'
+        ) {
           liveStream = new GatewayLiveStream({
             cfg,
             sessionId,
@@ -965,6 +990,7 @@ export function registerAudioIpc(): void {
           captureId,
           meetingId: normalizedMeetingId,
           externalSessionId: sessionId,
+          sttProvider: startIntent.sttProvider,
           canonicalStartedAt,
           canonicalEndedAt: null,
           gatewayFinished: false,
@@ -979,7 +1005,12 @@ export function registerAudioIpc(): void {
           rendererSend: send,
         };
         setRecordingActive(true);
-        return { sessionId, transcriptSessionId, captureId };
+        return {
+          sessionId,
+          transcriptSessionId,
+          captureId,
+          sttProvider: startIntent.sttProvider,
+        };
       } catch (err) {
         clearCapturePermissionLease();
         throw err;

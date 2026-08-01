@@ -193,7 +193,10 @@ export interface StartSessionArgs {
   meetingId: string;
   deviceId: string;
   language: string;
+  sttProvider?: SttProvider;
 }
+
+export type SttProvider = 'internal' | 'speechmatics';
 
 export interface RecordConsentArgs {
   meetingId: string;
@@ -215,6 +218,7 @@ export interface RecordConsentInfo {
 
 export interface SessionInfo {
   sessionId: string;
+  sttProvider: SttProvider;
   chunkUploadUrl?: string;
   finishUrl?: string;
 }
@@ -293,13 +297,17 @@ function parseConsentInfo(value: unknown, expected: RecordConsentArgs): RecordCo
   };
 }
 
-function parseSessionInfo(value: unknown): SessionInfo {
+function parseSessionInfo(value: unknown, expectedProvider: SttProvider): SessionInfo {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     throw new Error('startSession response is not an object');
   }
   const record = value as Record<string, unknown>;
+  if (record.sttProvider !== expectedProvider) {
+    throw new Error('startSession response sttProvider mismatch');
+  }
   return {
     sessionId: requiredGatewayIdentifier(record.sessionId, 'startSession sessionId'),
+    sttProvider: expectedProvider,
   };
 }
 
@@ -419,6 +427,7 @@ export async function startSession(
   args: StartSessionArgs,
   idempotencyKey: string = newIdempotencyKey(),
 ): Promise<SessionInfo> {
+  const sttProvider = args.sttProvider ?? 'internal';
   return fetchWithTimeout(
     sessionsUrl(cfg),
     {
@@ -432,6 +441,7 @@ export async function startSession(
         meetingId: args.meetingId,
         deviceId: args.deviceId,
         language: args.language,
+        sttProvider,
         audioFormat: 'PCM16',
         sampleRateHz: 16000,
         channels: 1,
@@ -445,7 +455,7 @@ export async function startSession(
           res.status,
         );
       }
-      return parseSessionInfo(await res.json());
+      return parseSessionInfo(await res.json(), sttProvider);
     },
   );
 }

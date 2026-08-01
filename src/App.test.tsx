@@ -435,6 +435,48 @@ describe('App recorder readiness', () => {
     expect(screen.getByRole('button', { name: 'Kaydet' })).toBeEnabled();
   });
 
+  it('Speechmatics secimini kayit oturumuna tasir ve internal streami acmaz', async () => {
+    installElectronApiMock({
+      meetingId: '22222222-2222-4222-8222-222222222222',
+      deviceId: 'desktop-1',
+      ready: true,
+      reason: null,
+      gatewayLiveStreamEnabled: true,
+      liveSttStreamUrl: 'ws://127.0.0.1:18220/ws/stream',
+      liveSttStreamReason: null,
+    });
+    mockReadyCaptureWorklet();
+    vi.mocked(startRecording).mockResolvedValue({
+      sessionId: 'SES-SPEECHMATICS',
+      transcriptSessionId: 'SES-SPEECHMATICS',
+      sttProvider: 'speechmatics',
+      hasLoopback: false,
+      stop: vi.fn(),
+      onError: vi.fn(),
+      pause: vi.fn(),
+      resume: vi.fn(),
+      isPaused: vi.fn(() => false),
+    });
+
+    render(<App />);
+    const provider = await screen.findByRole('combobox', {
+      name: 'Transkripsiyon sağlayıcısı',
+    });
+    await userEvent.selectOptions(provider, 'speechmatics');
+    fireEvent.click(screen.getByRole('button', { name: 'Kaydet' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Onaylıyorum — Kaydı Başlat' }));
+
+    await screen.findByText('Transkripsiyon: Speechmatics');
+    expect(startRecording).toHaveBeenCalledWith(
+      '22222222-2222-4222-8222-222222222222',
+      'desktop-1',
+      expect.objectContaining({
+        sttProvider: 'speechmatics',
+        liveSttStreamUrl: null,
+      }),
+    );
+  });
+
   it('meeting contract olusturma cagrilarini hizli tekrar tiklamada tekillestirir', async () => {
     installElectronApiMock({
       meetingId: null,

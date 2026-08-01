@@ -23,12 +23,26 @@ const intent: PendingRecordingStart = {
   captureId: '33333333-3333-4333-8333-333333333333',
   deviceId: 'desktop-1',
   language: 'tr',
+  sttProvider: 'internal',
   startedAt: '2026-07-17T08:43:20Z',
   idempotencyKey: '0123456789abcdef0123456789abcdef',
   gatewayFinishIdempotencyKey: 'fedcba9876543210fedcba9876543210',
 };
 
 describe('RecordingStartOutbox', () => {
+  it('migrates a pre-provider pending intent to the internal default', () => {
+    const primary = new MemoryStore();
+    const recovery = new MemoryStore();
+    const legacy = structuredClone(intent) as Partial<PendingRecordingStart>;
+    delete legacy.sttProvider;
+    primary.snapshot = { generation: 1, pending: [legacy as PendingRecordingStart] };
+    recovery.snapshot = structuredClone(primary.snapshot);
+
+    expect(new RecordingStartOutbox(primary, recovery).list()).toEqual([
+      { ...intent, startedAt: '2026-07-17T08:43:20.000Z' },
+    ]);
+  });
+
   it('persists only bounded metadata before a gateway start can be acknowledged', () => {
     const primary = new MemoryStore();
     const recovery = new MemoryStore();
