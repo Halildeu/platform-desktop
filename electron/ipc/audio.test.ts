@@ -49,6 +49,7 @@ const mocks = vi.hoisted(() => {
     gatewayLiveStreamCtor: vi.fn(),
     gatewayLiveStreamStart: vi.fn(async () => undefined),
     gatewayLiveStreamSend: vi.fn(() => true),
+    gatewayLiveStreamSendRealtime: vi.fn(() => true),
     gatewayLiveStreamStop: vi.fn(async () => ({
       state: 'drained',
       reason: 'eof-ack',
@@ -170,6 +171,7 @@ vi.mock('../services/gateway/gateway-live-stream', () => ({
 
     start = mocks.gatewayLiveStreamStart;
     sendAfterRestAccepted = mocks.gatewayLiveStreamSend;
+    sendRealtimeFrame = mocks.gatewayLiveStreamSendRealtime;
     stop = mocks.gatewayLiveStreamStop;
     close = mocks.gatewayLiveStreamClose;
   },
@@ -361,6 +363,12 @@ function chunkHandler(): (...args: unknown[]) => Promise<unknown> {
   return chunk;
 }
 
+function liveFrameHandler(): (...args: unknown[]) => Promise<unknown> {
+  const frame = mocks.handlers.get('audio:live-frame');
+  if (!frame) throw new Error('audio:live-frame handler not registered');
+  return frame;
+}
+
 function finishHandler(): (...args: unknown[]) => Promise<unknown> {
   const finish = mocks.handlers.get('audio:finish');
   if (!finish) throw new Error('audio:finish handler not registered');
@@ -433,7 +441,14 @@ describe('audio IPC recorder consent gate', () => {
       consentTextHash,
       locale: 'tr-TR',
     });
-    expect(mocks.senderStart).toHaveBeenCalledWith(meetingId, deviceId, 'tr', 'IK-1', 'internal');
+    expect(mocks.senderStart).toHaveBeenCalledWith(
+      meetingId,
+      deviceId,
+      'tr',
+      'IK-1',
+      'internal',
+      'balanced',
+    );
     expect(mocks.recordConsent.mock.invocationCallOrder[0]).toBeLessThan(
       mocks.senderStart.mock.invocationCallOrder[0],
     );
@@ -711,6 +726,7 @@ describe('audio IPC recorder consent gate', () => {
       transcriptSessionId: '33333333-3333-4333-8333-333333333333',
       captureId: expect.any(String),
       sttProvider: 'internal',
+      transcriptionMode: 'balanced',
     });
 
     expect(mocks.pendingLifecycles).toEqual([
@@ -821,8 +837,56 @@ describe('audio IPC recorder consent gate', () => {
       'tr',
       'IK-1',
       'speechmatics',
+      'balanced',
     );
     expect(mocks.gatewayLiveStreamCtor).not.toHaveBeenCalled();
+
+    await finishHandler()({}, started.captureId);
+  });
+
+  it('opens Speechmatics live transport and sends realtime frames independently of REST', async () => {
+    mocks.loadRecorderRuntimeConfig.mockReturnValue({
+      meetingId,
+      deviceId,
+      ready: true,
+      reason: null,
+      liveSttStreamUrl: null,
+      liveSttStreamReason: null,
+      gatewayLiveStreamEnabled: true,
+    });
+    await acceptConsent();
+
+    const started = (await startHandler()(
+      { sender: { id: 9, send: vi.fn() } },
+      meetingId,
+      deviceId,
+      [],
+      'speechmatics',
+      'realtime',
+    )) as { captureId: string };
+    expect(mocks.senderStart).toHaveBeenCalledWith(
+      meetingId,
+      deviceId,
+      'tr',
+      'IK-1',
+      'speechmatics',
+      'realtime',
+    );
+    const restBytes = new Uint8Array([0, 0]);
+    await chunkHandler()(
+      {},
+      { captureId: started.captureId, bytes: restBytes, startedAtMs: 1781820000000 },
+    );
+    expect(mocks.gatewayLiveStreamSend).not.toHaveBeenCalled();
+
+    const liveBytes = new Uint8Array(3_200);
+    await expect(
+      liveFrameHandler()(
+        {},
+        { captureId: started.captureId, bytes: liveBytes, capturedAtMs: 1781820000100 },
+      ),
+    ).resolves.toEqual({ accepted: true });
+    expect(mocks.gatewayLiveStreamSendRealtime).toHaveBeenCalledWith(liveBytes, 1781820000100);
 
     await finishHandler()({}, started.captureId);
   });

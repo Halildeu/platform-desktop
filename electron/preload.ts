@@ -137,17 +137,32 @@ const electronAPI = {
       deviceId: string,
       contextTerms?: readonly string[],
       sttProvider?: 'internal' | 'speechmatics',
+      transcriptionMode?: 'balanced' | 'realtime',
     ): Promise<{
       sessionId: string;
       transcriptSessionId: string;
       captureId: string;
       sttProvider?: 'internal' | 'speechmatics';
-    }> => ipcRenderer.invoke('audio:start', meetingId, deviceId, contextTerms, sttProvider),
+      transcriptionMode?: 'balanced' | 'realtime';
+    }> =>
+      ipcRenderer.invoke(
+        'audio:start',
+        meetingId,
+        deviceId,
+        contextTerms,
+        sttProvider,
+        transcriptionMode,
+      ),
     sendChunk: (payload: {
       captureId: string;
       bytes: Uint8Array;
       startedAtMs: number;
     }): Promise<{ seq: number }> => ipcRenderer.invoke('audio:chunk', payload),
+    sendLiveFrame: (payload: {
+      captureId: string;
+      bytes: Uint8Array;
+      capturedAtMs: number;
+    }): Promise<{ accepted: boolean }> => ipcRenderer.invoke('audio:live-frame', payload),
     finish: (captureId: string): Promise<AudioFinishResult> =>
       ipcRenderer.invoke('audio:finish', captureId),
     abort: (captureId: string): Promise<{ ok: boolean }> =>

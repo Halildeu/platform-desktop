@@ -177,6 +177,7 @@ function installElectronApiMock(): void {
         captureId: 'CAP-1',
       }),
       sendChunk: vi.fn(),
+      sendLiveFrame: vi.fn().mockResolvedValue({ accepted: true }),
       finish: vi.fn().mockResolvedValue({ ok: true, liveTranscript: null }),
       abort: vi.fn().mockResolvedValue({ ok: true }),
       rendererUnloaded: vi.fn(),
@@ -385,6 +386,43 @@ describe('startRecording', () => {
     for (const frame of ws?.sent ?? []) {
       expect(frame).toBeInstanceOf(ArrayBuffer);
       expect((frame as ArrayBuffer).byteLength).toBe(6_400);
+    }
+    expect(window.electronAPI?.audio.sendChunk).not.toHaveBeenCalled();
+
+    await recorder.stop();
+  });
+
+  it('streams 100ms PCM16 frames to the gateway in realtime mode without waiting for REST', async () => {
+    installElectronApiMock();
+    setUserAgent('Mozilla/5.0 (Macintosh; Intel Mac OS X 15_5)');
+    installBrowserAudioMocks();
+
+    const recorder = await startRecording('meeting-1', 'desktop-1', {
+      sttProvider: 'speechmatics',
+      transcriptionMode: 'realtime',
+    });
+    const captureNode = FakeAudioWorkletNode.lastInstance;
+
+    captureNode?.port.onmessage?.({
+      data: new Float32Array(48_000).fill(0.1),
+    } as MessageEvent<Float32Array>);
+    await Promise.resolve();
+
+    expect(window.electronAPI?.audio.start).toHaveBeenCalledWith(
+      'meeting-1',
+      'desktop-1',
+      undefined,
+      'speechmatics',
+      'realtime',
+    );
+    expect(window.electronAPI?.audio.sendLiveFrame).toHaveBeenCalledTimes(10);
+    for (const [frame] of vi.mocked(window.electronAPI!.audio.sendLiveFrame).mock.calls) {
+      expect(frame).toEqual({
+        captureId: 'CAP-1',
+        bytes: expect.any(Uint8Array),
+        capturedAtMs: expect.any(Number),
+      });
+      expect(frame.bytes).toHaveLength(3_200);
     }
     expect(window.electronAPI?.audio.sendChunk).not.toHaveBeenCalled();
 

@@ -429,7 +429,7 @@ export class GatewayLiveStream {
   // At most one budget-spending failure per socket generation.
   private faultedGeneration: number | null = null;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
-  private latestRestSequence = -1;
+  private latestSequence = -1;
   private ready = false;
   private stopping = false;
   private closed = false;
@@ -488,13 +488,26 @@ export class GatewayLiveStream {
   }
 
   sendAfterRestAccepted(pcm16: Uint8Array, chunkSeq: number, capturedAtMs: number): boolean {
+    return this.sendSequencedFrame(pcm16, chunkSeq, capturedAtMs, 'REST');
+  }
+
+  sendRealtimeFrame(pcm16: Uint8Array, capturedAtMs: number): boolean {
+    return this.sendSequencedFrame(pcm16, this.latestSequence + 1, capturedAtMs, 'realtime');
+  }
+
+  private sendSequencedFrame(
+    pcm16: Uint8Array,
+    chunkSeq: number,
+    capturedAtMs: number,
+    source: 'REST' | 'realtime',
+  ): boolean {
     if (!Number.isSafeInteger(chunkSeq) || chunkSeq < 0) {
       throw new Error('gateway live chunk sequence is invalid');
     }
-    if (chunkSeq !== this.latestRestSequence + 1) {
-      throw new Error('gateway REST chunk sequence is non-contiguous');
+    if (chunkSeq !== this.latestSequence + 1) {
+      throw new Error(`gateway ${source} chunk sequence is non-contiguous`);
     }
-    this.latestRestSequence = chunkSeq;
+    this.latestSequence = chunkSeq;
 
     if (this.stopping || this.closed) {
       return false;
@@ -524,7 +537,7 @@ export class GatewayLiveStream {
       this.settleStop = resolve;
     });
 
-    if (this.latestRestSequence < 0) {
+    if (this.latestSequence < 0) {
       this.finishStop({ state: 'drained', reason: 'no-audio', acknowledged: false });
       return this.stopPromise;
     }

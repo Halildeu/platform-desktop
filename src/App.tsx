@@ -6,6 +6,7 @@ import {
   type AudioCapturePreflightState,
   type Recorder,
   type SttProvider,
+  type TranscriptionMode,
   startRecording,
   testAudioCaptureWorklet,
 } from './audio/capture';
@@ -518,6 +519,7 @@ function App() {
   const [startPending, setStartPending] = useState(false);
   const [contractPending, setContractPending] = useState(false);
   const [sttProvider, setSttProvider] = useState<SttProvider>('internal');
+  const [transcriptionMode, setTranscriptionMode] = useState<TranscriptionMode>('realtime');
   const [meetingPlannerOpen, setMeetingPlannerOpen] = useState(false);
   const [showConsent, setShowConsent] = useState(false);
   const [recorderConfig, setRecorderConfig] = useState<RecorderRuntimeConfig | null>(null);
@@ -1325,6 +1327,7 @@ function App() {
         throw new Error('meeting-service response empty');
       }
       setSttProvider(plan.sttProvider);
+      setTranscriptionMode(plan.transcriptionMode);
       bindReadyMeetingContract(contract);
       setMeetingPlannerOpen(false);
     } catch (e) {
@@ -1417,6 +1420,15 @@ function App() {
       if (!recorderConfig?.ready || !recorderConfig.meetingId) {
         throw new Error(recorderConfig?.reason ?? MEETING_ID_MISSING_MESSAGE);
       }
+      if (
+        sttProvider === 'speechmatics' &&
+        transcriptionMode === 'realtime' &&
+        recorderConfig.gatewayLiveStreamEnabled !== true
+      ) {
+        throw new Error(
+          'Speechmatics Anlık modu için yetkili Gateway canlı akışı kullanılabilir değil.',
+        );
+      }
       let microphonePermission = await window.electronAPI?.audio.permissionStatus();
       if (microphonePermission?.status === 'not-determined') {
         microphonePermission = await window.electronAPI?.audio.requestPermission();
@@ -1434,8 +1446,13 @@ function App() {
         throw new Error(capturePreflight.message);
       }
       const liveSttStreamUrlForSession =
-        sttProvider === 'internal' ? recorderConfig.liveSttStreamUrl : null;
-      if (sttProvider === 'internal' && recorderConfig.gatewayLiveStreamEnabled) {
+        sttProvider === 'internal' && !recorderConfig.gatewayLiveStreamEnabled
+          ? recorderConfig.liveSttStreamUrl
+          : null;
+      if (
+        recorderConfig.gatewayLiveStreamEnabled &&
+        (sttProvider === 'internal' || transcriptionMode === 'realtime')
+      ) {
         setLiveStreamPreflight({
           status: 'checking',
           message: 'Yetkili Gateway canlı akışı oturumla bağlanıyor...',
@@ -1476,6 +1493,7 @@ function App() {
       pendingLiveTranscriptEventsRef.current = [];
       const rec = await startRecordingWithTimeout(meetingId, deviceId, {
         sttProvider,
+        transcriptionMode,
         liveSttStreamUrl: liveSttStreamUrlForSession,
         liveSttContextTerms: meetingTitleContextTerms(meetingTitle),
         onLiveStreamReady: () => {
@@ -1879,6 +1897,8 @@ function App() {
                 <p className="control-copy">{paused ? 'Kayıt duraklatıldı.' : 'Kayıt sürüyor.'}</p>
                 <p className="provider-readback">
                   Transkripsiyon: {sttProvider === 'speechmatics' ? 'Speechmatics' : 'Dahili STT'}
+                  {' · '}
+                  {transcriptionMode === 'realtime' ? 'Anlık' : 'Dengeli'}
                 </p>
                 <button
                   className="secondary-action"
@@ -1912,6 +1932,7 @@ function App() {
                     open={meetingPlannerOpen}
                     pending={contractPending}
                     sttProvider={sttProvider}
+                    transcriptionMode={transcriptionMode}
                     onOpen={() => setMeetingPlannerOpen(true)}
                     onCancel={() => setMeetingPlannerOpen(false)}
                     onSubmit={(plan) => void handleCreateMeetingContract(plan)}
@@ -1932,6 +1953,33 @@ function App() {
                         <option value="speechmatics">Speechmatics</option>
                       </select>
                     </label>
+                    <fieldset className="transcription-mode-field">
+                      <legend>Transkript görünümü</legend>
+                      <div className="segmented-control">
+                        <label>
+                          <input
+                            type="radio"
+                            name="workspace-transcription-mode"
+                            value="realtime"
+                            checked={transcriptionMode === 'realtime'}
+                            disabled={startPending || contractPending || showConsent}
+                            onChange={() => setTranscriptionMode('realtime')}
+                          />
+                          <span>Anlık</span>
+                        </label>
+                        <label>
+                          <input
+                            type="radio"
+                            name="workspace-transcription-mode"
+                            value="balanced"
+                            checked={transcriptionMode === 'balanced'}
+                            disabled={startPending || contractPending || showConsent}
+                            onChange={() => setTranscriptionMode('balanced')}
+                          />
+                          <span>Dengeli</span>
+                        </label>
+                      </div>
+                    </fieldset>
                     <div className="control-actions">
                       <button
                         className="primary-action"

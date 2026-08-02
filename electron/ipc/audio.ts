@@ -53,6 +53,7 @@ import {
 import { getValidAccessToken } from './auth.js';
 
 const MAX_CHUNK_BYTES = 16_000 * 2 * 2; // 2s @ 16kHz PCM16 mono.
+const MAX_LIVE_FRAME_BYTES = 16_000 * 2; // At most 1s @ 16kHz PCM16 mono.
 const ID_PATTERN = /^[A-Za-z0-9._:-]{1,128}$/;
 const MEETING_ID_PATTERN =
   /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
@@ -79,6 +80,7 @@ interface ActiveRecording {
   meetingId: string;
   externalSessionId: string;
   sttProvider: SttProvider;
+  transcriptionMode: TranscriptionMode;
   canonicalStartedAt: string;
   canonicalEndedAt: string | null;
   gatewayFinished: boolean;
@@ -169,6 +171,18 @@ function requireSttProvider(value: unknown): SttProvider {
   }
   if (value !== 'internal' && value !== 'speechmatics') {
     throw new Error('sttProvider must be internal or speechmatics');
+  }
+  return value;
+}
+
+type TranscriptionMode = 'balanced' | 'realtime';
+
+function requireTranscriptionMode(value: unknown): TranscriptionMode {
+  if (value === undefined) {
+    return 'balanced';
+  }
+  if (value !== 'balanced' && value !== 'realtime') {
+    throw new Error('transcriptionMode must be balanced or realtime');
   }
   return value;
 }
@@ -412,6 +426,7 @@ async function recoverPendingStart(intent: PendingRecordingStart): Promise<void>
         deviceId: intent.deviceId,
         language: intent.language,
         sttProvider: intent.sttProvider,
+        transcriptionMode: intent.transcriptionMode,
       },
       intent.idempotencyKey,
     );
@@ -677,6 +692,40 @@ function requireChunkPayload(payload: unknown): {
   return { captureId, bytes: record.bytes, startedAtMs: record.startedAtMs };
 }
 
+function requireLiveFramePayload(payload: unknown): {
+  captureId: string;
+  bytes: Uint8Array;
+  capturedAtMs: number;
+} {
+  if (!payload || typeof payload !== 'object') {
+    throw new Error('invalid live audio frame payload');
+  }
+  const frame = payload as { captureId?: unknown; bytes?: unknown; capturedAtMs?: unknown };
+  const captureId = requireText(frame.captureId, 'captureId');
+  if (!(frame.bytes instanceof Uint8Array)) {
+    throw new Error('live audio frame bytes must be Uint8Array');
+  }
+  if (
+    frame.bytes.byteLength === 0 ||
+    frame.bytes.byteLength > MAX_LIVE_FRAME_BYTES ||
+    (frame.bytes.byteLength & 1) !== 0
+  ) {
+    throw new Error(`live audio frame byte length out of bounds: ${frame.bytes.byteLength}`);
+  }
+  if (
+    typeof frame.capturedAtMs !== 'number' ||
+    !Number.isSafeInteger(frame.capturedAtMs) ||
+    frame.capturedAtMs < 0
+  ) {
+    throw new Error('capturedAtMs must be a non-negative safe integer');
+  }
+  return {
+    captureId,
+    bytes: frame.bytes,
+    capturedAtMs: frame.capturedAtMs,
+  };
+}
+
 export function registerAudioIpc(): void {
   ipcMain.on('audio:renderer-unloaded', (event): void => {
     unloadedRendererIds.add(event.sender.id);
@@ -771,11 +820,13 @@ export function registerAudioIpc(): void {
       deviceId: unknown,
       contextTerms: unknown,
       sttProvider: unknown,
+      transcriptionMode: unknown,
     ): Promise<{
       sessionId: string;
       transcriptSessionId: string;
       captureId: string;
       sttProvider: SttProvider;
+      transcriptionMode: TranscriptionMode;
     }> => {
       if (!pendingConsent) {
         throw new Error('consent required before recording');
@@ -803,6 +854,7 @@ export function registerAudioIpc(): void {
         const normalizedDeviceId = requireIdentifier(deviceId, 'deviceId');
         const normalizedContextTerms = normalizeGatewayLiveContextTerms(contextTerms);
         const normalizedSttProvider = requireSttProvider(sttProvider);
+        const normalizedTranscriptionMode = requireTranscriptionMode(transcriptionMode);
         pendingConsent = null;
         const captureId = randomUUID();
         const cfg = loadGatewayConfig();
@@ -835,6 +887,7 @@ export function registerAudioIpc(): void {
           deviceId: normalizedDeviceId,
           language: 'tr',
           sttProvider: normalizedSttProvider,
+          transcriptionMode: normalizedTranscriptionMode,
           startedAt: canonicalStartedAt,
           idempotencyKey: startIdempotencyKey,
           gatewayFinishIdempotencyKey,
@@ -847,6 +900,7 @@ export function registerAudioIpc(): void {
             startIntent.language,
             startIntent.idempotencyKey,
             startIntent.sttProvider,
+            startIntent.transcriptionMode,
           );
         } catch (error) {
           if (error instanceof GatewaySessionStartRejectedError) {
@@ -939,7 +993,7 @@ export function registerAudioIpc(): void {
         let liveStream: GatewayLiveStream | null = null;
         if (
           runtimeConfig.gatewayLiveStreamEnabled === true &&
-          startIntent.sttProvider === 'internal'
+          (startIntent.sttProvider === 'internal' || normalizedTranscriptionMode === 'realtime')
         ) {
           liveStream = new GatewayLiveStream({
             cfg,
@@ -991,6 +1045,7 @@ export function registerAudioIpc(): void {
           meetingId: normalizedMeetingId,
           externalSessionId: sessionId,
           sttProvider: startIntent.sttProvider,
+          transcriptionMode: normalizedTranscriptionMode,
           canonicalStartedAt,
           canonicalEndedAt: null,
           gatewayFinished: false,
@@ -1010,6 +1065,7 @@ export function registerAudioIpc(): void {
           transcriptSessionId,
           captureId,
           sttProvider: startIntent.sttProvider,
+          transcriptionMode: startIntent.transcriptionMode,
         };
       } catch (err) {
         clearCapturePermissionLease();
@@ -1033,9 +1089,28 @@ export function registerAudioIpc(): void {
     }
     recording.lastStartedAtMs = chunk.startedAtMs;
     const seq = await recording.sender.send(chunk.bytes, chunk.startedAtMs);
-    recording.liveStream?.sendAfterRestAccepted(chunk.bytes, seq, chunk.startedAtMs);
+    if (recording.transcriptionMode === 'balanced') {
+      recording.liveStream?.sendAfterRestAccepted(chunk.bytes, seq, chunk.startedAtMs);
+    }
     return { seq };
   });
+
+  ipcMain.handle(
+    'audio:live-frame',
+    async (_e, payload: unknown): Promise<{ accepted: boolean }> => {
+      if (finishing) {
+        return { accepted: false };
+      }
+      const frame = requireLiveFramePayload(payload);
+      const recording = requireActive(frame.captureId);
+      if (recording.transcriptionMode !== 'realtime' || !recording.liveStream) {
+        return { accepted: false };
+      }
+      return {
+        accepted: recording.liveStream.sendRealtimeFrame(frame.bytes, frame.capturedAtMs),
+      };
+    },
+  );
 
   ipcMain.handle('audio:finish', async (_e, captureId: unknown): Promise<AudioFinishResult> => {
     const recording = requireActive(captureId);

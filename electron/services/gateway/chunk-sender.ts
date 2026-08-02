@@ -14,6 +14,7 @@ import {
   sendChunk,
   startSession,
   type SttProvider,
+  type TranscriptionMode,
 } from './gateway-client.js';
 
 export type SessionState = 'idle' | 'active' | 'finished';
@@ -58,6 +59,7 @@ export class ChunkSender {
     language = 'tr',
     idempotencyKey = newIdempotencyKey(),
     sttProvider: SttProvider = 'internal',
+    transcriptionMode: TranscriptionMode = 'balanced',
   ): Promise<string> {
     if (this.state === 'active') {
       throw new Error('session already active');
@@ -69,7 +71,7 @@ export class ChunkSender {
         info = await startSession(
           this.cfg,
           jwt,
-          { meetingId, deviceId, language, sttProvider },
+          { meetingId, deviceId, language, sttProvider, transcriptionMode },
           idempotencyKey,
         );
         break;

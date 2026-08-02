@@ -194,9 +194,11 @@ export interface StartSessionArgs {
   deviceId: string;
   language: string;
   sttProvider?: SttProvider;
+  transcriptionMode?: TranscriptionMode;
 }
 
 export type SttProvider = 'internal' | 'speechmatics';
+export type TranscriptionMode = 'balanced' | 'realtime';
 
 export interface RecordConsentArgs {
   meetingId: string;
@@ -219,6 +221,7 @@ export interface RecordConsentInfo {
 export interface SessionInfo {
   sessionId: string;
   sttProvider: SttProvider;
+  transcriptionMode: TranscriptionMode;
   chunkUploadUrl?: string;
   finishUrl?: string;
 }
@@ -297,7 +300,11 @@ function parseConsentInfo(value: unknown, expected: RecordConsentArgs): RecordCo
   };
 }
 
-function parseSessionInfo(value: unknown, expectedProvider: SttProvider): SessionInfo {
+function parseSessionInfo(
+  value: unknown,
+  expectedProvider: SttProvider,
+  expectedMode: TranscriptionMode,
+): SessionInfo {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     throw new Error('startSession response is not an object');
   }
@@ -305,9 +312,14 @@ function parseSessionInfo(value: unknown, expectedProvider: SttProvider): Sessio
   if (record.sttProvider !== expectedProvider) {
     throw new Error('startSession response sttProvider mismatch');
   }
+  const actualMode = record.transcriptionMode ?? 'balanced';
+  if (actualMode !== expectedMode) {
+    throw new Error('startSession response transcriptionMode mismatch');
+  }
   return {
     sessionId: requiredGatewayIdentifier(record.sessionId, 'startSession sessionId'),
     sttProvider: expectedProvider,
+    transcriptionMode: expectedMode,
   };
 }
 
@@ -428,6 +440,7 @@ export async function startSession(
   idempotencyKey: string = newIdempotencyKey(),
 ): Promise<SessionInfo> {
   const sttProvider = args.sttProvider ?? 'internal';
+  const transcriptionMode = args.transcriptionMode ?? 'balanced';
   return fetchWithTimeout(
     sessionsUrl(cfg),
     {
@@ -442,6 +455,7 @@ export async function startSession(
         deviceId: args.deviceId,
         language: args.language,
         sttProvider,
+        transcriptionMode,
         audioFormat: 'PCM16',
         sampleRateHz: 16000,
         channels: 1,
@@ -455,7 +469,7 @@ export async function startSession(
           res.status,
         );
       }
-      return parseSessionInfo(await res.json(), sttProvider);
+      return parseSessionInfo(await res.json(), sttProvider, transcriptionMode);
     },
   );
 }

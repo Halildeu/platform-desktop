@@ -203,6 +203,7 @@ describe('gateway-client HTTP fetch wrapper', () => {
       json: async () => ({
         sessionId: 'SES-9',
         sttProvider: 'speechmatics',
+        transcriptionMode: 'realtime',
         chunkUploadUrl: '/c',
         finishUrl: '/f',
       }),
@@ -212,7 +213,13 @@ describe('gateway-client HTTP fetch wrapper', () => {
     const info = await startSession(
       cfg,
       'JWT',
-      { meetingId, deviceId: 'dev1', language: 'tr', sttProvider: 'speechmatics' },
+      {
+        meetingId,
+        deviceId: 'dev1',
+        language: 'tr',
+        sttProvider: 'speechmatics',
+        transcriptionMode: 'realtime',
+      },
       'IK',
     );
     expect(info.sessionId).toBe('SES-9');
@@ -227,6 +234,7 @@ describe('gateway-client HTTP fetch wrapper', () => {
       sampleRateHz: 16000,
       channels: 1,
       sttProvider: 'speechmatics',
+      transcriptionMode: 'realtime',
     });
   });
 
