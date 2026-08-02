@@ -399,9 +399,65 @@ function transcriptTimelineStartedAtMs(event: {
   return eventStartedAtMs;
 }
 
-function transcriptSegmentIdFromGateway(event: {
+export function transcriptTimelineEndedAtMs(event: {
+  chunkStartedAtMs: number;
+  windowStartedAtMs?: number | null;
+  windowEndedAtMs?: number | null;
+  audioDurationMs?: number | null;
+  receivedAtMs?: number | null;
+}): number | null {
+  const startedAtMs = transcriptTimelineStartedAtMs(event);
+  const sourceStartedAtMs =
+    typeof event.windowStartedAtMs === 'number' && Number.isFinite(event.windowStartedAtMs)
+      ? event.windowStartedAtMs
+      : event.chunkStartedAtMs;
+  const clockWasRebased = startedAtMs !== sourceStartedAtMs;
+  const audioDurationMs =
+    typeof event.audioDurationMs === 'number' &&
+    Number.isFinite(event.audioDurationMs) &&
+    event.audioDurationMs > 0
+      ? event.audioDurationMs
+      : null;
+
+  if (clockWasRebased) {
+    return audioDurationMs === null ? null : startedAtMs + audioDurationMs;
+  }
+  if (
+    typeof event.windowEndedAtMs === 'number' &&
+    Number.isFinite(event.windowEndedAtMs) &&
+    event.windowEndedAtMs > startedAtMs
+  ) {
+    return audioDurationMs === null
+      ? event.windowEndedAtMs
+      : Math.min(event.windowEndedAtMs, startedAtMs + audioDurationMs);
+  }
+  return audioDurationMs === null ? null : startedAtMs + audioDurationMs;
+}
+
+export function transcriptTimelineTimingBasis(event: {
+  chunkStartedAtMs: number;
+  windowStartedAtMs?: number | null;
+  windowEndedAtMs?: number | null;
+  audioDurationMs?: number | null;
+  receivedAtMs?: number | null;
+}): 'source' | 'delivery' | undefined {
+  const endedAtMs = transcriptTimelineEndedAtMs(event);
+  if (endedAtMs === null) {
+    return undefined;
+  }
+  const sourceStartedAtMs =
+    typeof event.windowStartedAtMs === 'number' && Number.isFinite(event.windowStartedAtMs)
+      ? event.windowStartedAtMs
+      : null;
+  return sourceStartedAtMs !== null && transcriptTimelineStartedAtMs(event) === sourceStartedAtMs
+    ? 'source'
+    : 'delivery';
+}
+
+export function transcriptSegmentIdFromGateway(event: {
   eventId: string;
   sessionId: string;
+  transportEpoch?: number | null;
   windowSeq?: number | null;
 }): string {
   if (
@@ -409,6 +465,13 @@ function transcriptSegmentIdFromGateway(event: {
     Number.isFinite(event.windowSeq) &&
     event.windowSeq >= 0
   ) {
+    if (event.eventId.startsWith(`live-${event.sessionId}-`)) {
+      const transportEpoch =
+        typeof event.transportEpoch === 'number' && Number.isSafeInteger(event.transportEpoch)
+          ? event.transportEpoch
+          : 0;
+      return `gateway:${event.sessionId}:live:${transportEpoch}:window:${event.windowSeq}`;
+    }
     return `gateway:${event.sessionId}:window:${event.windowSeq}`;
   }
   return event.eventId;
@@ -482,6 +545,8 @@ function applyLiveTranscriptEvent(
     id: event.id,
     speakerLabel: 'Konuşmacı',
     startedAtMs: event.startedAtMs,
+    endedAtMs: event.endedAtMs ?? null,
+    timingBasis: event.timingBasis,
     status: transcriptStatusFromLiveStream(event.status),
     text: event.text,
     source: 'direct-stream',
@@ -1173,10 +1238,13 @@ function App() {
           transcriptStatusFromGateway(event.status) === 'utterance'
             ? collapseAssembledFragments(current, event.sourceEventIds)
             : current;
+        const endedAtMs = transcriptTimelineEndedAtMs(event);
         return upsertTranscriptSegment(base, {
           id: transcriptSegmentIdFromGateway(event),
           speakerLabel: 'Konuşmacı',
           startedAtMs: transcriptTimelineStartedAtMs(event),
+          endedAtMs,
+          timingBasis: transcriptTimelineTimingBasis(event),
           status: transcriptStatusFromGateway(event.status),
           text: event.text,
           source: 'gateway-events',

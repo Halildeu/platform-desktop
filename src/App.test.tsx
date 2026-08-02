@@ -36,6 +36,9 @@ import App, {
   CANONICAL_RESULT_REQUEST_TIMEOUT_MS,
   LIFECYCLE_RECONCILIATION_DURABLE_RETRY_MS,
   canonicalResultDurableRetryDelayMs,
+  transcriptSegmentIdFromGateway,
+  transcriptTimelineEndedAtMs,
+  transcriptTimelineTimingBasis,
 } from './App';
 
 interface TestTranscriptGatewayEvent {
@@ -263,6 +266,85 @@ function mockReadyLiveSttStream(): void {
 }
 
 describe('App recorder readiness', () => {
+  it('does not mix source and client clock domains when gateway duration is unavailable', () => {
+    const sourceStart = 1781821000000;
+    const receivedAt = 1781820000000;
+
+    expect(
+      transcriptTimelineEndedAtMs({
+        chunkStartedAtMs: sourceStart,
+        windowStartedAtMs: sourceStart,
+        windowEndedAtMs: sourceStart + 60_000,
+        audioDurationMs: null,
+        receivedAtMs: receivedAt,
+      }),
+    ).toBeNull();
+    expect(
+      transcriptTimelineEndedAtMs({
+        chunkStartedAtMs: sourceStart,
+        windowStartedAtMs: sourceStart,
+        windowEndedAtMs: sourceStart + 60_000,
+        audioDurationMs: 900,
+        receivedAtMs: receivedAt,
+      }),
+    ).toBe(receivedAt + 900);
+
+    expect(
+      transcriptTimelineEndedAtMs({
+        chunkStartedAtMs: receivedAt + 400,
+        windowStartedAtMs: receivedAt,
+        windowEndedAtMs: receivedAt + 60_000,
+        audioDurationMs: null,
+        receivedAtMs: receivedAt + 500,
+      }),
+    ).toBe(receivedAt + 60_000);
+    expect(
+      transcriptTimelineEndedAtMs({
+        chunkStartedAtMs: receivedAt,
+        windowStartedAtMs: receivedAt,
+        windowEndedAtMs: receivedAt + 60_000,
+        audioDurationMs: 500,
+        receivedAtMs: receivedAt + 500,
+      }),
+    ).toBe(receivedAt + 500);
+    expect(
+      transcriptTimelineTimingBasis({
+        chunkStartedAtMs: sourceStart,
+        windowStartedAtMs: sourceStart,
+        windowEndedAtMs: sourceStart + 900,
+        audioDurationMs: 900,
+        receivedAtMs: receivedAt,
+      }),
+    ).toBe('delivery');
+    expect(
+      transcriptTimelineTimingBasis({
+        chunkStartedAtMs: receivedAt,
+        windowStartedAtMs: receivedAt,
+        windowEndedAtMs: receivedAt + 900,
+        audioDurationMs: 900,
+        receivedAtMs: receivedAt + 1000,
+      }),
+    ).toBe('source');
+  });
+
+  it('maps gateway window sequence to the canonical numeric-order segment identity', () => {
+    expect(
+      transcriptSegmentIdFromGateway({
+        eventId: 'provider-event-id',
+        sessionId: 'SES-ORDER',
+        windowSeq: 10,
+      }),
+    ).toBe('gateway:SES-ORDER:window:10');
+    expect(
+      transcriptSegmentIdFromGateway({
+        eventId: 'live-SES-ORDER-4-10',
+        sessionId: 'SES-ORDER',
+        transportEpoch: 4,
+        windowSeq: 10,
+      }),
+    ).toBe('gateway:SES-ORDER:live:4:window:10');
+  });
+
   it('keeps retrying a durable lifecycle after the bounded startup window', async () => {
     installElectronApiMock({
       meetingId: null,
@@ -1126,14 +1208,14 @@ describe('App recorder readiness', () => {
         eventId: '1781820000000-0',
         sessionId: 'SES-1',
         meetingId: '22222222-2222-4222-8222-222222222222',
-        chunkSeq: 4,
+        chunkSeq: 599,
         chunkStartedAtMs: 1781820000400,
         windowSeq: 0,
         firstChunkSeq: 0,
-        lastChunkSeq: 4,
+        lastChunkSeq: 599,
         windowStartedAtMs: 1781820000000,
-        windowEndedAtMs: 1781820000500,
-        audioDurationMs: 500,
+        windowEndedAtMs: 1781820060000,
+        audioDurationMs: 60_000,
         flushReason: 'partial',
         text: 'Merhaba',
         textLength: 7,
@@ -1147,14 +1229,14 @@ describe('App recorder readiness', () => {
         eventId: '1781820001000-0',
         sessionId: 'SES-1',
         meetingId: '22222222-2222-4222-8222-222222222222',
-        chunkSeq: 8,
+        chunkSeq: 599,
         chunkStartedAtMs: 1781820000800,
         windowSeq: 0,
         firstChunkSeq: 0,
-        lastChunkSeq: 8,
+        lastChunkSeq: 599,
         windowStartedAtMs: 1781820000000,
-        windowEndedAtMs: 1781820001000,
-        audioDurationMs: 1000,
+        windowEndedAtMs: 1781820060000,
+        audioDurationMs: 60_000,
         flushReason: 'partial',
         text: 'Merhaba nasılsın',
         textLength: 16,
@@ -1165,6 +1247,30 @@ describe('App recorder readiness', () => {
     expect(await screen.findByText('Merhaba nasılsın')).toBeInTheDocument();
     expect(screen.queryByText('Merhaba')).not.toBeInTheDocument();
     expect(screen.getAllByRole('article')).toHaveLength(1);
+
+    act(() => {
+      transcriptEventHandler?.({
+        eventId: '1781820060100-1',
+        sessionId: 'SES-1',
+        meetingId: '22222222-2222-4222-8222-222222222222',
+        chunkSeq: 9,
+        chunkStartedAtMs: 1781820060100,
+        windowSeq: 1,
+        firstChunkSeq: 9,
+        lastChunkSeq: 9,
+        windowStartedAtMs: 1781820060100,
+        windowEndedAtMs: 1781820061000,
+        audioDurationMs: 900,
+        flushReason: 'partial',
+        text: 'Gündeme devam',
+        textLength: 14,
+        status: 'FINAL',
+      });
+    });
+
+    expect(await screen.findByText('Gündeme devam')).toBeInTheDocument();
+    expect(screen.getAllByRole('article')).toHaveLength(1);
+    expect(screen.getByText('2 paragraf')).toBeInTheDocument();
   });
 
   it('yetkili Gateway canlı eventini direct URL olmadan görünür ve aktif yapar', async () => {
@@ -1474,7 +1580,14 @@ describe('App recorder readiness', () => {
     expect(
       await screen.findByText('Revize gateway final satırı da fallback olarak kabul edilir.'),
     ).toBeInTheDocument();
-    expect(screen.getAllByRole('article')).toHaveLength(3);
+    const turns = screen.getAllByRole('article');
+    expect(turns).toHaveLength(2);
+    expect(turns[1]).toHaveTextContent(
+      'Merhaba sesim geliyor mu bir sürü eksik var yine. Veriler gelmiyor sanki.',
+    );
+    expect(turns[1]).toHaveTextContent(
+      'Revize gateway final satırı da fallback olarak kabul edilir.',
+    );
   });
 
   it('direct live STT ilk partial eventini recorder session hazirlanana kadar tamponlar', async () => {

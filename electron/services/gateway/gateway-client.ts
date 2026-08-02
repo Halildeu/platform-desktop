@@ -360,6 +360,7 @@ export interface TranscriptGatewayEvent {
   meetingId: string;
   chunkSeq: number;
   chunkStartedAtMs: number;
+  transportEpoch?: number | null;
   windowSeq?: number | null;
   firstChunkSeq?: number | null;
   lastChunkSeq?: number | null;

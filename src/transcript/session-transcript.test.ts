@@ -145,6 +145,244 @@ describe('session transcript state', () => {
     });
   });
 
+  it('preserves arrival order for equal timestamps and updates an existing segment in place', () => {
+    const recording = startTranscriptSession(initialTranscriptSession(), {
+      sessionId: 'SES-EQUAL-TIME',
+      meetingId: '22222222-2222-4222-8222-222222222222',
+      deviceId: 'desktop-1',
+      hasLoopback: false,
+      startedAtMs: 1000,
+    });
+    const firstArrival = upsertTranscriptSegment(recording, {
+      id: 'event:z-first',
+      speakerLabel: 'Konuşmacı',
+      startedAtMs: 2000,
+      status: 'draft',
+      text: 'İlk gelen',
+    });
+    const secondArrival = upsertTranscriptSegment(firstArrival, {
+      id: 'event:a-second',
+      speakerLabel: 'Konuşmacı',
+      startedAtMs: 2000,
+      status: 'final',
+      text: 'İkinci gelen',
+    });
+    const updatedFirst = upsertTranscriptSegment(secondArrival, {
+      id: 'event:z-first',
+      speakerLabel: 'Konuşmacı',
+      startedAtMs: 2000,
+      status: 'final',
+      text: 'İlk gelen güncellendi',
+    });
+
+    expect(updatedFirst.segments.map((segment) => segment.id)).toEqual([
+      'event:z-first',
+      'event:a-second',
+    ]);
+    expect(updatedFirst.segments[0].text).toBe('İlk gelen güncellendi');
+  });
+
+  it('uses the same numeric gateway window order for state and durable source packages', () => {
+    const recording = startTranscriptSession(initialTranscriptSession(), {
+      sessionId: 'SES-WINDOW-ORDER',
+      meetingId: '22222222-2222-4222-8222-222222222222',
+      deviceId: 'desktop-1',
+      hasLoopback: false,
+      startedAtMs: 1000,
+    });
+    const withWindowTen = upsertTranscriptSegment(recording, {
+      id: 'gateway:SES-WINDOW-ORDER:window:10',
+      speakerLabel: 'Konuşmacı',
+      startedAtMs: 2000,
+      status: 'final',
+      text: 'Onuncu pencere',
+      source: 'gateway-events',
+    });
+    const withWindowTwo = upsertTranscriptSegment(withWindowTen, {
+      id: 'gateway:SES-WINDOW-ORDER:window:2',
+      speakerLabel: 'Konuşmacı',
+      startedAtMs: 2000,
+      status: 'final',
+      text: 'İkinci pencere',
+      source: 'gateway-events',
+    });
+
+    expect(withWindowTwo.segments.map((segment) => segment.id)).toEqual([
+      'gateway:SES-WINDOW-ORDER:window:2',
+      'gateway:SES-WINDOW-ORDER:window:10',
+    ]);
+    expect(buildMeetingAiSourcePackage(withWindowTwo, 3000).package.request.transcript).toBe(
+      'İkinci pencere\nOnuncu pencere',
+    );
+  });
+
+  it('orders live gateway windows numerically only inside the same transport epoch', () => {
+    const recording = startTranscriptSession(initialTranscriptSession(), {
+      sessionId: 'SES-LIVE-WINDOW-ORDER',
+      meetingId: '22222222-2222-4222-8222-222222222222',
+      deviceId: 'desktop-1',
+      hasLoopback: false,
+      startedAtMs: 1000,
+    });
+    const withWindowTen = upsertTranscriptSegment(recording, {
+      id: 'gateway:SES-LIVE-WINDOW-ORDER:live:3:window:10',
+      speakerLabel: 'Konuşmacı',
+      startedAtMs: 2000,
+      status: 'final',
+      text: 'Onuncu canlı pencere',
+      source: 'gateway-events',
+    });
+    const withWindowTwo = upsertTranscriptSegment(withWindowTen, {
+      id: 'gateway:SES-LIVE-WINDOW-ORDER:live:3:window:2',
+      speakerLabel: 'Konuşmacı',
+      startedAtMs: 2000,
+      status: 'final',
+      text: 'İkinci canlı pencere',
+      source: 'gateway-events',
+    });
+    const withNextEpoch = upsertTranscriptSegment(withWindowTwo, {
+      id: 'gateway:SES-LIVE-WINDOW-ORDER:live:4:window:0',
+      speakerLabel: 'Konuşmacı',
+      startedAtMs: 2000,
+      status: 'final',
+      text: 'Yeni epoch',
+      source: 'gateway-events',
+    });
+
+    expect(withNextEpoch.segments.map((segment) => segment.id)).toEqual([
+      'gateway:SES-LIVE-WINDOW-ORDER:live:3:window:2',
+      'gateway:SES-LIVE-WINDOW-ORDER:live:3:window:10',
+      'gateway:SES-LIVE-WINDOW-ORDER:live:4:window:0',
+    ]);
+  });
+
+  it('preserves a known source end when a later revision omits timing metadata', () => {
+    const recording = startTranscriptSession(initialTranscriptSession(), {
+      sessionId: 'SES-END-PRESERVE',
+      meetingId: '22222222-2222-4222-8222-222222222222',
+      deviceId: 'desktop-1',
+      hasLoopback: false,
+      startedAtMs: 1000,
+    });
+    const timed = upsertTranscriptSegment(recording, {
+      id: 'gateway:timed',
+      speakerLabel: 'Konuşmacı',
+      startedAtMs: 2000,
+      endedAtMs: 3500,
+      timingBasis: 'source',
+      status: 'draft',
+      text: 'Zamanlı taslak',
+      source: 'gateway-events',
+    });
+    const final = upsertTranscriptSegment(timed, {
+      id: 'gateway:timed',
+      speakerLabel: 'Konuşmacı',
+      startedAtMs: 2000,
+      endedAtMs: null,
+      timingBasis: 'delivery',
+      status: 'final',
+      text: 'Zamanı korunan final',
+      source: 'gateway-events',
+    });
+
+    expect(final.segments[0]).toMatchObject({
+      endedAtMs: 3500,
+      timingBasis: 'source',
+    });
+  });
+
+  it('preserves a known source pair when a later end omits its timing basis', () => {
+    const recording = startTranscriptSession(initialTranscriptSession(), {
+      sessionId: 'SES-END-BASIS',
+      meetingId: '22222222-2222-4222-8222-222222222222',
+      deviceId: 'desktop-1',
+      hasLoopback: false,
+      startedAtMs: 1000,
+    });
+    const sourceTimed = upsertTranscriptSegment(recording, {
+      id: 'gateway:timed-basis',
+      speakerLabel: 'Konuşmacı',
+      startedAtMs: 2000,
+      endedAtMs: 3500,
+      timingBasis: 'source',
+      status: 'draft',
+      text: 'Kaynak zamanlı taslak',
+      source: 'gateway-events',
+    });
+    const revised = upsertTranscriptSegment(sourceTimed, {
+      id: 'gateway:timed-basis',
+      speakerLabel: 'Konuşmacı',
+      startedAtMs: 2000,
+      endedAtMs: 5000,
+      status: 'final',
+      text: 'Yeni bitişli final',
+      source: 'gateway-events',
+    });
+
+    expect(revised.segments[0]).toMatchObject({
+      endedAtMs: 3500,
+      timingBasis: 'source',
+    });
+  });
+
+  it('defaults an initially unlabelled end timestamp to delivery timing', () => {
+    const recording = startTranscriptSession(initialTranscriptSession(), {
+      sessionId: 'SES-INSERT-BASIS',
+      meetingId: '22222222-2222-4222-8222-222222222222',
+      deviceId: 'desktop-1',
+      hasLoopback: false,
+      startedAtMs: 1000,
+    });
+    const inserted = upsertTranscriptSegment(recording, {
+      id: 'gateway:insert-basis',
+      speakerLabel: 'Konuşmacı',
+      startedAtMs: 2000,
+      endedAtMs: 5000,
+      status: 'final',
+      text: 'Etiketsiz bitişli ilk segment',
+      source: 'gateway-events',
+    });
+
+    expect(inserted.segments[0]).toMatchObject({
+      endedAtMs: 5000,
+      timingBasis: 'delivery',
+    });
+  });
+
+  it('drops an old end pair when a revision moves the start without a new end', () => {
+    const recording = startTranscriptSession(initialTranscriptSession(), {
+      sessionId: 'SES-MOVED-START',
+      meetingId: '22222222-2222-4222-8222-222222222222',
+      deviceId: 'desktop-1',
+      hasLoopback: false,
+      startedAtMs: 1000,
+    });
+    const sourceTimed = upsertTranscriptSegment(recording, {
+      id: 'gateway:moved-start',
+      speakerLabel: 'Konuşmacı',
+      startedAtMs: 2000,
+      endedAtMs: 3500,
+      timingBasis: 'source',
+      status: 'draft',
+      text: 'İlk kaynak zamanı',
+      source: 'gateway-events',
+    });
+    const moved = upsertTranscriptSegment(sourceTimed, {
+      id: 'gateway:moved-start',
+      speakerLabel: 'Konuşmacı',
+      startedAtMs: 2500,
+      status: 'final',
+      text: 'Başlangıcı taşınan final',
+      source: 'gateway-events',
+    });
+
+    expect(moved.segments[0]).toMatchObject({
+      startedAtMs: 2500,
+      endedAtMs: null,
+      timingBasis: undefined,
+    });
+  });
+
   it('keeps a visible direct-stream draft when the same segment regresses to a short fragment', () => {
     const recording = startTranscriptSession(initialTranscriptSession(), {
       sessionId: 'SES-1',
@@ -158,6 +396,8 @@ describe('session transcript state', () => {
       id: 'stream:1',
       speakerLabel: 'Konuşmacı',
       startedAtMs: 2000,
+      endedAtMs: 2800,
+      timingBasis: 'source',
       status: 'draft',
       source: 'direct-stream',
       text: 'Merhaba sesim geliyor mu beni duyuyor musun',
@@ -169,6 +409,8 @@ describe('session transcript state', () => {
       id: 'stream:1',
       speakerLabel: 'Konuşmacı',
       startedAtMs: 2400,
+      endedAtMs: 3600,
+      timingBasis: 'delivery',
       status: 'draft',
       source: 'direct-stream',
       text: 'beni duyuyor',
@@ -184,6 +426,8 @@ describe('session transcript state', () => {
       source: 'direct-stream',
       text: 'Merhaba sesim geliyor mu beni duyuyor musun',
       startedAtMs: 2000,
+      endedAtMs: 2800,
+      timingBasis: 'source',
       elapsedMs: 710,
       rms: 0.05,
       receivedAtMs: 3300,
@@ -424,6 +668,8 @@ describe('session transcript state', () => {
       id: 'seg-1',
       speakerLabel: 'Konuşmacı',
       startedAtMs: 1781820002000,
+      endedAtMs: 1781820006000,
+      timingBasis: 'source',
       status: 'final',
       text: 'ilk satır',
     });
@@ -462,6 +708,8 @@ describe('session transcript state', () => {
       id: 'seg-1',
       speakerLabel: 'Konuşmacı',
       startedAtMs: 1781820002000,
+      endedAtMs: 1781820006000,
+      timingBasis: 'source',
       status: 'final',
       source: 'direct-stream',
       text: 'İlk karar kaynak pakete girer.',
@@ -520,7 +768,7 @@ describe('session transcript state', () => {
       meeting_id: '22222222-2222-4222-8222-222222222222',
       session_id: 'SES-1',
       segments: [
-        { text: 'İlk karar kaynak pakete girer.', start: 0, end: 15 },
+        { text: 'İlk karar kaynak pakete girer.', start: 0, end: 4 },
         { text: 'İkinci satır zamanlı segment olarak taşınır.', start: 15 },
       ],
     });
@@ -542,6 +790,45 @@ describe('session transcript state', () => {
     expect(bundle.json).toContain('"quality_gate":');
     expect(bundle.json).not.toContain('summaryMarkdown');
     expect(bundle.json).not.toContain('actionItems');
+  });
+
+  it('does not turn delivery latency into source duration in the AI request', () => {
+    const recording = startTranscriptSession(initialTranscriptSession(), {
+      sessionId: 'SES-DELIVERY-TIME',
+      meetingId: '22222222-2222-4222-8222-222222222222',
+      deviceId: 'desktop-1',
+      hasLoopback: false,
+      startedAtMs: 1000,
+    });
+    const withDeliveryTimedSegment = upsertTranscriptSegment(recording, {
+      id: 'seg-delivery',
+      speakerLabel: 'Konuşmacı',
+      startedAtMs: 2000,
+      endedAtMs: 12_000,
+      timingBasis: 'delivery',
+      status: 'final',
+      source: 'direct-stream',
+      text: 'Teslimat gecikmesi konuşma süresi değildir.',
+    });
+    const finished = finishTranscriptSession(
+      upsertTranscriptSegment(withDeliveryTimedSegment, {
+        id: 'seg-next',
+        speakerLabel: 'Konuşmacı',
+        startedAtMs: 5000,
+        status: 'final',
+        source: 'direct-stream',
+        text: 'Sonraki kaynak satırı bitiş sınırını belirler.',
+      }),
+      7000,
+    );
+
+    const bundle = buildMeetingAiSourcePackage(finished, 8000);
+
+    expect(bundle.package.request.segments[0]).toEqual({
+      text: 'Teslimat gecikmesi konuşma süresi değildir.',
+      start: 0,
+      end: 3,
+    });
   });
 
   it('marks meeting-ai package as submittable only when the source gate is ready', () => {

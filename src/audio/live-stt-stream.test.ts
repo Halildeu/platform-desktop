@@ -77,6 +77,8 @@ describe('connectLiveSttStream', () => {
   });
 
   it('buffers audio until ready and emits same-id partial/final transcript updates', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1781820005000);
     vi.stubGlobal('WebSocket', FakeWebSocket);
     const events: LiveSttTranscriptEvent[] = [];
     const statuses: LiveSttStreamStatusEvent[] = [];
@@ -132,7 +134,42 @@ describe('connectLiveSttStream', () => {
       ['stream:0', 'draft', 'Merhaba nasılsın'],
       ['stream:0', 'final', 'Merhaba nasılsın?'],
     ]);
+    expect(events.at(-1)?.endedAtMs).toBe(1781820005000);
+    expect(events.at(-1)?.timingBasis).toBe('delivery');
 
+    stream.close();
+  });
+
+  it('maps provider source sample ranges onto the local audio timeline', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1781820010000);
+    vi.stubGlobal('WebSocket', FakeWebSocket);
+    const events: LiveSttTranscriptEvent[] = [];
+    const stream = connectLiveSttStream('ws://127.0.0.1:18220/ws/stream', {
+      onTranscriptEvent: (event) => events.push(event),
+    });
+    const ws = FakeWebSocket.instances[0];
+
+    stream.send(new Float32Array([0.1, 0.2]));
+    ws?.open();
+    ws?.message({ type: 'ready' });
+    ws?.message({
+      type: 'final',
+      seq: 0,
+      text: 'Kaynak zamanlı cümle.',
+      elapsed_ms: 250,
+      rms: 0.04,
+      source_start_sample: 16_000,
+      source_end_sample: 32_000,
+    });
+
+    expect(events).toEqual([
+      expect.objectContaining({
+        startedAtMs: 1781820011000,
+        endedAtMs: 1781820012000,
+        timingBasis: 'source',
+      }),
+    ]);
     stream.close();
   });
 
@@ -1922,10 +1959,12 @@ describe('connectLiveSttStream', () => {
     vi.stubGlobal('WebSocket', FakeWebSocket);
     const onReady = vi.fn();
     const statuses: LiveSttStreamStatusEvent[] = [];
+    const events: LiveSttTranscriptEvent[] = [];
 
     const stream = connectLiveSttStream('ws://127.0.0.1:18220/ws/stream', {
       onReady,
       onStatus: (event) => statuses.push(event),
+      onTranscriptEvent: (event) => events.push(event),
     });
     const first = FakeWebSocket.instances[0];
 
@@ -1955,6 +1994,15 @@ describe('connectLiveSttStream', () => {
 
     expect(onReady).toHaveBeenCalledTimes(2);
     expect(second?.sent).toHaveLength(1);
+    second?.message({
+      type: 'final',
+      seq: 0,
+      text: 'Reconnect sonrası zaman teslimat tabanlıdır.',
+      source_start_sample: 0,
+      source_end_sample: 16_000,
+    });
+    expect(events.at(-1)?.timingBasis).toBe('delivery');
+    expect(events.at(-1)?.id).toBe('stream:epoch:1:0');
 
     stream.close();
   });

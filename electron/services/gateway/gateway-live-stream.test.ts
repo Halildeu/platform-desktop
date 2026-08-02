@@ -1127,6 +1127,127 @@ describe('GatewayLiveStream', () => {
     stream.close();
   });
 
+  it('preserves validated final source sample ranges for the renderer bridge', async () => {
+    const sockets: FakeSocket[] = [];
+    const onEvent = vi.fn();
+    const stream = new GatewayLiveStream({
+      cfg: { baseUrl: 'https://testai.acik.com' },
+      sessionId: 'SES-SOURCE-RANGE',
+      getJwt: async () => 'JWT',
+      onEvent,
+      onError: vi.fn(),
+      socketFactory: () => {
+        const socket = new FakeSocket();
+        sockets.push(socket);
+        return socket;
+      },
+    });
+
+    const started = stream.start();
+    await waitForSocket(sockets, 1);
+    sockets[0].open();
+    sockets[0].message(JSON.stringify({ type: 'ready' }));
+    await started;
+    expect(stream.getSourceStartedAtMs()).toBeNull();
+    stream.sendRealtimeFrame(new Uint8Array(3_200), 1_781_820_000_100);
+    expect(stream.getSourceStartedAtMs()).toBe(1_781_820_000_000);
+    onEvent.mockClear();
+
+    sockets[0].message(
+      JSON.stringify({
+        type: 'final',
+        seq: 7,
+        text: 'Kaynak aralıklı final',
+        reason: 'speech_final',
+        elapsed_ms: 320,
+        rms: 0.04,
+        source_start_sample: 16_000,
+        source_end_sample: 40_000,
+      }),
+    );
+
+    expect(onEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'final',
+        seq: 7,
+        source_start_sample: 16_000,
+        source_end_sample: 40_000,
+      }),
+    );
+    stream.close();
+  });
+
+  it('preserves final text when optional timing metadata is absent or malformed', async () => {
+    const sockets: FakeSocket[] = [];
+    const onEvent = vi.fn();
+    const stream = new GatewayLiveStream({
+      cfg: { baseUrl: 'https://testai.acik.com' },
+      sessionId: 'SES-FINAL-FALLBACK',
+      getJwt: async () => 'JWT',
+      onEvent,
+      onError: vi.fn(),
+      socketFactory: () => {
+        const socket = new FakeSocket();
+        sockets.push(socket);
+        return socket;
+      },
+    });
+
+    const started = stream.start();
+    await waitForSocket(sockets, 1);
+    sockets[0].open();
+    sockets[0].message(JSON.stringify({ type: 'ready' }));
+    await started;
+    onEvent.mockClear();
+
+    sockets[0].message(
+      JSON.stringify({
+        type: 'final',
+        seq: 2,
+        text: 'Metadata bozuk olsa da final metin korunur.',
+        reason: 'invalid reason with spaces',
+        source_start_sample: 8000,
+        source_end_sample: 4000,
+      }),
+    );
+
+    expect(onEvent).toHaveBeenCalledWith({
+      type: 'final',
+      seq: 2,
+      text: 'Metadata bozuk olsa da final metin korunur.',
+    });
+    stream.close();
+  });
+
+  it('fails source timing closed after a reconnect', async () => {
+    const sockets: FakeSocket[] = [];
+    const stream = new GatewayLiveStream({
+      cfg: { baseUrl: 'https://testai.acik.com' },
+      sessionId: 'SES-TIMING-RECONNECT',
+      getJwt: async () => 'JWT',
+      onEvent: vi.fn(),
+      onError: vi.fn(),
+      socketFactory: () => {
+        const socket = new FakeSocket();
+        sockets.push(socket);
+        return socket;
+      },
+    });
+
+    const started = stream.start();
+    await waitForSocket(sockets, 1);
+    sockets[0].open();
+    sockets[0].message(JSON.stringify({ type: 'ready' }));
+    await started;
+    stream.sendRealtimeFrame(new Uint8Array(3_200), 1_781_820_000_100);
+    expect(stream.hasReliableSourceTiming()).toBe(true);
+
+    sockets[0].failClose();
+
+    expect(stream.hasReliableSourceTiming()).toBe(false);
+    stream.close();
+  });
+
   it('waits through model loading instead of cancelling it at the silence budget', async () => {
     // Faz 24 Bulgu 3-F: a cold STT model load takes minutes and is driven by
     // this very connection. A flat 10s budget cancelled it mid-flight, so the

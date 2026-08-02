@@ -4,6 +4,7 @@ import type { GatewayConfig } from './gateway-client.js';
 
 export const GATEWAY_LIVE_AUDIO_FRAME_VERSION = 1;
 export const GATEWAY_LIVE_AUDIO_FRAME_HEADER_BYTES = 19;
+export const GATEWAY_LIVE_SAMPLE_RATE_HZ = 16_000;
 const GATEWAY_LIVE_AUDIO_FRAME_MAX_PAYLOAD_BYTES = 65_535;
 const SESSION_ID_PATTERN = /^[A-Za-z0-9._:-]{1,128}$/;
 // Budget for *silence* while waiting for `ready`, not for the whole wait. The
@@ -124,7 +125,16 @@ export type GatewayLiveServerEvent =
       rms?: number;
       source?: string;
     }
-  | { type: 'final'; seq: number; text: string; elapsed_ms?: number; rms?: number }
+  | {
+      type: 'final';
+      seq: number;
+      text: string;
+      reason?: string;
+      elapsed_ms?: number;
+      rms?: number;
+      source_start_sample?: number;
+      source_end_sample?: number;
+    }
   | { type: 'audio_ack'; chunk_seq: number }
   | { type: 'eof_ack' | 'drained' }
   | { type: 'error'; msg: string }
@@ -336,25 +346,52 @@ function parseServerEvent(data: unknown): GatewayLiveServerEvent | null {
       if (
         !nonNegativeSequence(parsed.seq) ||
         typeof parsed.confirmed !== 'string' ||
-        typeof parsed.tentative !== 'string' ||
-        !optionalFiniteNumber(parsed.elapsed_ms) ||
-        !optionalFiniteNumber(parsed.rms) ||
-        (parsed.source !== undefined && typeof parsed.source !== 'string')
+        typeof parsed.tentative !== 'string'
       ) {
         return null;
       }
-      return parsed as GatewayLiveServerEvent;
+      const elapsedMs = optionalFiniteNumber(parsed.elapsed_ms) ? parsed.elapsed_ms : undefined;
+      const eventRms = optionalFiniteNumber(parsed.rms) ? parsed.rms : undefined;
+      const source = typeof parsed.source === 'string' ? parsed.source : undefined;
+      return {
+        type: 'partial',
+        seq: parsed.seq,
+        confirmed: parsed.confirmed,
+        tentative: parsed.tentative,
+        ...(elapsedMs === undefined ? {} : { elapsed_ms: elapsedMs }),
+        ...(eventRms === undefined ? {} : { rms: eventRms }),
+        ...(source === undefined ? {} : { source }),
+      };
     }
     if (parsed.type === 'final') {
-      if (
-        !nonNegativeSequence(parsed.seq) ||
-        typeof parsed.text !== 'string' ||
-        !optionalFiniteNumber(parsed.elapsed_ms) ||
-        !optionalFiniteNumber(parsed.rms)
-      ) {
+      if (!nonNegativeSequence(parsed.seq) || typeof parsed.text !== 'string') {
         return null;
       }
-      return parsed as GatewayLiveServerEvent;
+      const reason =
+        typeof parsed.reason === 'string' && /^[A-Za-z0-9_.:-]{1,64}$/.test(parsed.reason)
+          ? parsed.reason
+          : undefined;
+      const elapsedMs = optionalFiniteNumber(parsed.elapsed_ms) ? parsed.elapsed_ms : undefined;
+      const eventRms = optionalFiniteNumber(parsed.rms) ? parsed.rms : undefined;
+      const hasSourceRange = Boolean(
+        nonNegativeSequence(parsed.source_start_sample) &&
+        nonNegativeSequence(parsed.source_end_sample) &&
+        parsed.source_end_sample > parsed.source_start_sample,
+      );
+      return {
+        type: 'final',
+        seq: parsed.seq,
+        text: parsed.text,
+        ...(reason === undefined ? {} : { reason }),
+        ...(elapsedMs === undefined ? {} : { elapsed_ms: elapsedMs }),
+        ...(eventRms === undefined ? {} : { rms: eventRms }),
+        ...(hasSourceRange
+          ? {
+              source_start_sample: parsed.source_start_sample as number,
+              source_end_sample: parsed.source_end_sample as number,
+            }
+          : {}),
+      };
     }
     if (parsed.type === 'audio_ack') {
       return nonNegativeSequence(parsed.chunk_seq)
@@ -430,6 +467,8 @@ export class GatewayLiveStream {
   private faultedGeneration: number | null = null;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private latestSequence = -1;
+  private sourceStartedAtMs: number | null = null;
+  private sourceTimingReliable = true;
   private ready = false;
   private stopping = false;
   private closed = false;
@@ -495,6 +534,18 @@ export class GatewayLiveStream {
     return this.sendSequencedFrame(pcm16, this.latestSequence + 1, capturedAtMs, 'realtime');
   }
 
+  getSourceStartedAtMs(): number | null {
+    return this.sourceStartedAtMs;
+  }
+
+  hasReliableSourceTiming(): boolean {
+    return this.sourceStartedAtMs !== null && this.sourceTimingReliable;
+  }
+
+  getTransportEpoch(): number {
+    return this.socketGeneration;
+  }
+
   private sendSequencedFrame(
     pcm16: Uint8Array,
     chunkSeq: number,
@@ -514,6 +565,11 @@ export class GatewayLiveStream {
     }
 
     const encoded = encodeGatewayLivePcm16Frame({ chunkSeq, capturedAtMs, pcm16 });
+    if (this.sourceStartedAtMs === null) {
+      const frameDurationMs =
+        (pcm16.byteLength / Int16Array.BYTES_PER_ELEMENT / GATEWAY_LIVE_SAMPLE_RATE_HZ) * 1000;
+      this.sourceStartedAtMs = Math.max(0, Math.round(capturedAtMs - frameDurationMs));
+    }
     // Always accepted into the bounded window: a full buffer evicts the oldest
     // frame rather than killing the lane. Recency wins, because a live preview
     // stuck replaying a minute-old backlog is worse than one with a gap.
@@ -860,6 +916,7 @@ export class GatewayLiveStream {
   }
 
   private noteDroppedFrames(count: number, bytes: number, from: number, to: number): void {
+    this.sourceTimingReliable = false;
     this.droppedFrameCount += count;
     this.droppedAudioBytes += bytes;
     if (this.firstDroppedSequence === null) {
@@ -1102,6 +1159,7 @@ export class GatewayLiveStream {
    * whole budget.
    */
   private noteDeliveryFault(cause: GatewayLiveDeliveryCause): void {
+    this.sourceTimingReliable = false;
     this.ensureRecoveryEpisode(cause);
     this.deliveryCauses.add(cause);
     if (this.closed || this.stopping || !this.started) {

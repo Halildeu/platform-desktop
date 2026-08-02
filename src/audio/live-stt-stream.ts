@@ -3,6 +3,8 @@ export type LiveSttSegmentStatus = 'draft' | 'final';
 export interface LiveSttTranscriptEvent {
   id: string;
   startedAtMs: number;
+  endedAtMs?: number | null;
+  timingBasis?: 'source' | 'delivery';
   text: string;
   status: LiveSttSegmentStatus;
   elapsedMs?: number | null;
@@ -38,7 +40,7 @@ export interface LiveSttStreamCallbacks {
 }
 
 export interface LiveSttStreamConnection {
-  send: (samples: Float32Array) => void;
+  send: (samples: Float32Array, capturedAtMs?: number) => void;
   stop: () => Promise<LiveSttStopResult>;
   close: () => void;
 }
@@ -78,6 +80,8 @@ interface LiveSttServerFinal {
   text: string;
   elapsed_ms?: number;
   rms?: number;
+  source_start_sample?: number;
+  source_end_sample?: number;
 }
 
 interface LiveSttServerError {
@@ -809,11 +813,14 @@ function rms(samples: Float32Array): number {
   return Math.sqrt(sum / samples.length);
 }
 
-function pushBounded(frames: Float32Array[], samples: Float32Array): void {
+function pushBounded(frames: Float32Array[], samples: Float32Array): boolean {
   frames.push(samples.slice());
+  let dropped = false;
   while (bufferedSampleCount(frames) > MAX_BUFFERED_SAMPLES && frames.length > 0) {
     frames.shift();
+    dropped = true;
   }
+  return dropped;
 }
 
 export function connectLiveSttStream(
@@ -827,6 +834,7 @@ export function connectLiveSttStream(
   let closedByClient = false;
   let stopping = false;
   let reconnectAttempts = 0;
+  let transportEpoch = -1;
   let stablePartialMode = false;
   let eofSupported = false;
   let stopDrainTimeoutMs = STOP_DRAIN_TIMEOUT_FALLBACK_MS;
@@ -842,6 +850,8 @@ export function connectLiveSttStream(
   let detachSocketListeners: (() => void) | null = null;
   let closeReconnectReason: string | null = null;
   let lastUsableTranscriptAtMs: number | null = null;
+  let firstAudioAtMs: number | null = null;
+  let sourceTimingReliable = true;
   const segmentStartedAt = new Map<number, number>();
   const segmentDraftText = new Map<number, string>();
   const segmentKnownText = new Map<number, string>();
@@ -985,6 +995,16 @@ export function connectLiveSttStream(
     detachSocketListeners?.();
     detachSocketListeners = null;
     ready = false;
+    transportEpoch += 1;
+    if (transportEpoch > 0) {
+      clearAllPendingPartials();
+      segmentStartedAt.clear();
+      segmentDraftText.clear();
+      segmentKnownText.clear();
+      segmentGeneration.clear();
+      segmentFinalText.clear();
+      finalizedSequences.clear();
+    }
     emitStatus(reconnectAttempts > 0 ? { status: 'reconnecting' } : { status: 'connecting' });
     let socket: WebSocket;
     try {
@@ -1003,6 +1023,7 @@ export function connectLiveSttStream(
       }
 
       ready = false;
+      sourceTimingReliable = false;
       if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
         emitStatus({ status: 'error', reason });
         emitError(`Live STT stream yeniden kurulamadı: ${reason}`);
@@ -1105,7 +1126,21 @@ export function connectLiveSttStream(
         if (!text) {
           return;
         }
-        const startedAtMs = segmentStartedAt.get(event.seq) ?? Date.now();
+        const hasSourceRange = Boolean(
+          firstAudioAtMs !== null &&
+          sourceTimingReliable &&
+          Number.isSafeInteger(event.source_start_sample) &&
+          Number.isSafeInteger(event.source_end_sample) &&
+          (event.source_start_sample ?? -1) >= 0 &&
+          (event.source_end_sample ?? 0) > (event.source_start_sample ?? -1),
+        );
+        const sourceStartedAtMs = hasSourceRange
+          ? (firstAudioAtMs ?? 0) + ((event.source_start_sample ?? 0) / SAMPLE_RATE) * 1000
+          : null;
+        const sourceEndedAtMs = hasSourceRange
+          ? (firstAudioAtMs ?? 0) + ((event.source_end_sample ?? 0) / SAMPLE_RATE) * 1000
+          : null;
+        const startedAtMs = sourceStartedAtMs ?? segmentStartedAt.get(event.seq) ?? Date.now();
         segmentStartedAt.set(event.seq, startedAtMs);
         clearPendingPartials(event.seq);
         segmentDraftText.delete(event.seq);
@@ -1119,6 +1154,8 @@ export function connectLiveSttStream(
         callbacks.onTranscriptEvent?.({
           id: segmentId(event.seq),
           startedAtMs,
+          endedAtMs: sourceEndedAtMs ?? Date.now(),
+          timingBasis: hasSourceRange ? 'source' : 'delivery',
           text,
           status: 'final',
           elapsedMs: event.elapsed_ms ?? null,
@@ -1204,7 +1241,9 @@ export function connectLiveSttStream(
 
   const segmentId = (seq: number): string => {
     const generation = segmentGeneration.get(seq) ?? 0;
-    return generation === 0 ? `stream:${seq}` : `stream:${seq}:${generation}`;
+    const sequenceSpace =
+      transportEpoch === 0 ? `stream:${seq}` : `stream:epoch:${transportEpoch}:${seq}`;
+    return generation === 0 ? sequenceSpace : `${sequenceSpace}:${generation}`;
   };
 
   const ensureOpenSegment = (seq: number): void => {
@@ -1285,10 +1324,14 @@ export function connectLiveSttStream(
   connect();
 
   return {
-    send: (samples: Float32Array): void => {
+    send: (samples: Float32Array, capturedAtMs = Date.now()): void => {
       if (closedByClient || stopping || samples.length === 0) {
         return;
       }
+      firstAudioAtMs ??= Math.max(
+        0,
+        Math.round(capturedAtMs - (samples.length / SAMPLE_RATE) * 1000),
+      );
       if (rms(samples) >= STOP_DRAIN_AUDIO_RMS) {
         sentActiveAudio = true;
         activeAudioSinceLastFinal = true;
@@ -1296,7 +1339,9 @@ export function connectLiveSttStream(
       const socket = ws;
       if (ready && socket?.readyState === WebSocket.OPEN) {
         if (shouldRestartForTranscriptStall(samples)) {
-          pushBounded(pendingFrames, samples);
+          if (pushBounded(pendingFrames, samples)) {
+            sourceTimingReliable = false;
+          }
           closeReconnectReason = 'transcript akışı gecikti';
           socket.close();
           return;
@@ -1304,7 +1349,9 @@ export function connectLiveSttStream(
         socket.send(frameBuffer(samples));
         return;
       }
-      pushBounded(pendingFrames, samples);
+      if (pushBounded(pendingFrames, samples)) {
+        sourceTimingReliable = false;
+      }
     },
     stop: (): Promise<LiveSttStopResult> => {
       if (stopPromise) {

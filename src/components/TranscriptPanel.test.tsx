@@ -1,19 +1,20 @@
 // @vitest-environment jsdom
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, render, screen, within } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import '@testing-library/jest-dom/vitest';
 
-import { TranscriptPanel } from './TranscriptPanel';
+import { buildTranscriptTurns, TranscriptPanel } from './TranscriptPanel';
 import {
+  collapseAssembledFragments,
   initialTranscriptSession,
   startTranscriptSession,
+  type TranscriptSegment,
   upsertTranscriptSegment,
 } from '../transcript/session-transcript';
 
 const originalClipboardDescriptor = Object.getOwnPropertyDescriptor(navigator, 'clipboard');
-
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
@@ -221,16 +222,581 @@ describe('TranscriptPanel', () => {
     expect(screen.getByText(clock(1781820065123))).toBeInTheDocument();
     const articles = screen.getAllByRole('article');
     expect(articles).toHaveLength(2);
-    expect(articles[0]).toHaveTextContent('İkinci cümle işleniyor');
-    expect(articles[0]).toHaveTextContent('Taslak');
-    expect(articles[0]).toHaveTextContent('Direct STT');
-    expect(articles[0]).toHaveTextContent('Canlı');
-    expect(articles[0]).toHaveClass('segment-live');
-    expect(articles[0]).toHaveTextContent('180 ms');
-    expect(articles[1]).toHaveTextContent('İlk karar kaydedildi');
-    expect(articles[1]).toHaveTextContent('Final');
-    expect(articles[1]).toHaveTextContent('Gateway');
-    expect(articles[1]).not.toHaveClass('segment-live');
+    expect(articles[0]).toHaveTextContent('İlk karar kaydedildi');
+    expect(articles[0]).toHaveTextContent('Final');
+    expect(articles[0]).toHaveTextContent('Gateway');
+    expect(articles[0]).not.toHaveClass('segment-live');
+    expect(articles[1]).toHaveTextContent('İkinci cümle işleniyor');
+    expect(articles[1]).toHaveTextContent('Taslak');
+    expect(articles[1]).toHaveTextContent('Direct STT');
+    expect(articles[1]).toHaveTextContent('Canlı');
+    expect(articles[1]).toHaveClass('segment-live');
+    expect(articles[1]).toHaveTextContent('180 ms');
+  });
+
+  it('groups adjacent gateway segments from the same speaker into one visible turn', () => {
+    const recording = startTranscriptSession(initialTranscriptSession(), {
+      sessionId: 'SES-SPEECHMATICS',
+      meetingId: '22222222-2222-4222-8222-222222222222',
+      deviceId: 'desktop-1',
+      hasLoopback: false,
+      startedAtMs: 1781820000000,
+    });
+    const first = upsertTranscriptSegment(recording, {
+      id: 'gateway:0',
+      speakerLabel: 'Konuşmacı',
+      startedAtMs: 1781820001000,
+      status: 'final',
+      text: 'İlk düşünce aynı konuşmacıya ait.',
+      source: 'gateway-events',
+    });
+    const second = upsertTranscriptSegment(first, {
+      id: 'gateway:1',
+      speakerLabel: 'Konuşmacı',
+      startedAtMs: 1781820003000,
+      status: 'final',
+      text: 'Devamı yeni kart yerine aynı turn içinde kalır.',
+      source: 'gateway-events',
+    });
+    const speakerChange = upsertTranscriptSegment(second, {
+      id: 'gateway:2',
+      speakerLabel: 'Konuşmacı 2',
+      startedAtMs: 1781820005000,
+      status: 'final',
+      text: 'Konuşmacı değişince yeni turn açılır.',
+      source: 'gateway-events',
+    });
+
+    render(<TranscriptPanel session={speakerChange} />);
+
+    const turns = screen.getAllByRole('article');
+    expect(turns).toHaveLength(2);
+    expect(turns[0]).toHaveTextContent('İlk düşünce aynı konuşmacıya ait.');
+    expect(turns[0]).toHaveTextContent('Devamı yeni kart yerine aynı turn içinde kalır.');
+    expect(turns[1]).toHaveTextContent('Konuşmacı değişince yeni turn açılır.');
+    expect(
+      [...turns[0].querySelectorAll('.transcript-turn-paragraph > p')].map(
+        (paragraph) => paragraph.textContent,
+      ),
+    ).toEqual([
+      'İlk düşünce aynı konuşmacıya ait.',
+      'Devamı yeni kart yerine aynı turn içinde kalır.',
+    ]);
+    expect(within(turns[0]).getByText('2 paragraf')).toBeInTheDocument();
+    expect(within(turns[0]).getAllByRole('time')).toHaveLength(2);
+  });
+
+  it('keeps canonical input order for equal timestamps and splits source or silence boundaries', () => {
+    const turns = buildTranscriptTurns([
+      {
+        id: 'gateway:session:window:10',
+        speakerLabel: 'Konuşmacı',
+        startedAtMs: 1000,
+        status: 'final',
+        text: 'Önce gelen',
+        source: 'gateway-events',
+      },
+      {
+        id: 'gateway:session:window:2',
+        speakerLabel: 'Konuşmacı',
+        startedAtMs: 1000,
+        status: 'final',
+        text: 'Sonra gelen',
+        source: 'gateway-events',
+      },
+      {
+        id: 'direct:1',
+        speakerLabel: 'Konuşmacı',
+        startedAtMs: 2000,
+        status: 'draft',
+        text: 'Direct ayrı kalır',
+        source: 'direct-stream',
+      },
+      {
+        id: 'gateway:session:window:11',
+        speakerLabel: 'Konuşmacı',
+        startedAtMs: 40_000,
+        status: 'final',
+        text: 'Uzun sessizlikten sonra ayrı kalır',
+        source: 'gateway-events',
+      },
+    ]);
+
+    expect(turns).toHaveLength(3);
+    expect(turns[0].segments.map((segment) => segment.id)).toEqual([
+      'gateway:session:window:2',
+      'gateway:session:window:10',
+    ]);
+    expect(turns[1].segments.map((segment) => segment.id)).toEqual(['direct:1']);
+    expect(turns[2].segments.map((segment) => segment.id)).toEqual(['gateway:session:window:11']);
+  });
+
+  it('uses source-audio silence and bounded blocks for the production single-speaker stream', () => {
+    const longSegment: TranscriptSegment = {
+      id: 'gateway:session:window:0',
+      speakerLabel: 'Konuşmacı',
+      startedAtMs: 0,
+      endedAtMs: 60_000,
+      timingBasis: 'source',
+      status: 'final',
+      text: 'Uzun açıklama',
+      source: 'gateway-events',
+    };
+    const continuousSegment: TranscriptSegment = {
+      ...longSegment,
+      id: 'gateway:session:window:1',
+      startedAtMs: 60_100,
+      endedAtMs: 61_000,
+      text: 'Kısa sessizlikten sonra devam',
+    };
+    const boundedSegments = Array.from({ length: 41 }, (_, index) => ({
+      ...longSegment,
+      id: `gateway:bounded:window:${index}`,
+      startedAtMs: index * 1_000,
+      endedAtMs: index * 1_000 + 900,
+      text: `Paragraf ${index}`,
+    }));
+
+    expect(buildTranscriptTurns([longSegment, continuousSegment])).toHaveLength(1);
+    expect(buildTranscriptTurns(boundedSegments).map((turn) => turn.segments.length)).toEqual([
+      40, 1,
+    ]);
+  });
+
+  it('keeps non-window equal-timestamp events in arrival order', () => {
+    const sameTimestamp = 1781820001000;
+    const turns = buildTranscriptTurns([
+      {
+        id: 'event:z-first-arrival',
+        speakerLabel: 'Konuşmacı',
+        startedAtMs: sameTimestamp,
+        status: 'final',
+        text: 'İlk gelen',
+        source: 'gateway-events',
+      },
+      {
+        id: 'event:a-second-arrival',
+        speakerLabel: 'Konuşmacı',
+        startedAtMs: sameTimestamp,
+        status: 'final',
+        text: 'İkinci gelen',
+        source: 'gateway-events',
+      },
+    ]);
+
+    expect(turns).toHaveLength(1);
+    expect(turns[0].segments.map((segment) => segment.id)).toEqual([
+      'event:z-first-arrival',
+      'event:a-second-arrival',
+    ]);
+  });
+
+  it('keeps same-timestamp source boundaries on distinct turn identities', () => {
+    const sameTimestamp = 1781820001000;
+    const turns = buildTranscriptTurns([
+      {
+        id: 'gateway:session:window:0',
+        speakerLabel: 'Konuşmacı',
+        startedAtMs: sameTimestamp,
+        status: 'final',
+        text: 'Gateway satırı',
+        source: 'gateway-events',
+      },
+      {
+        id: 'stream:0',
+        speakerLabel: 'Konuşmacı',
+        startedAtMs: sameTimestamp,
+        status: 'draft',
+        text: 'Direct satırı',
+        source: 'direct-stream',
+      },
+    ]);
+
+    expect(turns).toHaveLength(2);
+    expect(new Set(turns.map((turn) => turn.id)).size).toBe(2);
+  });
+
+  it('groups adjacent direct-stream segments into the same live turn', () => {
+    const turns = buildTranscriptTurns([
+      {
+        id: 'stream:0',
+        speakerLabel: 'Konuşmacı',
+        startedAtMs: 1000,
+        status: 'final',
+        text: 'Canlı cümlenin ilk bölümü',
+        source: 'direct-stream',
+      },
+      {
+        id: 'stream:1',
+        speakerLabel: 'Konuşmacı',
+        startedAtMs: 2000,
+        status: 'draft',
+        text: 'Canlı cümlenin devamı',
+        source: 'direct-stream',
+      },
+    ]);
+
+    expect(turns).toHaveLength(1);
+    expect(turns[0].segments).toHaveLength(2);
+  });
+
+  it('groups adjacent segments when their source is not yet classified', () => {
+    const turns = buildTranscriptTurns([
+      {
+        id: 'unclassified:0',
+        speakerLabel: 'Konuşmacı',
+        startedAtMs: 1000,
+        status: 'final',
+        text: 'İlk sınıflandırılmamış parça',
+      },
+      {
+        id: 'unclassified:1',
+        speakerLabel: 'Konuşmacı',
+        startedAtMs: 2000,
+        status: 'final',
+        text: 'Devam eden sınıflandırılmamış parça',
+      },
+    ]);
+
+    expect(turns).toHaveLength(1);
+    expect(turns[0].segments).toHaveLength(2);
+  });
+
+  it('enforces exact silence and maximum-span turn boundaries', () => {
+    const base: TranscriptSegment = {
+      id: 'gateway:boundary:window:0',
+      speakerLabel: 'Konuşmacı',
+      startedAtMs: 0,
+      endedAtMs: 1000,
+      timingBasis: 'source',
+      status: 'final',
+      text: 'Başlangıç',
+      source: 'gateway-events',
+    };
+    const exactGap = {
+      ...base,
+      id: 'gateway:boundary:window:1',
+      startedAtMs: 31_000,
+      endedAtMs: 32_000,
+      text: 'Tam eşik',
+    };
+    const overGap = {
+      ...base,
+      id: 'gateway:boundary:window:4',
+      startedAtMs: 31_001,
+      endedAtMs: 32_001,
+      text: 'Eşik üstü',
+    };
+    const longBase = {
+      ...base,
+      endedAtMs: 119_500,
+    };
+    const exactSpan = {
+      ...base,
+      id: 'gateway:boundary:window:2',
+      startedAtMs: 120_000,
+      endedAtMs: 120_500,
+      text: 'Tam span',
+    };
+    const overSpan = {
+      ...base,
+      id: 'gateway:boundary:window:3',
+      startedAtMs: 120_001,
+      endedAtMs: 120_500,
+      text: 'Span üstü',
+    };
+
+    expect(buildTranscriptTurns([base, exactGap])).toHaveLength(1);
+    expect(buildTranscriptTurns([base, overGap])).toHaveLength(2);
+    expect(buildTranscriptTurns([longBase, exactSpan])).toHaveLength(1);
+    expect(buildTranscriptTurns([longBase, overSpan])).toHaveLength(2);
+  });
+
+  it('keeps turn identities unique when the segment cap splits equal timestamps', () => {
+    const equalTimestampSegments: TranscriptSegment[] = Array.from({ length: 41 }, (_, index) => ({
+      id: `gateway:equal-cap:window:${index}`,
+      speakerLabel: 'Konuşmacı',
+      startedAtMs: 1000,
+      endedAtMs: 2000,
+      timingBasis: 'source',
+      status: 'final',
+      text: `Paragraf ${index}`,
+      source: 'gateway-events',
+    }));
+
+    const turns = buildTranscriptTurns(equalTimestampSegments);
+
+    expect(turns.map((turn) => turn.segments.length)).toEqual([40, 1]);
+    expect(new Set(turns.map((turn) => turn.id)).size).toBe(2);
+  });
+
+  it('keeps the turn DOM identity when an assembled utterance replaces its first fragment', () => {
+    const recording = startTranscriptSession(initialTranscriptSession(), {
+      sessionId: 'SES-STABLE-TURN',
+      meetingId: '22222222-2222-4222-8222-222222222222',
+      deviceId: 'desktop-1',
+      hasLoopback: false,
+      startedAtMs: 1781820000000,
+    });
+    const firstFragment = upsertTranscriptSegment(recording, {
+      id: 'gateway:fragment',
+      speakerLabel: 'Konuşmacı',
+      startedAtMs: 1781820001000,
+      status: 'draft',
+      text: 'İlk parça',
+      source: 'gateway-events',
+    });
+    const withContinuation = upsertTranscriptSegment(firstFragment, {
+      id: 'gateway:continuation',
+      speakerLabel: 'Konuşmacı',
+      startedAtMs: 1781820002000,
+      status: 'final',
+      text: 'Devam',
+      source: 'gateway-events',
+    });
+    const { rerender } = render(<TranscriptPanel session={withContinuation} />);
+    const originalTurn = screen.getByRole('article');
+    const collapsed = collapseAssembledFragments(withContinuation, ['gateway:fragment']);
+    const withUtterance = upsertTranscriptSegment(collapsed, {
+      id: 'gateway:utterance',
+      speakerLabel: 'Konuşmacı',
+      startedAtMs: 1781820001000,
+      status: 'utterance',
+      text: 'İlk parça tamamlandı.',
+      source: 'gateway-events',
+    });
+
+    rerender(<TranscriptPanel session={withUtterance} />);
+
+    expect(screen.getByRole('article')).toBe(originalTurn);
+  });
+
+  it('keeps the turn DOM identity when an earlier segment joins the same turn', () => {
+    const recording = startTranscriptSession(initialTranscriptSession(), {
+      sessionId: 'SES-EARLIER-TURN',
+      meetingId: '22222222-2222-4222-8222-222222222222',
+      deviceId: 'desktop-1',
+      hasLoopback: false,
+      startedAtMs: 1781820000000,
+    });
+    const later = upsertTranscriptSegment(recording, {
+      id: 'gateway:earlier-turn:window:1',
+      speakerLabel: 'Konuşmacı',
+      startedAtMs: 1781820002000,
+      status: 'final',
+      text: 'Sonradan görülen paragraf',
+      source: 'gateway-events',
+    });
+    const { rerender } = render(<TranscriptPanel session={later} />);
+    const originalTurn = screen.getByRole('article');
+    const withEarlier = upsertTranscriptSegment(later, {
+      id: 'gateway:earlier-turn:window:0',
+      speakerLabel: 'Konuşmacı',
+      startedAtMs: 1781820001000,
+      status: 'final',
+      text: 'Daha erken gelen paragraf',
+      source: 'gateway-events',
+    });
+
+    rerender(<TranscriptPanel session={withEarlier} />);
+
+    expect(screen.getByRole('article')).toBe(originalTurn);
+    expect(originalTurn).toHaveTextContent('Daha erken gelen paragraf');
+    expect(originalTurn).toHaveTextContent('Sonradan görülen paragraf');
+  });
+
+  it('keeps later turn DOM identities when a new turn is inserted in the middle', () => {
+    const recording = startTranscriptSession(initialTranscriptSession(), {
+      sessionId: 'SES-MIDDLE-TURN',
+      meetingId: '22222222-2222-4222-8222-222222222222',
+      deviceId: 'desktop-1',
+      hasLoopback: false,
+      startedAtMs: 1781820000000,
+    });
+    const first = upsertTranscriptSegment(recording, {
+      id: 'gateway:middle:window:0',
+      speakerLabel: 'Konuşmacı',
+      startedAtMs: 1781820001000,
+      status: 'final',
+      text: 'İlk turn',
+      source: 'gateway-events',
+    });
+    const last = upsertTranscriptSegment(first, {
+      id: 'gateway:middle:window:2',
+      speakerLabel: 'Konuşmacı',
+      startedAtMs: 1781820080000,
+      status: 'final',
+      text: 'Son turn',
+      source: 'gateway-events',
+    });
+    const { rerender } = render(<TranscriptPanel session={last} />);
+    const originalLastTurn = screen.getAllByRole('article')[1];
+    const withMiddle = upsertTranscriptSegment(last, {
+      id: 'gateway:middle:window:1',
+      speakerLabel: 'Konuşmacı',
+      startedAtMs: 1781820040000,
+      status: 'final',
+      text: 'Araya giren turn',
+      source: 'gateway-events',
+    });
+
+    rerender(<TranscriptPanel session={withMiddle} />);
+
+    expect(screen.getAllByRole('article')).toHaveLength(3);
+    expect(screen.getByText('Son turn').closest('article')).toBe(originalLastTurn);
+  });
+
+  it('stops following the latest paragraph while the user reads earlier transcript', async () => {
+    const recording = startTranscriptSession(initialTranscriptSession(), {
+      sessionId: 'SES-SCROLL-GUARD',
+      meetingId: '22222222-2222-4222-8222-222222222222',
+      deviceId: 'desktop-1',
+      hasLoopback: false,
+      startedAtMs: 1781820000000,
+    });
+    const first = upsertTranscriptSegment(recording, {
+      id: 'gateway:scroll:window:0',
+      speakerLabel: 'Konuşmacı',
+      startedAtMs: 1781820001000,
+      status: 'final',
+      text: 'İlk paragraf',
+      source: 'gateway-events',
+    });
+    const { rerender } = render(<TranscriptPanel session={first} />);
+    const list = document.querySelector('.transcript-list') as HTMLDivElement;
+    Object.defineProperties(list, {
+      scrollHeight: { configurable: true, value: 1000 },
+      clientHeight: { configurable: true, value: 200 },
+      scrollTop: { configurable: true, writable: true, value: 100 },
+    });
+    fireEvent.scroll(list);
+    const second = upsertTranscriptSegment(first, {
+      id: 'gateway:scroll:window:1',
+      speakerLabel: 'Konuşmacı',
+      startedAtMs: 1781820002000,
+      status: 'final',
+      text: 'Yeni paragraf',
+      source: 'gateway-events',
+    });
+
+    rerender(<TranscriptPanel session={second} />);
+
+    expect(list.scrollTop).toBe(100);
+
+    await userEvent.type(screen.getByPlaceholderText('Transkriptte ara'), 'İlk');
+    expect(list.scrollTop).toBe(100);
+    await userEvent.clear(screen.getByPlaceholderText('Transkriptte ara'));
+    expect(list.scrollTop).toBe(100);
+
+    list.scrollTop = 800;
+    fireEvent.scroll(list);
+    const third = upsertTranscriptSegment(second, {
+      id: 'gateway:scroll:window:2',
+      speakerLabel: 'Konuşmacı',
+      startedAtMs: 1781820003000,
+      status: 'final',
+      text: 'En alta dönünce izlenen paragraf',
+      source: 'gateway-events',
+    });
+    rerender(<TranscriptPanel session={third} />);
+
+    expect(list.scrollTop).toBe(800);
+  });
+
+  it('keeps following live text when the latest segment grows under the same id', () => {
+    const recording = startTranscriptSession(initialTranscriptSession(), {
+      sessionId: 'SES-LIVE-TAIL',
+      meetingId: '22222222-2222-4222-8222-222222222222',
+      deviceId: 'desktop-1',
+      hasLoopback: false,
+      startedAtMs: 1781820000000,
+    });
+    const partial = upsertTranscriptSegment(recording, {
+      id: 'gateway:live-tail:window:0',
+      speakerLabel: 'Konuşmacı',
+      startedAtMs: 1781820001000,
+      status: 'draft',
+      text: 'Canlı cümle',
+      source: 'gateway-events',
+      receivedAtMs: 1781820001100,
+    });
+    const { rerender } = render(<TranscriptPanel session={partial} />);
+    const list = document.querySelector('.transcript-list') as HTMLDivElement;
+    Object.defineProperties(list, {
+      scrollHeight: { configurable: true, value: 1000 },
+      clientHeight: { configurable: true, value: 200 },
+      scrollTop: { configurable: true, writable: true, value: 800 },
+    });
+    const expanded = upsertTranscriptSegment(partial, {
+      id: 'gateway:live-tail:window:0',
+      speakerLabel: 'Konuşmacı',
+      startedAtMs: 1781820001000,
+      status: 'draft',
+      text: 'Canlı cümle büyümeye devam ediyor',
+      source: 'gateway-events',
+      receivedAtMs: 1781820001500,
+    });
+
+    rerender(<TranscriptPanel session={expanded} />);
+
+    expect(list.scrollTop).toBe(800);
+  });
+
+  it('keeps review and edit actions bound to the selected paragraph segment', async () => {
+    const onSegmentReviewed = vi.fn();
+    const onSegmentTextChange = vi.fn();
+    const recording = startTranscriptSession(initialTranscriptSession(), {
+      sessionId: 'SES-EDIT-TURN',
+      meetingId: '22222222-2222-4222-8222-222222222222',
+      deviceId: 'desktop-1',
+      hasLoopback: false,
+      startedAtMs: 1781820000000,
+    });
+    const first = upsertTranscriptSegment(recording, {
+      id: 'gateway:first',
+      speakerLabel: 'Konuşmacı',
+      startedAtMs: 1781820001000,
+      status: 'final',
+      text: 'İlk paragraf',
+      source: 'gateway-events',
+    });
+    const second = upsertTranscriptSegment(first, {
+      id: 'gateway:second',
+      speakerLabel: 'Konuşmacı',
+      startedAtMs: 1781820002000,
+      status: 'final',
+      text: 'İkinci paragraf',
+      source: 'gateway-events',
+    });
+
+    render(
+      <TranscriptPanel
+        session={second}
+        onSegmentReviewed={onSegmentReviewed}
+        onSegmentTextChange={onSegmentTextChange}
+      />,
+    );
+
+    const paragraphs = document.querySelectorAll('.transcript-turn-paragraph');
+    expect(paragraphs).toHaveLength(2);
+    await userEvent.click(
+      within(paragraphs[1] as HTMLElement).getByRole('button', { name: 'İncelendi' }),
+    );
+    expect(onSegmentReviewed).toHaveBeenCalledWith('gateway:second');
+
+    await userEvent.click(
+      within(paragraphs[1] as HTMLElement).getByRole('button', { name: 'Metni düzelt' }),
+    );
+    const editor = within(paragraphs[1] as HTMLElement).getByLabelText('Transkript metni');
+    await userEvent.clear(editor);
+    await userEvent.type(editor, 'İkinci paragraf düzeltildi');
+    await userEvent.click(
+      within(paragraphs[1] as HTMLElement).getByRole('button', { name: 'Kaydet' }),
+    );
+    expect(onSegmentTextChange).toHaveBeenCalledWith(
+      'gateway:second',
+      'İkinci paragraf düzeltildi',
+    );
   });
 
   it('renders transcript flow health metrics for live coverage triage', () => {
@@ -294,7 +860,7 @@ describe('TranscriptPanel', () => {
     ).toBeInTheDocument();
   });
 
-  it('searches long transcript rows without changing newest-first order', async () => {
+  it('searches long transcript rows without changing chronological order', async () => {
     const recording = startTranscriptSession(initialTranscriptSession(), {
       sessionId: 'SES-1',
       meetingId: '22222222-2222-4222-8222-222222222222',
@@ -334,7 +900,9 @@ describe('TranscriptPanel', () => {
         'Görünen 3/3 · Final 2 · Revize 1 · İncelenen 1 · Kontrol bekleyen 2 · Taslak 0 · Direct 2 · Gateway 1',
       ),
     ).toBeInTheDocument();
-    expect(screen.getAllByRole('article')[0]).toHaveTextContent('Revize karar satırı');
+    const chronologicalArticles = screen.getAllByRole('article');
+    expect(chronologicalArticles[0]).toHaveTextContent('Bütçe onayı');
+    expect(chronologicalArticles.at(-1)).toHaveTextContent('Revize karar satırı');
 
     await userEvent.type(screen.getByPlaceholderText('Transkriptte ara'), 'bütçe');
 
@@ -415,8 +983,8 @@ describe('TranscriptPanel', () => {
 
     const directArticles = screen.getAllByRole('article');
     expect(directArticles).toHaveLength(2);
-    expect(directArticles[0]).toHaveTextContent('Direct revize toplantı satırı');
-    expect(directArticles[1]).toHaveTextContent('Canlı direct draft satırı');
+    expect(directArticles[0]).toHaveTextContent('Canlı direct draft satırı');
+    expect(directArticles[1]).toHaveTextContent('Direct revize toplantı satırı');
     expect(screen.queryByText('Gateway final toplantı satırı')).not.toBeInTheDocument();
   });
 
@@ -458,17 +1026,17 @@ describe('TranscriptPanel', () => {
     );
 
     const articles = screen.getAllByRole('article');
-    expect(within(articles[0]).queryByRole('button', { name: 'Metni düzelt' })).toBeNull();
-    expect(within(articles[0]).queryByRole('button', { name: 'İncelendi' })).toBeNull();
+    expect(within(articles[1]).queryByRole('button', { name: 'Metni düzelt' })).toBeNull();
+    expect(within(articles[1]).queryByRole('button', { name: 'İncelendi' })).toBeNull();
 
-    await userEvent.click(within(articles[1]).getByRole('button', { name: 'İncelendi' }));
+    await userEvent.click(within(articles[0]).getByRole('button', { name: 'İncelendi' }));
     expect(onSegmentReviewed).toHaveBeenCalledWith('seg-final');
 
-    await userEvent.click(within(articles[1]).getByRole('button', { name: 'Metni düzelt' }));
-    const editor = within(articles[1]).getByLabelText('Transkript metni');
+    await userEvent.click(within(articles[0]).getByRole('button', { name: 'Metni düzelt' }));
+    const editor = within(articles[0]).getByLabelText('Transkript metni');
     await userEvent.clear(editor);
     await userEvent.type(editor, 'Düzeltilmiş toplantı satırı');
-    await userEvent.click(within(articles[1]).getByRole('button', { name: 'Kaydet' }));
+    await userEvent.click(within(articles[0]).getByRole('button', { name: 'Kaydet' }));
 
     expect(onSegmentTextChange).toHaveBeenCalledWith('seg-final', 'Düzeltilmiş toplantı satırı');
   });
@@ -486,6 +1054,7 @@ describe('TranscriptPanel', () => {
       speakerLabel: 'Konuşmacı 1',
       startedAtMs: 1781820000000,
       endedAtMs: 1781820004000,
+      timingBasis: 'source',
       status: 'final',
       text: 'İlk gündem maddesi konuşuldu',
       source: 'gateway-events',
@@ -495,6 +1064,7 @@ describe('TranscriptPanel', () => {
       speakerLabel: 'Konuşmacı 2',
       startedAtMs: 1781820004000,
       endedAtMs: 1781820009000,
+      timingBasis: 'source',
       status: 'final',
       text: 'İkinci konuşmacı aksiyonları anlattı',
       source: 'gateway-events',
@@ -504,6 +1074,7 @@ describe('TranscriptPanel', () => {
       speakerLabel: 'Konuşmacı 1',
       startedAtMs: 1781820009000,
       endedAtMs: 1781820011000,
+      timingBasis: 'source',
       status: 'final',
       text: 'Kapanış notu alındı',
       source: 'gateway-events',
@@ -525,11 +1096,152 @@ describe('TranscriptPanel', () => {
     expect(screen.getAllByText('Halil Bey').length).toBeGreaterThan(0);
     const articles = screen.getAllByRole('article');
     expect(articles[0]).toHaveTextContent('Halil Bey');
-    expect(articles[0]).toHaveTextContent('Kapanış notu alındı');
+    expect(articles[0]).toHaveTextContent('İlk gündem maddesi konuşuldu');
+    expect(articles.at(-1)).toHaveTextContent('Kapanış notu alındı');
 
     await userEvent.click(screen.getByRole('button', { name: 'Etiketleri sıfırla' }));
     expect(screen.queryByRole('button', { name: 'Etiketleri sıfırla' })).not.toBeInTheDocument();
     expect(screen.getByLabelText('Konuşmacı adı: Konuşmacı 1')).toHaveValue('Konuşmacı 1');
+  });
+
+  it('does not count silence between paragraphs as speaker talk time', () => {
+    const recording = startTranscriptSession(initialTranscriptSession(), {
+      sessionId: 'SES-SPEAKER-DURATION',
+      meetingId: '22222222-2222-4222-8222-222222222222',
+      deviceId: 'desktop-1',
+      hasLoopback: false,
+      startedAtMs: 1781820000000,
+    });
+    const withFirst = upsertTranscriptSegment(recording, {
+      id: 'gateway:duration:window:0',
+      speakerLabel: 'Konuşmacı',
+      startedAtMs: 1781820001000,
+      endedAtMs: 1781820002000,
+      timingBasis: 'source',
+      status: 'final',
+      text: 'İlk kısa paragraf',
+      source: 'gateway-events',
+    });
+    const withSecond = upsertTranscriptSegment(withFirst, {
+      id: 'gateway:duration:window:1',
+      speakerLabel: 'Konuşmacı',
+      startedAtMs: 1781820012000,
+      endedAtMs: 1781820013000,
+      timingBasis: 'source',
+      status: 'final',
+      text: 'Sessizlikten sonraki paragraf',
+      source: 'gateway-events',
+    });
+
+    render(<TranscriptPanel session={withSecond} />);
+
+    expect(screen.getByText('100% · 1 tur · 2 sn')).toBeInTheDocument();
+  });
+
+  it('does not count delivery latency as source speaker duration', () => {
+    const recording = startTranscriptSession(initialTranscriptSession(), {
+      sessionId: 'SES-DELIVERY-DURATION',
+      meetingId: '22222222-2222-4222-8222-222222222222',
+      deviceId: 'desktop-1',
+      hasLoopback: false,
+      startedAtMs: 1781820000000,
+    });
+    const directPreview = upsertTranscriptSegment(recording, {
+      id: 'direct:delivery',
+      speakerLabel: 'Konuşmacı',
+      startedAtMs: 1781820001000,
+      endedAtMs: 1781820011000,
+      timingBasis: 'delivery',
+      status: 'final',
+      text: 'Teslim gecikmeli önizleme',
+      source: 'direct-stream',
+    });
+    const canonical = upsertTranscriptSegment(directPreview, {
+      id: 'gateway:duration-source:window:0',
+      speakerLabel: 'Konuşmacı',
+      startedAtMs: 1781820012000,
+      endedAtMs: 1781820014000,
+      timingBasis: 'source',
+      status: 'final',
+      text: 'Kaynak zamanlı kalıcı satır',
+      source: 'gateway-events',
+    });
+
+    render(<TranscriptPanel session={canonical} />);
+
+    expect(screen.getByText('100% · 2 tur · 2 sn')).toBeInTheDocument();
+  });
+
+  it('does not render zero-valued speaker analytics without source timing', () => {
+    const recording = startTranscriptSession(initialTranscriptSession(), {
+      sessionId: 'SES-DELIVERY-ONLY',
+      meetingId: '22222222-2222-4222-8222-222222222222',
+      deviceId: 'desktop-1',
+      hasLoopback: false,
+      startedAtMs: 1781820000000,
+    });
+    const deliveryOnly = upsertTranscriptSegment(recording, {
+      id: 'direct:delivery-only',
+      speakerLabel: 'Konuşmacı',
+      startedAtMs: 1781820001000,
+      endedAtMs: 1781820011000,
+      timingBasis: 'delivery',
+      status: 'final',
+      text: 'Yalnız teslimat zamanlı önizleme',
+      source: 'direct-stream',
+    });
+
+    render(<TranscriptPanel session={deliveryOnly} />);
+
+    expect(screen.queryByLabelText('Konuşma dağılımı pasta grafiği')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Konuşmacı zaman çizgisi')).not.toBeInTheDocument();
+    expect(screen.getByText('1 tur · kaynak zamanlaması bekleniyor')).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        'Konuşmacı süreleri ve söz kesme sinyali için kaynak zamanlaması bekleniyor.',
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText('Kaynak zamanlaması olmadan overlap sonucu üretilmez.'),
+    ).toBeInTheDocument();
+  });
+
+  it('keeps delivery-only speakers out of source-timed analytics in a mixed session', () => {
+    const recording = startTranscriptSession(initialTranscriptSession(), {
+      sessionId: 'SES-MIXED-SPEAKER-TIMING',
+      meetingId: '22222222-2222-4222-8222-222222222222',
+      deviceId: 'desktop-1',
+      hasLoopback: false,
+      startedAtMs: 1781820000000,
+    });
+    const deliverySpeaker = upsertTranscriptSegment(recording, {
+      id: 'direct:delivery-speaker',
+      speakerLabel: 'Konuşmacı direct',
+      startedAtMs: 1781820001000,
+      endedAtMs: 1781820011000,
+      timingBasis: 'delivery',
+      status: 'final',
+      text: 'Teslimat saatli önizleme',
+      source: 'direct-stream',
+    });
+    const sourceSpeaker = upsertTranscriptSegment(deliverySpeaker, {
+      id: 'gateway:source-speaker:window:0',
+      speakerLabel: 'Konuşmacı gateway',
+      startedAtMs: 1781820012000,
+      endedAtMs: 1781820014000,
+      timingBasis: 'source',
+      status: 'final',
+      text: 'Kaynak saatli kalıcı satır',
+      source: 'gateway-events',
+    });
+
+    render(<TranscriptPanel session={sourceSpeaker} />);
+
+    expect(screen.getByLabelText('Konuşma dağılımı pasta grafiği')).toBeInTheDocument();
+    expect(screen.getByText('1 tur · kaynak zamanlaması bekleniyor')).toBeInTheDocument();
+    expect(screen.getByText('100% · 1 tur · 2 sn')).toBeInTheDocument();
+    expect(screen.queryByText('0% · 1 tur · -')).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Konuşmacı zaman çizgisi').children).toHaveLength(1);
   });
 
   it('surfaces interruption signals only when segment timing overlaps', () => {
@@ -545,6 +1257,7 @@ describe('TranscriptPanel', () => {
       speakerLabel: 'Konuşmacı 1',
       startedAtMs: 1781820000000,
       endedAtMs: 1781820005000,
+      timingBasis: 'source',
       status: 'final',
       text: 'Konuşmacı uzun bir açıklama yapıyor',
       source: 'gateway-events',
@@ -554,6 +1267,7 @@ describe('TranscriptPanel', () => {
       speakerLabel: 'Konuşmacı 2',
       startedAtMs: 1781820004500,
       endedAtMs: 1781820007000,
+      timingBasis: 'source',
       status: 'final',
       text: 'İkinci konuşmacı araya giriyor',
       source: 'gateway-events',
