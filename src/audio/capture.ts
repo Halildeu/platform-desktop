@@ -554,7 +554,7 @@ export async function startRecording(
     if (liveStream || (captureId && options.transcriptionMode === 'realtime')) {
       const liveFrame = resampleLinear(ev.data, audioContext.sampleRate, TARGET_RATE);
       for (const frame of liveStreamBuffer.push(liveFrame)) {
-        liveStream?.send(frame);
+        liveStream?.send(frame, capturedAtMs);
         if (captureId && options.transcriptionMode === 'realtime') {
           const bytes = pcm16ToBytes(floatToPcm16(frame));
           void api.audio
@@ -592,7 +592,7 @@ export async function startRecording(
         if (liveStream || (captureId && options.transcriptionMode === 'realtime')) {
           const restLiveFrame = liveStreamBuffer.flush();
           if (restLiveFrame) {
-            liveStream?.send(restLiveFrame);
+            liveStream?.send(restLiveFrame, Date.now());
             if (captureId && options.transcriptionMode === 'realtime') {
               const bytes = pcm16ToBytes(floatToPcm16(restLiveFrame));
               await api.audio.sendLiveFrame({ captureId, bytes, capturedAtMs: Date.now() });

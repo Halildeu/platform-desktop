@@ -50,6 +50,9 @@ const mocks = vi.hoisted(() => {
     gatewayLiveStreamStart: vi.fn(async () => undefined),
     gatewayLiveStreamSend: vi.fn(() => true),
     gatewayLiveStreamSendRealtime: vi.fn(() => true),
+    gatewayLiveStreamSourceStartedAtMs: vi.fn(() => 1781820000000),
+    gatewayLiveStreamSourceTimingReliable: vi.fn(() => true),
+    gatewayLiveStreamTransportEpoch: vi.fn(() => 3),
     gatewayLiveStreamStop: vi.fn(async () => ({
       state: 'drained',
       reason: 'eof-ack',
@@ -162,6 +165,7 @@ vi.mock('../services/gateway/transcript-event-subscription', () => ({
 }));
 
 vi.mock('../services/gateway/gateway-live-stream', () => ({
+  GATEWAY_LIVE_SAMPLE_RATE_HZ: 16_000,
   normalizeGatewayLiveContextTerms: (value: unknown) =>
     Array.isArray(value) ? value.map(String) : [],
   GatewayLiveStream: class MockGatewayLiveStream {
@@ -172,6 +176,9 @@ vi.mock('../services/gateway/gateway-live-stream', () => ({
     start = mocks.gatewayLiveStreamStart;
     sendAfterRestAccepted = mocks.gatewayLiveStreamSend;
     sendRealtimeFrame = mocks.gatewayLiveStreamSendRealtime;
+    getSourceStartedAtMs = mocks.gatewayLiveStreamSourceStartedAtMs;
+    hasReliableSourceTiming = mocks.gatewayLiveStreamSourceTimingReliable;
+    getTransportEpoch = mocks.gatewayLiveStreamTransportEpoch;
     stop = mocks.gatewayLiveStreamStop;
     close = mocks.gatewayLiveStreamClose;
   },
@@ -790,6 +797,9 @@ describe('audio IPC recorder consent gate', () => {
       seq: 4,
       text: 'son kelimeler',
       elapsed_ms: 500,
+      reason: 'speech_final',
+      source_start_sample: 16_000,
+      source_end_sample: 32_000,
     });
     expect(rendererSend).toHaveBeenCalledWith(
       'audio:transcript-event',
@@ -799,8 +809,42 @@ describe('audio IPC recorder consent gate', () => {
         status: 'FINAL',
         text: 'son kelimeler',
         correlationId: 'gateway-live',
+        transportEpoch: 3,
+        windowSeq: 4,
+        audioDurationMs: 1000,
+        flushReason: 'speech_final',
       }),
     );
+    const livePayload = rendererSend.mock.calls.find(
+      ([channel]) => channel === 'audio:transcript-event',
+    )?.[1] as { windowStartedAtMs: number; windowEndedAtMs: number };
+    expect(livePayload.windowEndedAtMs - livePayload.windowStartedAtMs).toBe(1000);
+    expect(livePayload.windowStartedAtMs).toBe(1781820001000);
+
+    mocks.gatewayLiveStreamSourceTimingReliable.mockReturnValueOnce(false);
+    callbacks.onEvent({
+      type: 'final',
+      seq: 5,
+      text: 'kesinti sonrası final',
+      elapsed_ms: 400,
+      reason: 'speech_final',
+      source_start_sample: 32_000,
+      source_end_sample: 40_000,
+    });
+    const degradedTimingPayload = rendererSend.mock.calls.find(
+      ([channel, payload]) =>
+        channel === 'audio:transcript-event' &&
+        (payload as { text?: string }).text === 'kesinti sonrası final',
+    )?.[1] as {
+      windowStartedAtMs: number | null;
+      windowEndedAtMs: number | null;
+      audioDurationMs: number | null;
+    };
+    expect(degradedTimingPayload).toMatchObject({
+      windowStartedAtMs: null,
+      windowEndedAtMs: null,
+      audioDurationMs: null,
+    });
 
     await finishHandler()({}, started.captureId);
     expect(mocks.gatewayLiveStreamStop).toHaveBeenCalledTimes(1);

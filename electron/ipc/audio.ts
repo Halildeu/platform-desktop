@@ -25,6 +25,7 @@ import {
   type TranscriptGatewayEvent,
 } from '../services/gateway/gateway-client.js';
 import {
+  GATEWAY_LIVE_SAMPLE_RATE_HZ,
   GatewayLiveStream,
   normalizeGatewayLiveContextTerms,
   type GatewayLiveDeliveryStatus,
@@ -240,6 +241,9 @@ function emitGatewayLiveTranscriptEvent(
   send: RendererSend | null,
   sessionId: string,
   meetingId: string,
+  sourceEpochMs: number | null,
+  sourceTimingReliable: boolean,
+  transportEpoch: number,
   event: GatewayLiveServerEvent,
 ): void {
   if (event.type !== 'partial' && event.type !== 'final') {
@@ -260,12 +264,39 @@ function emitGatewayLiveTranscriptEvent(
     typeof event.elapsed_ms === 'number' && Number.isFinite(event.elapsed_ms)
       ? Math.max(0, event.elapsed_ms)
       : null;
+  const hasSourceRange = Boolean(
+    event.type === 'final' &&
+    sourceTimingReliable &&
+    sourceEpochMs !== null &&
+    typeof event.source_start_sample === 'number' &&
+    typeof event.source_end_sample === 'number',
+  );
+  const sourceStartedAtMs =
+    event.type === 'final' && hasSourceRange && sourceEpochMs !== null
+      ? sourceEpochMs + (event.source_start_sample! / GATEWAY_LIVE_SAMPLE_RATE_HZ) * 1000
+      : null;
+  const sourceEndedAtMs =
+    event.type === 'final' && hasSourceRange && sourceEpochMs !== null
+      ? sourceEpochMs + (event.source_end_sample! / GATEWAY_LIVE_SAMPLE_RATE_HZ) * 1000
+      : null;
+  const audioDurationMs =
+    event.type === 'final' && hasSourceRange
+      ? ((event.source_end_sample! - event.source_start_sample!) / GATEWAY_LIVE_SAMPLE_RATE_HZ) *
+        1000
+      : null;
   emitTranscriptEvent(send, {
-    eventId: `live-${sessionId}-${event.seq}`,
+    eventId: `live-${sessionId}-${transportEpoch}-${event.seq}`,
     sessionId,
     meetingId,
     chunkSeq: event.seq,
-    chunkStartedAtMs: elapsedMs === null ? receivedAtMs : receivedAtMs - elapsedMs,
+    chunkStartedAtMs:
+      sourceStartedAtMs ?? (elapsedMs === null ? receivedAtMs : receivedAtMs - elapsedMs),
+    transportEpoch,
+    windowSeq: event.seq,
+    windowStartedAtMs: sourceStartedAtMs,
+    windowEndedAtMs: sourceEndedAtMs,
+    audioDurationMs,
+    flushReason: event.type === 'final' ? (event.reason ?? null) : null,
     text,
     textLength: text.length,
     status: event.type === 'final' ? 'FINAL' : 'DRAFT',
@@ -1001,7 +1032,15 @@ export function registerAudioIpc(): void {
             contextTerms: normalizedContextTerms,
             getJwt: () => getValidAccessToken(),
             onEvent: (liveEvent) =>
-              emitGatewayLiveTranscriptEvent(send, sessionId, normalizedMeetingId, liveEvent),
+              emitGatewayLiveTranscriptEvent(
+                send,
+                sessionId,
+                normalizedMeetingId,
+                liveStream?.getSourceStartedAtMs() ?? null,
+                liveStream?.hasReliableSourceTiming() === true,
+                liveStream?.getTransportEpoch() ?? -1,
+                liveEvent,
+              ),
             onError: (streamError) => emitTranscriptError(send, sessionId, streamError),
             onDeliveryStatus: (status) => emitLiveDeliveryStatus(send, sessionId, status),
           });

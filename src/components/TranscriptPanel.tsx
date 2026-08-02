@@ -1,8 +1,18 @@
-import { useEffect, useRef, useState, type CSSProperties, type ReactElement } from 'react';
+import {
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type ReactElement,
+} from 'react';
 
 import {
+  compareTranscriptSegments,
   lifecycleLabel,
   transcriptStatusLabel,
+  type TranscriptSegment,
   type TranscriptSegmentStatus,
   type TranscriptSessionState,
 } from '../transcript/session-transcript';
@@ -16,6 +26,9 @@ const TRANSCRIPT_LOW_DENSITY_WARN_MS = 15_000;
 const TRANSCRIPT_LOW_DENSITY_SEGMENTS_PER_MINUTE = 1;
 const TRANSCRIPT_LOW_WORD_RATE_WARN_MS = 20_000;
 const TRANSCRIPT_LOW_WORDS_PER_MINUTE = 35;
+const TRANSCRIPT_TURN_GAP_MS = 30_000;
+const TRANSCRIPT_TURN_MAX_SPAN_MS = 120_000;
+const TRANSCRIPT_TURN_MAX_SEGMENTS = 40;
 const SPEAKER_COLORS = ['#0f766e', '#2563eb', '#b45309', '#7c3aed', '#be123c', '#0f766e'];
 
 type TranscriptFilter =
@@ -360,6 +373,7 @@ interface SpeakerTimelineEntry {
   endedAtMs: number | null;
   durationMs: number;
   turnWords: number;
+  turnContribution: boolean;
   leftPct: number;
   widthPct: number;
 }
@@ -372,6 +386,7 @@ interface SpeakerSummary {
   durationMs: number;
   words: number;
   sharePct: number;
+  hasSourceTiming: boolean;
 }
 
 interface InterruptionSignal {
@@ -380,6 +395,98 @@ interface InterruptionSignal {
   label: string;
   previousLabel: string;
   overlapMs: number;
+}
+
+interface TranscriptTurn {
+  id: string;
+  speakerLabel: string;
+  segments: TranscriptSegment[];
+}
+
+function transcriptTurnStatus(
+  segments: readonly TranscriptSegment[],
+): TranscriptSegmentStatus | 'mixed' {
+  const statuses = new Set(segments.map((segment) => segment.status));
+  if (statuses.size > 1) {
+    return 'mixed';
+  }
+  return segments[0]?.status ?? 'final';
+}
+
+export function buildTranscriptTurns(segments: readonly TranscriptSegment[]): TranscriptTurn[] {
+  const ordered = [...segments].sort(compareTranscriptSegments);
+  const turns: TranscriptTurn[] = [];
+
+  for (const segment of ordered) {
+    const activeTurn = turns.at(-1);
+    const previousSegment = activeTurn?.segments.at(-1);
+    const previousEndMs = previousSegment
+      ? (explicitSegmentEnd(previousSegment) ?? previousSegment.startedAtMs)
+      : segment.startedAtMs;
+    const gapMs = Math.max(0, segment.startedAtMs - previousEndMs);
+    const turnSpanMs = activeTurn ? segment.startedAtMs - activeTurn.segments[0].startedAtMs : 0;
+    const extendsTurn = Boolean(
+      previousSegment &&
+      previousSegment.source === segment.source &&
+      activeTurn?.speakerLabel === segment.speakerLabel &&
+      gapMs <= TRANSCRIPT_TURN_GAP_MS &&
+      turnSpanMs <= TRANSCRIPT_TURN_MAX_SPAN_MS &&
+      (activeTurn?.segments.length ?? 0) < TRANSCRIPT_TURN_MAX_SEGMENTS,
+    );
+
+    if (activeTurn && extendsTurn) {
+      activeTurn.segments.push(segment);
+      continue;
+    }
+
+    turns.push({
+      id: `turn:${segment.source ?? 'unknown'}:${segment.id}`,
+      speakerLabel: segment.speakerLabel,
+      segments: [segment],
+    });
+  }
+
+  return turns;
+}
+
+export function reconcileTranscriptTurnIds(
+  previousTurns: readonly TranscriptTurn[],
+  nextTurns: readonly TranscriptTurn[],
+): TranscriptTurn[] {
+  const availablePrevious = new Set(previousTurns.map((turn) => turn.id));
+
+  return nextTurns.map((turn) => {
+    const nextSegmentIds = new Set(turn.segments.map((segment) => segment.id));
+    const firstNext = turn.segments[0];
+    const candidates = previousTurns
+      .filter((previous) => availablePrevious.has(previous.id))
+      .map((previous) => {
+        const overlap = previous.segments.reduce(
+          (count, segment) => count + Number(nextSegmentIds.has(segment.id)),
+          0,
+        );
+        const firstPrevious = previous.segments[0];
+        const sameBoundary = Boolean(
+          firstPrevious &&
+          firstNext &&
+          firstPrevious.source === firstNext.source &&
+          previous.speakerLabel === turn.speakerLabel &&
+          firstPrevious.startedAtMs === firstNext.startedAtMs,
+        );
+        return { previous, overlap, sameBoundary };
+      })
+      .filter((candidate) => candidate.overlap > 0 || candidate.sameBoundary)
+      .sort(
+        (left, right) =>
+          right.overlap - left.overlap || Number(right.sameBoundary) - Number(left.sameBoundary),
+      );
+    const matched = candidates[0]?.previous;
+    if (!matched) {
+      return turn;
+    }
+    availablePrevious.delete(matched.id);
+    return { ...turn, id: matched.id };
+  });
 }
 
 type TranscriptFlowHealthLevel = 'idle' | 'ok' | 'watch' | 'warn';
@@ -408,6 +515,7 @@ interface TranscriptFlowHealth {
 
 function explicitSegmentEnd(segment: TranscriptSessionState['segments'][number]): number | null {
   if (
+    segment.timingBasis === 'source' &&
     typeof segment.endedAtMs === 'number' &&
     Number.isFinite(segment.endedAtMs) &&
     segment.endedAtMs > segment.startedAtMs
@@ -420,46 +528,40 @@ function explicitSegmentEnd(segment: TranscriptSessionState['segments'][number])
 function buildSpeakerTimeline(
   session: TranscriptSessionState,
   speakerLabels: Record<string, string>,
+  projectedTurns?: readonly TranscriptTurn[],
 ): SpeakerTimelineEntry[] {
   if (session.segments.length === 0) {
     return [];
   }
 
-  const segments = [...session.segments].sort(
-    (a, b) => a.startedAtMs - b.startedAtMs || a.id.localeCompare(b.id),
-  );
+  const turns = projectedTurns ?? buildTranscriptTurns(session.segments);
   const labelIndexes = new Map<string, number>();
-  const firstStart = segments[0].startedAtMs;
+  const firstStart = turns[0].segments[0].startedAtMs;
 
-  const entries = segments.map((segment, index) => {
-    if (!labelIndexes.has(segment.speakerLabel)) {
-      labelIndexes.set(segment.speakerLabel, labelIndexes.size);
-    }
-    const sourceIndex = labelIndexes.get(segment.speakerLabel) ?? 0;
-    const explicitEnd = explicitSegmentEnd(segment);
-    const nextStart = segments[index + 1]?.startedAtMs;
-    const fallbackEnd =
-      typeof nextStart === 'number' && nextStart > segment.startedAtMs
-        ? nextStart
-        : typeof session.finishedAtMs === 'number' && session.finishedAtMs > segment.startedAtMs
-          ? session.finishedAtMs
-          : null;
-    const endedAtMs = explicitEnd ?? fallbackEnd;
-    const durationMs = endedAtMs === null ? 0 : Math.max(0, endedAtMs - segment.startedAtMs);
+  const entries = turns.flatMap((turn) =>
+    turn.segments.map((segment, segmentIndex) => {
+      if (!labelIndexes.has(turn.speakerLabel)) {
+        labelIndexes.set(turn.speakerLabel, labelIndexes.size);
+      }
+      const sourceIndex = labelIndexes.get(turn.speakerLabel) ?? 0;
+      const endedAtMs = explicitSegmentEnd(segment);
+      const durationMs = endedAtMs === null ? 0 : endedAtMs - segment.startedAtMs;
 
-    return {
-      id: segment.id,
-      sourceLabel: segment.speakerLabel,
-      label: speakerLabelFor(segment.speakerLabel, speakerLabels),
-      color: speakerColor(sourceIndex),
-      startedAtMs: segment.startedAtMs,
-      endedAtMs,
-      durationMs,
-      turnWords: wordCount(segment.text),
-      leftPct: 0,
-      widthPct: 0,
-    };
-  });
+      return {
+        id: `${turn.id}:segment:${segment.id}`,
+        sourceLabel: turn.speakerLabel,
+        label: speakerLabelFor(turn.speakerLabel, speakerLabels),
+        color: speakerColor(sourceIndex),
+        startedAtMs: segment.startedAtMs,
+        endedAtMs,
+        durationMs,
+        turnWords: wordCount(segment.text),
+        turnContribution: segmentIndex === 0,
+        leftPct: 0,
+        widthPct: 0,
+      };
+    }),
+  );
 
   const lastEnd = entries.reduce(
     (latest, entry) => Math.max(latest, entry.endedAtMs ?? entry.startedAtMs),
@@ -479,18 +581,20 @@ function buildSpeakerSummaries(entries: SpeakerTimelineEntry[]): SpeakerSummary[
   for (const entry of entries) {
     const existing = bySource.get(entry.sourceLabel);
     if (existing) {
-      existing.turns += 1;
+      existing.turns += Number(entry.turnContribution);
       existing.durationMs += entry.durationMs;
       existing.words += entry.turnWords;
+      existing.hasSourceTiming ||= entry.endedAtMs !== null;
     } else {
       bySource.set(entry.sourceLabel, {
         sourceLabel: entry.sourceLabel,
         label: entry.label,
         color: entry.color,
-        turns: 1,
+        turns: Number(entry.turnContribution),
         durationMs: entry.durationMs,
         words: entry.turnWords,
         sharePct: 0,
+        hasSourceTiming: entry.endedAtMs !== null,
       });
     }
   }
@@ -1002,22 +1106,72 @@ export function TranscriptPanel({
 }: TranscriptPanelProps): ReactElement {
   const hasSegments = session.segments.length > 0;
   const listRef = useRef<HTMLDivElement | null>(null);
+  const autoFollowLatestRef = useRef(true);
+  const turnHistoryRef = useRef<{ sessionKey: string; turns: TranscriptTurn[] }>({
+    sessionKey: '',
+    turns: [],
+  });
   const [diagnosticMessage, setDiagnosticMessage] = useState('');
   const [speakerLabels, setSpeakerLabels] = useState<Record<string, string>>({});
   const [editingSegmentId, setEditingSegmentId] = useState<string | null>(null);
   const [segmentTextDrafts, setSegmentTextDrafts] = useState<Record<string, string>>({});
   const [transcriptQuery, setTranscriptQuery] = useState('');
   const [transcriptFilter, setTranscriptFilter] = useState<TranscriptFilter>('all');
-  const visibleSegments = [...session.segments].reverse();
   const normalizedTranscriptQuery = normalizeTranscriptQuery(transcriptQuery);
-  const filteredSegments = visibleSegments.filter(
-    (segment) =>
-      matchesTranscriptFilter(session, segment, transcriptFilter) &&
-      matchesTranscriptQuery(segment, normalizedTranscriptQuery, speakerLabels),
+  const transcriptSessionKey = [
+    session.gatewaySessionId ?? '',
+    session.meetingId ?? '',
+    session.sessionId ?? '',
+  ].join(':');
+  const transcriptTurns = useMemo(() => {
+    const grouped = buildTranscriptTurns(session.segments);
+    const previousTurns =
+      turnHistoryRef.current.sessionKey === transcriptSessionKey
+        ? turnHistoryRef.current.turns
+        : [];
+    return reconcileTranscriptTurnIds(previousTurns, grouped);
+  }, [session.segments, transcriptSessionKey]);
+  useEffect(() => {
+    turnHistoryRef.current = { sessionKey: transcriptSessionKey, turns: transcriptTurns };
+  }, [transcriptSessionKey, transcriptTurns]);
+  const filteredTurns = useMemo(
+    () =>
+      transcriptTurns
+        .map((turn) => {
+          const visibleSegments = turn.segments.filter(
+            (segment) =>
+              matchesTranscriptFilter(session, segment, transcriptFilter) &&
+              matchesTranscriptQuery(segment, normalizedTranscriptQuery, speakerLabels),
+          );
+          return {
+            ...turn,
+            segments: visibleSegments,
+            hiddenSegmentCount: turn.segments.length - visibleSegments.length,
+          };
+        })
+        .filter((turn) => turn.segments.length > 0),
+    [normalizedTranscriptQuery, session, speakerLabels, transcriptFilter, transcriptTurns],
   );
-  const speakerTimeline = buildSpeakerTimeline(session, speakerLabels);
+  const filteredSegmentCount = filteredTurns.reduce(
+    (count, turn) => count + turn.segments.length,
+    0,
+  );
+  const visibleContentRevision = filteredTurns
+    .flatMap((turn) =>
+      turn.segments.map(
+        (segment) =>
+          `${turn.id}:${segment.id}:${segment.status}:${segment.text}:${segment.receivedAtMs ?? ''}`,
+      ),
+    )
+    .join('|');
+  const speakerTimeline = useMemo(
+    () => buildSpeakerTimeline(session, speakerLabels, transcriptTurns),
+    [session, speakerLabels, transcriptTurns],
+  );
+  const hasReliableSpeakerTiming = speakerTimeline.some((entry) => entry.endedAtMs !== null);
   const speakerSummaries = buildSpeakerSummaries(speakerTimeline);
-  const interruptionSignals = buildInterruptionSignals(speakerTimeline);
+  const sourceTimedSpeakerTimeline = speakerTimeline.filter((entry) => entry.endedAtMs !== null);
+  const interruptionSignals = buildInterruptionSignals(sourceTimedSpeakerTimeline);
   const hasSpeakerOverrides = Object.entries(speakerLabels).some(
     ([sourceLabel, label]) => label.trim() && label.trim() !== sourceLabel,
   );
@@ -1063,11 +1217,14 @@ export function TranscriptPanel({
     setEditingSegmentId(null);
   };
 
-  useEffect(() => {
-    if (listRef.current) {
-      listRef.current.scrollTop = 0;
+  const handleTranscriptScroll = (): void => {
+    const list = listRef.current;
+    if (!list) {
+      return;
     }
-  }, [filteredSegments.length, session.segments, transcriptFilter, transcriptQuery]);
+    const distanceFromLatest = list.scrollHeight - list.scrollTop - list.clientHeight;
+    autoFollowLatestRef.current = distanceFromLatest <= 48;
+  };
 
   useEffect(() => {
     setSpeakerLabels({});
@@ -1075,7 +1232,32 @@ export function TranscriptPanel({
     setSegmentTextDrafts({});
     setTranscriptQuery('');
     setTranscriptFilter('all');
+    autoFollowLatestRef.current = true;
   }, [session.gatewaySessionId, session.meetingId, session.sessionId]);
+
+  useLayoutEffect(() => {
+    if (!visibleContentRevision || !autoFollowLatestRef.current) {
+      return;
+    }
+    const list = listRef.current;
+    if (list) {
+      list.scrollTop = Math.max(0, list.scrollHeight - list.clientHeight);
+    }
+  }, [visibleContentRevision]);
+
+  useEffect(() => {
+    const list = listRef.current;
+    if (!list || typeof ResizeObserver === 'undefined') {
+      return;
+    }
+    const observer = new ResizeObserver(() => {
+      if (autoFollowLatestRef.current) {
+        list.scrollTop = Math.max(0, list.scrollHeight - list.clientHeight);
+      }
+    });
+    observer.observe(list);
+    return () => observer.disconnect();
+  }, []);
 
   return (
     <section className="transcript-panel" aria-labelledby="transcript-title">
@@ -1231,11 +1413,13 @@ export function TranscriptPanel({
           </div>
 
           <div className="speaker-overview">
-            <div
-              className="speaker-distribution-chart"
-              aria-label="Konuşma dağılımı pasta grafiği"
-              style={{ background: speakerDistributionGradient(speakerSummaries) }}
-            />
+            {hasReliableSpeakerTiming ? (
+              <div
+                className="speaker-distribution-chart"
+                aria-label="Konuşma dağılımı pasta grafiği"
+                style={{ background: speakerDistributionGradient(speakerSummaries) }}
+              />
+            ) : null}
             <div className="speaker-stat-list">
               {speakerSummaries.map((speaker) => (
                 <label className="speaker-stat" key={speaker.sourceLabel}>
@@ -1246,8 +1430,9 @@ export function TranscriptPanel({
                   />
                   <span className="speaker-stat-body">
                     <span className="speaker-stat-meta">
-                      {Math.round(speaker.sharePct)}% · {speaker.turns} tur ·{' '}
-                      {formatSpeakerDuration(speaker.durationMs)}
+                      {speaker.hasSourceTiming
+                        ? `${Math.round(speaker.sharePct)}% · ${speaker.turns} tur · ${formatSpeakerDuration(speaker.durationMs)}`
+                        : `${speaker.turns} tur · kaynak zamanlaması bekleniyor`}
                     </span>
                     <input
                       aria-label={`Konuşmacı adı: ${speaker.sourceLabel}`}
@@ -1265,30 +1450,38 @@ export function TranscriptPanel({
             </div>
           </div>
 
-          <div className="speaker-timeline" role="img" aria-label="Konuşmacı zaman çizgisi">
-            {speakerTimeline.map((entry) => (
-              <div
-                className="speaker-timeline-block"
-                key={entry.id}
-                style={
-                  {
-                    '--speaker-color': entry.color,
-                    left: `${entry.leftPct}%`,
-                    width: `${Math.min(entry.widthPct, 100 - entry.leftPct)}%`,
-                  } as CSSProperties
-                }
-                title={`${entry.label} · ${formatClock(entry.startedAtMs)} · ${formatSpeakerDuration(
-                  entry.durationMs,
-                )}`}
-              >
-                <span>{entry.label}</span>
-              </div>
-            ))}
-          </div>
+          {hasReliableSpeakerTiming ? (
+            <div className="speaker-timeline" role="img" aria-label="Konuşmacı zaman çizgisi">
+              {sourceTimedSpeakerTimeline.map((entry) => (
+                <div
+                  className="speaker-timeline-block"
+                  key={entry.id}
+                  style={
+                    {
+                      '--speaker-color': entry.color,
+                      left: `${entry.leftPct}%`,
+                      width: `${Math.min(entry.widthPct, 100 - entry.leftPct)}%`,
+                    } as CSSProperties
+                  }
+                  title={`${entry.label} · ${formatClock(entry.startedAtMs)} · ${formatSpeakerDuration(
+                    entry.durationMs,
+                  )}`}
+                >
+                  <span>{entry.label}</span>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="speaker-timing-unavailable" role="status">
+              Konuşmacı süreleri ve söz kesme sinyali için kaynak zamanlaması bekleniyor.
+            </p>
+          )}
 
           <div className="speaker-interruptions" aria-live="polite">
             <strong>Söz kesme sinyali</strong>
-            {interruptionSignals.length > 0 ? (
+            {!hasReliableSpeakerTiming ? (
+              <span>Kaynak zamanlaması olmadan overlap sonucu üretilmez.</span>
+            ) : interruptionSignals.length > 0 ? (
               <ul>
                 {interruptionSignals.map((signal) => (
                   <li key={signal.id}>
@@ -1332,108 +1525,135 @@ export function TranscriptPanel({
             ))}
           </div>
           <p className="transcript-review-stats">
-            {transcriptReviewSummary(session, filteredSegments.length)}
+            {transcriptReviewSummary(session, filteredSegmentCount)}
           </p>
         </section>
       ) : null}
 
-      <div className="transcript-list" aria-live="polite" ref={listRef}>
-        {hasSegments && filteredSegments.length > 0 ? (
-          filteredSegments.map((segment) => {
-            const metricLabel = segmentMetricLabel(segment);
-            const liveDirectDraft = isLiveDirectDraft(segment);
-            const reviewedSegment = isReviewedSegment(segment);
-            const editableSegment = Boolean(onSegmentTextChange) && !liveDirectDraft;
-            const canMarkReviewed =
-              Boolean(onSegmentReviewed) && !liveDirectDraft && !reviewedSegment;
-            const editingSegment = editingSegmentId === segment.id;
-            const segmentDraftText = segmentTextDrafts[segment.id] ?? segment.text;
-            const reviewedText = segmentDraftText.trim();
-            const reviewChanged = reviewedText !== segment.text.trim();
+      <div
+        className="transcript-list"
+        aria-live="polite"
+        ref={listRef}
+        onScroll={handleTranscriptScroll}
+      >
+        {hasSegments && filteredTurns.length > 0 ? (
+          filteredTurns.map((turn) => {
+            const turnIsLive = turn.segments.some(isLiveDirectDraft);
+            const turnStatus = transcriptTurnStatus(turn.segments);
 
             return (
               <article
-                className={`transcript-segment segment-${segment.status}${
-                  liveDirectDraft ? ' segment-live' : ''
+                className={`transcript-segment segment-${turnStatus}${
+                  turnIsLive ? ' segment-live' : ''
                 }`}
-                key={segment.id}
+                key={turn.id}
               >
-                <div className="segment-meta">
-                  <span>{speakerLabelFor(segment.speakerLabel, speakerLabels)}</span>
-                  <time dateTime={new Date(segment.startedAtMs).toISOString()}>
-                    {formatClock(segment.startedAtMs)}
-                  </time>
-                  <span>{transcriptStatusLabel(segment.status)}</span>
-                  <span>{segmentSourceLabel(segment.source)}</span>
-                  {metricLabel ? <span>{metricLabel}</span> : null}
-                  {reviewedSegment ? <span>İncelendi</span> : null}
-                  {liveDirectDraft ? <span>Canlı</span> : null}
+                <div className="segment-meta transcript-turn-meta">
+                  <span>{speakerLabelFor(turn.speakerLabel, speakerLabels)}</span>
+                  {turn.segments.length > 1 || turn.hiddenSegmentCount > 0 ? (
+                    <span>{turn.segments.length} paragraf</span>
+                  ) : null}
+                  {turn.hiddenSegmentCount > 0 ? (
+                    <span>{turn.hiddenSegmentCount} filtrelenmiş paragraf</span>
+                  ) : null}
                 </div>
-                {editingSegment ? (
-                  <div className="segment-editor">
-                    <label htmlFor={`segment-editor-${segment.id}`}>Transkript metni</label>
-                    <textarea
-                      id={`segment-editor-${segment.id}`}
-                      value={segmentDraftText}
-                      onChange={(event) =>
-                        setSegmentTextDrafts((current) => ({
-                          ...current,
-                          [segment.id]: event.target.value,
-                        }))
-                      }
-                    />
-                    <div className="segment-editor-actions">
-                      <button
-                        className="primary-action compact-action"
-                        type="button"
-                        onClick={() => saveSegmentReview(segment.id)}
-                        disabled={!reviewedText || !reviewChanged}
+                <div className="transcript-turn-body">
+                  {turn.segments.map((segment) => {
+                    const metricLabel = segmentMetricLabel(segment);
+                    const liveDirectDraft = isLiveDirectDraft(segment);
+                    const reviewedSegment = isReviewedSegment(segment);
+                    const editableSegment = Boolean(onSegmentTextChange) && !liveDirectDraft;
+                    const canMarkReviewed =
+                      Boolean(onSegmentReviewed) && !liveDirectDraft && !reviewedSegment;
+                    const editingSegment = editingSegmentId === segment.id;
+                    const segmentDraftText = segmentTextDrafts[segment.id] ?? segment.text;
+                    const reviewedText = segmentDraftText.trim();
+                    const reviewChanged = reviewedText !== segment.text.trim();
+
+                    return (
+                      <div
+                        className={`transcript-turn-paragraph transcript-paragraph-status-${segment.status}`}
+                        key={segment.id}
                       >
-                        Kaydet
-                      </button>
-                      <button
-                        className="secondary-action compact-action"
-                        type="button"
-                        onClick={cancelSegmentReview}
-                      >
-                        Vazgeç
-                      </button>
-                    </div>
-                  </div>
-                ) : (
-                  <>
-                    <p>
-                      {segment.text}
-                      {liveDirectDraft ? (
-                        <span className="live-caret" aria-hidden="true">
-                          |
-                        </span>
-                      ) : null}
-                    </p>
-                    {editableSegment || canMarkReviewed ? (
-                      <div className="segment-actions">
-                        {canMarkReviewed ? (
-                          <button
-                            className="secondary-action compact-action segment-review-action"
-                            type="button"
-                            onClick={() => onSegmentReviewed?.(segment.id)}
-                          >
-                            İncelendi
-                          </button>
-                        ) : null}
-                        {editableSegment ? (
-                          <button
-                            className="secondary-action compact-action segment-review-action"
-                            type="button"
-                            onClick={() => beginSegmentReview(segment.id, segment.text)}
-                          >
-                            Metni düzelt
-                          </button>
-                        ) : null}
+                        <div className="segment-meta transcript-turn-paragraph-meta">
+                          <time dateTime={new Date(segment.startedAtMs).toISOString()}>
+                            {formatClock(segment.startedAtMs)}
+                          </time>
+                          <span>{transcriptStatusLabel(segment.status)}</span>
+                          <span>{segmentSourceLabel(segment.source)}</span>
+                          {metricLabel ? <span>{metricLabel}</span> : null}
+                          {reviewedSegment ? <span>İncelendi</span> : null}
+                          {liveDirectDraft ? <span>Canlı</span> : null}
+                        </div>
+                        {editingSegment ? (
+                          <div className="segment-editor">
+                            <label htmlFor={`segment-editor-${segment.id}`}>Transkript metni</label>
+                            <textarea
+                              id={`segment-editor-${segment.id}`}
+                              value={segmentDraftText}
+                              onChange={(event) =>
+                                setSegmentTextDrafts((current) => ({
+                                  ...current,
+                                  [segment.id]: event.target.value,
+                                }))
+                              }
+                            />
+                            <div className="segment-editor-actions">
+                              <button
+                                className="primary-action compact-action"
+                                type="button"
+                                onClick={() => saveSegmentReview(segment.id)}
+                                disabled={!reviewedText || !reviewChanged}
+                              >
+                                Kaydet
+                              </button>
+                              <button
+                                className="secondary-action compact-action"
+                                type="button"
+                                onClick={cancelSegmentReview}
+                              >
+                                Vazgeç
+                              </button>
+                            </div>
+                          </div>
+                        ) : (
+                          <>
+                            <p>
+                              {segment.text}
+                              {liveDirectDraft ? (
+                                <span className="live-caret" aria-hidden="true">
+                                  |
+                                </span>
+                              ) : null}
+                            </p>
+                            {editableSegment || canMarkReviewed ? (
+                              <div className="segment-actions">
+                                {canMarkReviewed ? (
+                                  <button
+                                    className="secondary-action compact-action segment-review-action"
+                                    type="button"
+                                    onClick={() => onSegmentReviewed?.(segment.id)}
+                                  >
+                                    İncelendi
+                                  </button>
+                                ) : null}
+                                {editableSegment ? (
+                                  <button
+                                    className="secondary-action compact-action segment-review-action"
+                                    type="button"
+                                    onClick={() => beginSegmentReview(segment.id, segment.text)}
+                                  >
+                                    Metni düzelt
+                                  </button>
+                                ) : null}
+                              </div>
+                            ) : null}
+                          </>
+                        )}
                       </div>
-                    ) : null}
-                  </>
-                )}
+                    );
+                  })}
+                </div>
               </article>
             );
           })

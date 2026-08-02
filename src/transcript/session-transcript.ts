@@ -22,6 +22,7 @@ export interface TranscriptSegment {
   text: string;
   revisedFromId?: string;
   source?: 'direct-stream' | 'gateway-events';
+  timingBasis?: 'source' | 'delivery';
   elapsedMs?: number | null;
   rms?: number | null;
   receivedAtMs?: number | null;
@@ -460,12 +461,47 @@ export function upsertTranscriptSegment(
     ? state.segments.map((item) =>
         item.id === segment.id ? mergeTranscriptSegment(item, segment) : item,
       )
-    : [...state.segments, segment];
+    : [...state.segments, normalizeInsertedSegmentTiming(segment)];
 
   return {
     ...state,
-    segments: segments.sort((a, b) => a.startedAtMs - b.startedAtMs || a.id.localeCompare(b.id)),
+    segments: segments.sort(compareTranscriptSegments),
   };
+}
+
+export function gatewayTranscriptWindowOrder(
+  id: string,
+): { session: string; sequenceSpace: string; sequence: number } | null {
+  const match = /^(gateway:.+?)(?::(live:\d+))?:window:(\d+)$/.exec(id);
+  if (!match) {
+    return null;
+  }
+  const sequence = Number(match[3]);
+  return Number.isSafeInteger(sequence)
+    ? { session: match[1], sequenceSpace: match[2] ?? 'durable', sequence }
+    : null;
+}
+
+export function compareTranscriptSegments(
+  left: TranscriptSegment,
+  right: TranscriptSegment,
+): number {
+  const timestampOrder = left.startedAtMs - right.startedAtMs;
+  if (timestampOrder !== 0) {
+    return timestampOrder;
+  }
+  const leftWindow = gatewayTranscriptWindowOrder(left.id);
+  const rightWindow = gatewayTranscriptWindowOrder(right.id);
+  if (
+    leftWindow &&
+    rightWindow &&
+    leftWindow.session === rightWindow.session &&
+    leftWindow.sequenceSpace === rightWindow.sequenceSpace
+  ) {
+    return leftWindow.sequence - rightWindow.sequence;
+  }
+  // Array#sort is stable: unrelated equal-timestamp events retain arrival order.
+  return 0;
 }
 
 export function markTranscriptSegmentReviewed(
@@ -536,16 +572,46 @@ function mergeTranscriptSegment(
   existing: TranscriptSegment,
   incoming: TranscriptSegment,
 ): TranscriptSegment {
+  const hasIncomingEnd =
+    typeof incoming.endedAtMs === 'number' && Number.isFinite(incoming.endedAtMs);
   if (shouldPreserveDirectDraftText(existing, incoming)) {
     return {
       ...existing,
       ...incoming,
       text: existing.text,
       startedAtMs: existing.startedAtMs,
+      endedAtMs: existing.endedAtMs,
+      timingBasis: existing.timingBasis,
     };
   }
 
-  return { ...existing, ...incoming };
+  const sameStart = incoming.startedAtMs === existing.startedAtMs;
+  const hasExistingSourceEnd =
+    existing.timingBasis === 'source' &&
+    typeof existing.endedAtMs === 'number' &&
+    Number.isFinite(existing.endedAtMs);
+  const shouldPreserveExistingEnd =
+    sameStart && (!hasIncomingEnd || (!incoming.timingBasis && hasExistingSourceEnd));
+  const endedAtMs = shouldPreserveExistingEnd
+    ? existing.endedAtMs
+    : hasIncomingEnd
+      ? incoming.endedAtMs
+      : null;
+  const timingBasis = shouldPreserveExistingEnd
+    ? existing.timingBasis
+    : hasIncomingEnd
+      ? (incoming.timingBasis ?? 'delivery')
+      : undefined;
+
+  return { ...existing, ...incoming, endedAtMs, timingBasis };
+}
+
+function normalizeInsertedSegmentTiming(segment: TranscriptSegment): TranscriptSegment {
+  const hasEnd = typeof segment.endedAtMs === 'number' && Number.isFinite(segment.endedAtMs);
+  if (!hasEnd || segment.timingBasis) {
+    return segment;
+  }
+  return { ...segment, timingBasis: 'delivery' };
 }
 
 function shouldPreserveDirectDraftText(
@@ -973,7 +1039,7 @@ export function buildMeetingAiSourcePrivacy(
 function sourceSegments(state: TranscriptSessionState): TranscriptSegment[] {
   return state.segments
     .filter((segment) => segment.text.trim().length > 0)
-    .sort((a, b) => a.startedAtMs - b.startedAtMs || a.id.localeCompare(b.id));
+    .sort(compareTranscriptSegments);
 }
 
 function isFinalSegment(segment: TranscriptSegment): boolean {
@@ -989,7 +1055,14 @@ function buildAnalyzeSegments(segments: TranscriptSegment[]): MeetingAiAnalyzeSe
   return segments.map((segment, index) => {
     const start = toSeconds(segment.startedAtMs - firstStartedAtMs);
     const next = segments[index + 1];
-    const end = next ? toSeconds(next.startedAtMs - firstStartedAtMs) : undefined;
+    const explicitEnd =
+      segment.timingBasis === 'source' &&
+      typeof segment.endedAtMs === 'number' &&
+      Number.isFinite(segment.endedAtMs) &&
+      segment.endedAtMs > segment.startedAtMs
+        ? toSeconds(segment.endedAtMs - firstStartedAtMs)
+        : undefined;
+    const end = explicitEnd ?? (next ? toSeconds(next.startedAtMs - firstStartedAtMs) : undefined);
     return {
       text: segment.text.trim(),
       start,
