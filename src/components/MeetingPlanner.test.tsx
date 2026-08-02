@@ -16,6 +16,7 @@ describe('MeetingPlanner', () => {
         open={false}
         pending={false}
         sttProvider="internal"
+        transcriptionMode="realtime"
         onOpen={onOpen}
         onCancel={vi.fn()}
         onSubmit={vi.fn()}
@@ -31,6 +32,7 @@ describe('MeetingPlanner', () => {
         open
         pending={false}
         sttProvider="internal"
+        transcriptionMode="realtime"
         onOpen={onOpen}
         onCancel={vi.fn()}
         onSubmit={vi.fn()}
@@ -48,6 +50,7 @@ describe('MeetingPlanner', () => {
         open
         pending={false}
         sttProvider="internal"
+        transcriptionMode="realtime"
         onOpen={vi.fn()}
         onCancel={vi.fn()}
         onSubmit={onSubmit}
@@ -83,6 +86,7 @@ describe('MeetingPlanner', () => {
         scheduledStart: expect.stringMatching(/^2026-08-02T/),
         scheduledEnd: expect.stringMatching(/^2026-08-02T/),
         sttProvider: 'speechmatics',
+        transcriptionMode: 'realtime',
       }),
     );
   });

@@ -130,6 +130,33 @@ describe('GatewayLiveStream', () => {
     stream.close();
   });
 
+  it('assigns contiguous gateway sequences to realtime frames independently of REST chunks', async () => {
+    const sockets: FakeSocket[] = [];
+    const stream = new GatewayLiveStream({
+      cfg: { baseUrl: 'https://testai.acik.com' },
+      sessionId: 'SES-REALTIME',
+      getJwt: async () => 'JWT',
+      onEvent: vi.fn(),
+      onError: vi.fn(),
+      socketFactory: () => {
+        const socket = new FakeSocket();
+        sockets.push(socket);
+        return socket;
+      },
+    });
+
+    const started = stream.start();
+    await waitForSocket(sockets, 1);
+    sockets[0].open();
+    sockets[0].message(JSON.stringify({ type: 'ready', supports_eof: true }));
+    await started;
+
+    expect(stream.sendRealtimeFrame(new Uint8Array([0, 0]), 100)).toBe(true);
+    expect(stream.sendRealtimeFrame(new Uint8Array([1, 0]), 200)).toBe(true);
+    expect(sockets[0].sent.map(frameSeq)).toEqual([0, 1]);
+    stream.close();
+  });
+
   it('sends EOF only after capability advertisement and drains only after terminal drained', async () => {
     vi.useFakeTimers();
     const sockets: FakeSocket[] = [];

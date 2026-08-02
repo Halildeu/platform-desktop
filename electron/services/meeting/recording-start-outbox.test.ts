@@ -24,6 +24,7 @@ const intent: PendingRecordingStart = {
   deviceId: 'desktop-1',
   language: 'tr',
   sttProvider: 'internal',
+  transcriptionMode: 'balanced',
   startedAt: '2026-07-17T08:43:20Z',
   idempotencyKey: '0123456789abcdef0123456789abcdef',
   gatewayFinishIdempotencyKey: 'fedcba9876543210fedcba9876543210',
@@ -35,6 +36,19 @@ describe('RecordingStartOutbox', () => {
     const recovery = new MemoryStore();
     const legacy = structuredClone(intent) as Partial<PendingRecordingStart>;
     delete legacy.sttProvider;
+    primary.snapshot = { generation: 1, pending: [legacy as PendingRecordingStart] };
+    recovery.snapshot = structuredClone(primary.snapshot);
+
+    expect(new RecordingStartOutbox(primary, recovery).list()).toEqual([
+      { ...intent, startedAt: '2026-07-17T08:43:20.000Z' },
+    ]);
+  });
+
+  it('migrates a pre-mode pending intent to the balanced default', () => {
+    const primary = new MemoryStore();
+    const recovery = new MemoryStore();
+    const legacy = structuredClone(intent) as Partial<PendingRecordingStart>;
+    delete legacy.transcriptionMode;
     primary.snapshot = { generation: 1, pending: [legacy as PendingRecordingStart] };
     recovery.snapshot = structuredClone(primary.snapshot);
 

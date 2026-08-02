@@ -213,6 +213,7 @@ function installElectronApiMock(recorderConfig: {
       consent: vi.fn(),
       start: vi.fn(),
       sendChunk: vi.fn(),
+      sendLiveFrame: vi.fn(),
       finish: vi.fn(),
       abort: vi.fn(),
       rendererUnloaded: vi.fn(),
@@ -439,7 +440,7 @@ describe('App recorder readiness', () => {
     expect(screen.getByRole('button', { name: 'Kaydet' })).toBeEnabled();
   });
 
-  it('Speechmatics secimini kayit oturumuna tasir ve internal streami acmaz', async () => {
+  it('Speechmatics secimini anlik gateway oturumuna tasir ve direct streami acmaz', async () => {
     installElectronApiMock({
       meetingId: '22222222-2222-4222-8222-222222222222',
       deviceId: 'desktop-1',
@@ -470,15 +471,43 @@ describe('App recorder readiness', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Kaydet' }));
     fireEvent.click(screen.getByRole('button', { name: 'Onaylıyorum — Kaydı Başlat' }));
 
-    await screen.findByText('Transkripsiyon: Speechmatics');
+    await screen.findByText('Transkripsiyon: Speechmatics · Anlık');
     expect(startRecording).toHaveBeenCalledWith(
       '22222222-2222-4222-8222-222222222222',
       'desktop-1',
       expect.objectContaining({
         sttProvider: 'speechmatics',
+        transcriptionMode: 'realtime',
         liveSttStreamUrl: null,
       }),
     );
+  });
+
+  it('Speechmatics anlik modu gateway canli tasima yoksa fail closed davranir', async () => {
+    installElectronApiMock({
+      meetingId: '22222222-2222-4222-8222-222222222222',
+      deviceId: 'desktop-1',
+      ready: true,
+      reason: null,
+      gatewayLiveStreamEnabled: false,
+      liveSttStreamUrl: null,
+      liveSttStreamReason: 'Gateway live stream disabled',
+    });
+
+    render(<App />);
+    await userEvent.selectOptions(
+      await screen.findByRole('combobox', { name: 'Transkripsiyon sağlayıcısı' }),
+      'speechmatics',
+    );
+    await userEvent.click(screen.getByRole('button', { name: 'Kaydet' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Onaylıyorum — Kaydı Başlat' }));
+
+    expect(
+      await screen.findAllByText(
+        /Speechmatics Anlık modu için yetkili Gateway canlı akışı kullanılabilir değil\./,
+      ),
+    ).not.toHaveLength(0);
+    expect(startRecording).not.toHaveBeenCalled();
   });
 
   it('meeting contract olusturma cagrilarini hizli tekrar tiklamada tekillestirir', async () => {
@@ -2184,6 +2213,7 @@ describe('App recent meeting result navigation', () => {
       screen.getByRole('combobox', { name: 'Transkripsiyon sağlayıcısı' }),
       'speechmatics',
     );
+    await userEvent.click(screen.getByRole('radio', { name: 'Dengeli' }));
 
     const recordButton = screen.getByRole('button', { name: 'Kaydet' });
     expect(recordButton).toBeEnabled();
@@ -2194,7 +2224,10 @@ describe('App recent meeting result navigation', () => {
       expect(startRecording).toHaveBeenCalledWith(
         CANONICAL_MEETING_ID,
         'desktop-1',
-        expect.objectContaining({ sttProvider: 'speechmatics' }),
+        expect.objectContaining({
+          sttProvider: 'speechmatics',
+          transcriptionMode: 'balanced',
+        }),
       );
     });
   });

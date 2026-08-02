@@ -1,6 +1,6 @@
 import { useState, type FormEvent } from 'react';
 
-import type { SttProvider } from '../audio/capture';
+import type { SttProvider, TranscriptionMode } from '../audio/capture';
 
 export interface MeetingPlan {
   title: string;
@@ -8,12 +8,14 @@ export interface MeetingPlan {
   scheduledStart: string;
   scheduledEnd: string;
   sttProvider: SttProvider;
+  transcriptionMode: TranscriptionMode;
 }
 
 interface MeetingPlannerProps {
   open: boolean;
   pending: boolean;
   sttProvider: SttProvider;
+  transcriptionMode: TranscriptionMode;
   onOpen: () => void;
   onCancel: () => void;
   onSubmit: (plan: MeetingPlan) => void;
@@ -39,6 +41,7 @@ export function MeetingPlanner({
   open,
   pending,
   sttProvider,
+  transcriptionMode,
   onOpen,
   onCancel,
   onSubmit,
@@ -49,6 +52,7 @@ export function MeetingPlanner({
   const [scheduledStart, setScheduledStart] = useState(start);
   const [scheduledEnd, setScheduledEnd] = useState(end);
   const [provider, setProvider] = useState<SttProvider>(sttProvider);
+  const [mode, setMode] = useState<TranscriptionMode>(transcriptionMode);
   const [validationError, setValidationError] = useState('');
 
   if (!open) {
@@ -83,6 +87,7 @@ export function MeetingPlanner({
       scheduledStart: startAt.toISOString(),
       scheduledEnd: endAt.toISOString(),
       sttProvider: provider,
+      transcriptionMode: mode,
     });
   };
 
@@ -153,6 +158,31 @@ export function MeetingPlanner({
             <option value="speechmatics">Speechmatics</option>
           </select>
         </label>
+        <fieldset className="meeting-planner-field meeting-planner-field--wide transcription-mode-field">
+          <legend>Transkript görünümü</legend>
+          <div className="segmented-control">
+            <label>
+              <input
+                type="radio"
+                name="transcription-mode"
+                value="realtime"
+                checked={mode === 'realtime'}
+                onChange={() => setMode('realtime')}
+              />
+              <span>Anlık</span>
+            </label>
+            <label>
+              <input
+                type="radio"
+                name="transcription-mode"
+                value="balanced"
+                checked={mode === 'balanced'}
+                onChange={() => setMode('balanced')}
+              />
+              <span>Dengeli</span>
+            </label>
+          </div>
+        </fieldset>
       </div>
 
       {validationError ? (

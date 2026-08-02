@@ -18,7 +18,7 @@ import {
   type LiveSttStreamConnection,
   type LiveSttStreamStatusEvent,
 } from './live-stt-stream';
-import { encodeChunk, resampleLinear } from './pcm-encode';
+import { encodeChunk, floatToPcm16, pcm16ToBytes, resampleLinear } from './pcm-encode';
 import { FrameBuffer } from './frame-buffer';
 
 const TARGET_RATE = 16000;
@@ -133,6 +133,7 @@ export interface Recorder {
 }
 
 export type SttProvider = 'internal' | 'speechmatics';
+export type TranscriptionMode = 'balanced' | 'realtime';
 
 export interface RecorderStopResult {
   liveStt: LiveSttStopResult | null;
@@ -156,6 +157,7 @@ export interface RecorderStopResult {
 
 export interface StartRecordingOptions {
   sttProvider?: SttProvider;
+  transcriptionMode?: TranscriptionMode;
   liveSttStreamUrl?: string | null;
   liveSttContextTerms?: readonly string[];
   onLiveStreamReady?: () => void;
@@ -411,11 +413,18 @@ export async function startRecording(
     transcriptSessionId: string;
     captureId: string;
     sttProvider?: SttProvider;
+    transcriptionMode?: TranscriptionMode;
   } | null = null;
   if (!recorderStartupError) {
     try {
       const gatewayStart = options.sttProvider
-        ? api.audio.start(meetingId, deviceId, options.liveSttContextTerms, options.sttProvider)
+        ? api.audio.start(
+            meetingId,
+            deviceId,
+            options.liveSttContextTerms,
+            options.sttProvider,
+            options.transcriptionMode,
+          )
         : options.liveSttContextTerms && options.liveSttContextTerms.length > 0
           ? api.audio.start(meetingId, deviceId, options.liveSttContextTerms)
           : api.audio.start(meetingId, deviceId);
@@ -542,10 +551,19 @@ export async function startRecording(
       lastAudioActivityEventAtMs = capturedAtMs;
       options.onAudioActivity({ rms: rms(ev.data), capturedAtMs });
     }
-    if (liveStream) {
+    if (liveStream || (captureId && options.transcriptionMode === 'realtime')) {
       const liveFrame = resampleLinear(ev.data, audioContext.sampleRate, TARGET_RATE);
       for (const frame of liveStreamBuffer.push(liveFrame)) {
-        liveStream.send(frame);
+        liveStream?.send(frame);
+        if (captureId && options.transcriptionMode === 'realtime') {
+          const bytes = pcm16ToBytes(floatToPcm16(frame));
+          void api.audio
+            .sendLiveFrame({ captureId, bytes, capturedAtMs })
+            .catch((error: unknown) => {
+              const reason = error instanceof Error ? error : new Error(String(error));
+              options.onLiveTranscriptError?.(reason);
+            });
+        }
       }
     }
     if (captureId) {
@@ -571,10 +589,14 @@ export async function startRecording(
       captureNode.port.onmessage = null;
 
       if (!uploadError) {
-        if (liveStream) {
+        if (liveStream || (captureId && options.transcriptionMode === 'realtime')) {
           const restLiveFrame = liveStreamBuffer.flush();
           if (restLiveFrame) {
-            liveStream.send(restLiveFrame);
+            liveStream?.send(restLiveFrame);
+            if (captureId && options.transcriptionMode === 'realtime') {
+              const bytes = pcm16ToBytes(floatToPcm16(restLiveFrame));
+              await api.audio.sendLiveFrame({ captureId, bytes, capturedAtMs: Date.now() });
+            }
           }
         }
         if (captureId) {

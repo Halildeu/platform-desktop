@@ -177,6 +177,71 @@ body {
   color: #b91c1c;
 }
 
+.transcription-mode-field {
+  min-width: 0;
+  margin: 0 0 14px;
+  padding: 0;
+  border: 0;
+}
+
+.transcription-mode-field legend {
+  margin-bottom: 6px;
+  color: #334155;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.segmented-control {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  width: 100%;
+  min-height: 40px;
+  padding: 3px;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  background: #e2e8f0;
+}
+
+.segmented-control label {
+  position: relative;
+  display: grid;
+  min-width: 0;
+  cursor: pointer;
+}
+
+.segmented-control input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.segmented-control span {
+  display: grid;
+  place-items: center;
+  min-width: 0;
+  padding: 6px 10px;
+  border-radius: 4px;
+  color: #475569;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.segmented-control input:checked + span {
+  background: #ffffff;
+  color: #0f766e;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.12);
+}
+
+.segmented-control input:focus-visible + span {
+  outline: 2px solid #0f766e;
+  outline-offset: 1px;
+}
+
+.segmented-control input:disabled + span {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
 .logout-action {
   width: 100%;
   margin-top: 14px;
