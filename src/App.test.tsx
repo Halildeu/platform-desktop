@@ -1388,6 +1388,7 @@ describe('App recorder readiness', () => {
         status: 'DRAFT',
       });
     });
+    await userEvent.click(await screen.findByRole('button', { name: 'Satırlar' }));
 
     expect(screen.getByText('gateway cümle paketi')).toBeInTheDocument();
     expect(screen.getAllByRole('article')).toHaveLength(1);
