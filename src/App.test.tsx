@@ -1174,6 +1174,7 @@ describe('App recorder readiness', () => {
       });
     });
 
+    await userEvent.click(await screen.findByRole('button', { name: 'Satırlar' }));
     expect(await screen.findByText('merhaba halil')).toBeInTheDocument();
     expect(screen.getByText('Taslak')).toBeInTheDocument();
   });
@@ -1222,6 +1223,7 @@ describe('App recorder readiness', () => {
         status: 'DRAFT',
       });
     });
+    await userEvent.click(await screen.findByRole('button', { name: 'Satırlar' }));
     expect(await screen.findByText('Merhaba')).toBeInTheDocument();
 
     act(() => {
@@ -1512,6 +1514,7 @@ describe('App recorder readiness', () => {
         status: 'draft',
       });
     });
+    await userEvent.click(await screen.findByRole('button', { name: 'Satırlar' }));
     expect(await screen.findByText('Merhaba sesim geliyor mu')).toBeInTheDocument();
 
     act(() => {
