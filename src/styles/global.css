@@ -2187,3 +2187,31 @@ button:disabled {
 .consent-accept:hover {
   background: #0d9488;
 }
+
+/* Akıcı transkript görünümü (gitops#3419) — cümle-sınırlı akış + canlı kuyruk */
+.transcript-view-toggle {
+  display: inline-flex;
+  gap: 4px;
+  margin-right: 12px;
+}
+
+.turn-flow {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.turn-flow-paragraph {
+  margin: 0;
+  line-height: 1.55;
+  white-space: pre-wrap;
+}
+
+.turn-flow-pending {
+  opacity: 0.85;
+}
+
+.turn-flow-tail {
+  color: var(--muted, #64748b);
+  font-style: italic;
+}

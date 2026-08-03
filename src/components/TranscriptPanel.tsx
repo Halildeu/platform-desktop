@@ -16,6 +16,7 @@ import {
   type TranscriptSegmentStatus,
   type TranscriptSessionState,
 } from '../transcript/session-transcript';
+import { buildTurnFlow } from '../transcript/turn-flow';
 import type { LiveSttPreflightState } from '../audio/live-stt-preflight';
 import type { LiveSttStreamStatusEvent } from '../audio/live-stt-stream';
 import type { AudioCapturePreflightState } from '../audio/capture';
@@ -1117,6 +1118,10 @@ export function TranscriptPanel({
   const [segmentTextDrafts, setSegmentTextDrafts] = useState<Record<string, string>>({});
   const [transcriptQuery, setTranscriptQuery] = useState('');
   const [transcriptFilter, setTranscriptFilter] = useState<TranscriptFilter>('all');
+  // Akıcı görünüm default (gitops#3419): kelime-kelime canlı akış + cümle
+  // sınırına kadar tek paragraf. 'rows' = mevcut satır-inceleme kartları
+  // (düzeltme/İncelendi aksiyonları orada yaşamaya devam eder).
+  const [transcriptView, setTranscriptView] = useState<'fluent' | 'rows'>('fluent');
   const normalizedTranscriptQuery = normalizeTranscriptQuery(transcriptQuery);
   const transcriptSessionKey = [
     session.gatewaySessionId ?? '',
@@ -1499,6 +1504,33 @@ export function TranscriptPanel({
 
       {hasSegments ? (
         <section className="transcript-review-toolbar" aria-label="Transkript inceleme araçları">
+          <div
+            className="transcript-view-toggle"
+            role="group"
+            aria-label="Transkript görünümü"
+            data-testid="transcript-view-toggle"
+          >
+            <button
+              className={`transcript-filter-button${
+                transcriptView === 'fluent' ? ' transcript-filter-button-active' : ''
+              }`}
+              type="button"
+              aria-pressed={transcriptView === 'fluent'}
+              onClick={() => setTranscriptView('fluent')}
+            >
+              Akıcı
+            </button>
+            <button
+              className={`transcript-filter-button${
+                transcriptView === 'rows' ? ' transcript-filter-button-active' : ''
+              }`}
+              type="button"
+              aria-pressed={transcriptView === 'rows'}
+              onClick={() => setTranscriptView('rows')}
+            >
+              Satırlar
+            </button>
+          </div>
           <div className="transcript-search-field">
             <label htmlFor="transcript-search">Ara</label>
             <input
@@ -1558,101 +1590,134 @@ export function TranscriptPanel({
                   ) : null}
                 </div>
                 <div className="transcript-turn-body">
-                  {turn.segments.map((segment) => {
-                    const metricLabel = segmentMetricLabel(segment);
-                    const liveDirectDraft = isLiveDirectDraft(segment);
-                    const reviewedSegment = isReviewedSegment(segment);
-                    const editableSegment = Boolean(onSegmentTextChange) && !liveDirectDraft;
-                    const canMarkReviewed =
-                      Boolean(onSegmentReviewed) && !liveDirectDraft && !reviewedSegment;
-                    const editingSegment = editingSegmentId === segment.id;
-                    const segmentDraftText = segmentTextDrafts[segment.id] ?? segment.text;
-                    const reviewedText = segmentDraftText.trim();
-                    const reviewChanged = reviewedText !== segment.text.trim();
-
-                    return (
-                      <div
-                        className={`transcript-turn-paragraph transcript-paragraph-status-${segment.status}`}
-                        key={segment.id}
-                      >
-                        <div className="segment-meta transcript-turn-paragraph-meta">
-                          <time dateTime={new Date(segment.startedAtMs).toISOString()}>
-                            {formatClock(segment.startedAtMs)}
-                          </time>
-                          <span>{transcriptStatusLabel(segment.status)}</span>
-                          <span>{segmentSourceLabel(segment.source)}</span>
-                          {metricLabel ? <span>{metricLabel}</span> : null}
-                          {reviewedSegment ? <span>İncelendi</span> : null}
-                          {liveDirectDraft ? <span>Canlı</span> : null}
-                        </div>
-                        {editingSegment ? (
-                          <div className="segment-editor">
-                            <label htmlFor={`segment-editor-${segment.id}`}>Transkript metni</label>
-                            <textarea
-                              id={`segment-editor-${segment.id}`}
-                              value={segmentDraftText}
-                              onChange={(event) =>
-                                setSegmentTextDrafts((current) => ({
-                                  ...current,
-                                  [segment.id]: event.target.value,
-                                }))
-                              }
-                            />
-                            <div className="segment-editor-actions">
-                              <button
-                                className="primary-action compact-action"
-                                type="button"
-                                onClick={() => saveSegmentReview(segment.id)}
-                                disabled={!reviewedText || !reviewChanged}
+                  {transcriptView === 'fluent'
+                    ? (() => {
+                        const flow = buildTurnFlow(turn.segments);
+                        const tail = flow.tailText ? (
+                          <span className="turn-flow-tail" data-testid="turn-flow-tail">
+                            {flow.paragraphs.length > 0 ? ' ' : ''}
+                            {flow.tailText}
+                            <span className="live-caret" aria-hidden="true">
+                              |
+                            </span>
+                          </span>
+                        ) : null;
+                        return (
+                          <div className="turn-flow" data-testid="turn-flow">
+                            {flow.paragraphs.map((paragraph, index) => (
+                              <p
+                                className={`turn-flow-paragraph${
+                                  paragraph.pending ? ' turn-flow-pending' : ''
+                                }`}
+                                key={paragraph.id}
                               >
-                                Kaydet
-                              </button>
-                              <button
-                                className="secondary-action compact-action"
-                                type="button"
-                                onClick={cancelSegmentReview}
-                              >
-                                Vazgeç
-                              </button>
-                            </div>
-                          </div>
-                        ) : (
-                          <>
-                            <p>
-                              {segment.text}
-                              {liveDirectDraft ? (
-                                <span className="live-caret" aria-hidden="true">
-                                  |
-                                </span>
-                              ) : null}
-                            </p>
-                            {editableSegment || canMarkReviewed ? (
-                              <div className="segment-actions">
-                                {canMarkReviewed ? (
-                                  <button
-                                    className="secondary-action compact-action segment-review-action"
-                                    type="button"
-                                    onClick={() => onSegmentReviewed?.(segment.id)}
-                                  >
-                                    İncelendi
-                                  </button>
-                                ) : null}
-                                {editableSegment ? (
-                                  <button
-                                    className="secondary-action compact-action segment-review-action"
-                                    type="button"
-                                    onClick={() => beginSegmentReview(segment.id, segment.text)}
-                                  >
-                                    Metni düzelt
-                                  </button>
-                                ) : null}
-                              </div>
+                                {paragraph.text}
+                                {index === flow.paragraphs.length - 1 ? tail : null}
+                              </p>
+                            ))}
+                            {flow.paragraphs.length === 0 && tail ? (
+                              <p className="turn-flow-paragraph">{tail}</p>
                             ) : null}
-                          </>
-                        )}
-                      </div>
-                    );
-                  })}
+                          </div>
+                        );
+                      })()
+                    : turn.segments.map((segment) => {
+                        const metricLabel = segmentMetricLabel(segment);
+                        const liveDirectDraft = isLiveDirectDraft(segment);
+                        const reviewedSegment = isReviewedSegment(segment);
+                        const editableSegment = Boolean(onSegmentTextChange) && !liveDirectDraft;
+                        const canMarkReviewed =
+                          Boolean(onSegmentReviewed) && !liveDirectDraft && !reviewedSegment;
+                        const editingSegment = editingSegmentId === segment.id;
+                        const segmentDraftText = segmentTextDrafts[segment.id] ?? segment.text;
+                        const reviewedText = segmentDraftText.trim();
+                        const reviewChanged = reviewedText !== segment.text.trim();
+
+                        return (
+                          <div
+                            className={`transcript-turn-paragraph transcript-paragraph-status-${segment.status}`}
+                            key={segment.id}
+                          >
+                            <div className="segment-meta transcript-turn-paragraph-meta">
+                              <time dateTime={new Date(segment.startedAtMs).toISOString()}>
+                                {formatClock(segment.startedAtMs)}
+                              </time>
+                              <span>{transcriptStatusLabel(segment.status)}</span>
+                              <span>{segmentSourceLabel(segment.source)}</span>
+                              {metricLabel ? <span>{metricLabel}</span> : null}
+                              {reviewedSegment ? <span>İncelendi</span> : null}
+                              {liveDirectDraft ? <span>Canlı</span> : null}
+                            </div>
+                            {editingSegment ? (
+                              <div className="segment-editor">
+                                <label htmlFor={`segment-editor-${segment.id}`}>
+                                  Transkript metni
+                                </label>
+                                <textarea
+                                  id={`segment-editor-${segment.id}`}
+                                  value={segmentDraftText}
+                                  onChange={(event) =>
+                                    setSegmentTextDrafts((current) => ({
+                                      ...current,
+                                      [segment.id]: event.target.value,
+                                    }))
+                                  }
+                                />
+                                <div className="segment-editor-actions">
+                                  <button
+                                    className="primary-action compact-action"
+                                    type="button"
+                                    onClick={() => saveSegmentReview(segment.id)}
+                                    disabled={!reviewedText || !reviewChanged}
+                                  >
+                                    Kaydet
+                                  </button>
+                                  <button
+                                    className="secondary-action compact-action"
+                                    type="button"
+                                    onClick={cancelSegmentReview}
+                                  >
+                                    Vazgeç
+                                  </button>
+                                </div>
+                              </div>
+                            ) : (
+                              <>
+                                <p>
+                                  {segment.text}
+                                  {liveDirectDraft ? (
+                                    <span className="live-caret" aria-hidden="true">
+                                      |
+                                    </span>
+                                  ) : null}
+                                </p>
+                                {editableSegment || canMarkReviewed ? (
+                                  <div className="segment-actions">
+                                    {canMarkReviewed ? (
+                                      <button
+                                        className="secondary-action compact-action segment-review-action"
+                                        type="button"
+                                        onClick={() => onSegmentReviewed?.(segment.id)}
+                                      >
+                                        İncelendi
+                                      </button>
+                                    ) : null}
+                                    {editableSegment ? (
+                                      <button
+                                        className="secondary-action compact-action segment-review-action"
+                                        type="button"
+                                        onClick={() => beginSegmentReview(segment.id, segment.text)}
+                                      >
+                                        Metni düzelt
+                                      </button>
+                                    ) : null}
+                                  </div>
+                                ) : null}
+                              </>
+                            )}
+                          </div>
+                        );
+                      })}
                 </div>
               </article>
             );

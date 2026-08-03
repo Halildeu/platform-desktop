@@ -14,6 +14,10 @@ import {
   upsertTranscriptSegment,
 } from '../transcript/session-transcript';
 
+async function switchToRowsView(): Promise<void> {
+  await userEvent.click(screen.getByRole('button', { name: 'Satırlar' }));
+}
+
 const originalClipboardDescriptor = Object.getOwnPropertyDescriptor(navigator, 'clipboard');
 afterEach(() => {
   cleanup();
@@ -183,7 +187,7 @@ describe('TranscriptPanel', () => {
     expect(screen.getByText('Direct STT baglanti hatasi.')).toHaveClass('inline-error');
   });
 
-  it('renders newest transcript segment first while keeping statuses visible', () => {
+  it('renders newest transcript segment first while keeping statuses visible', async () => {
     const recording = startTranscriptSession(initialTranscriptSession(), {
       sessionId: 'SES-1',
       meetingId: '22222222-2222-4222-8222-222222222222',
@@ -216,6 +220,7 @@ describe('TranscriptPanel', () => {
         stream={{ directConfigured: true, directActive: true, disabledReason: null }}
       />,
     );
+    await switchToRowsView();
 
     expect(screen.getByText('Direct stream')).toBeInTheDocument();
     expect(screen.getByText('Kelime akışı aktif')).toBeInTheDocument();
@@ -234,7 +239,7 @@ describe('TranscriptPanel', () => {
     expect(articles[1]).toHaveTextContent('180 ms');
   });
 
-  it('groups adjacent gateway segments from the same speaker into one visible turn', () => {
+  it('groups adjacent gateway segments from the same speaker into one visible turn', async () => {
     const recording = startTranscriptSession(initialTranscriptSession(), {
       sessionId: 'SES-SPEECHMATICS',
       meetingId: '22222222-2222-4222-8222-222222222222',
@@ -268,6 +273,7 @@ describe('TranscriptPanel', () => {
     });
 
     render(<TranscriptPanel session={speakerChange} />);
+    await switchToRowsView();
 
     const turns = screen.getAllByRole('article');
     expect(turns).toHaveLength(2);
@@ -284,6 +290,52 @@ describe('TranscriptPanel', () => {
     ]);
     expect(within(turns[0]).getByText('2 paragraf')).toBeInTheDocument();
     expect(within(turns[0]).getAllByRole('time')).toHaveLength(2);
+  });
+
+  it('defaults to the fluent view: sentence-bounded flow with an inline live tail', () => {
+    const recording = startTranscriptSession(initialTranscriptSession(), {
+      sessionId: 'SES-FLUENT',
+      meetingId: '22222222-2222-4222-8222-222222222222',
+      deviceId: 'desktop-1',
+      hasLoopback: false,
+      startedAtMs: 1781820000000,
+    });
+    const first = upsertTranscriptSegment(recording, {
+      id: 'gateway:f0',
+      speakerLabel: 'Konuşmacı',
+      startedAtMs: 1781820001000,
+      status: 'final',
+      text: 'Bu toplantıda bütçe ve',
+      source: 'gateway-events',
+    });
+    const second = upsertTranscriptSegment(first, {
+      id: 'gateway:f1',
+      speakerLabel: 'Konuşmacı',
+      startedAtMs: 1781820003000,
+      status: 'final',
+      text: 'proje planını değerlendiriyoruz.',
+      source: 'gateway-events',
+    });
+    const withTail = upsertTranscriptSegment(second, {
+      id: 'gateway:f2',
+      speakerLabel: 'Konuşmacı',
+      startedAtMs: 1781820005000,
+      status: 'draft',
+      text: 'şimdi görev dağılımına',
+      source: 'gateway-events',
+    });
+
+    render(<TranscriptPanel session={withTail} />);
+
+    const flow = screen.getByTestId('turn-flow');
+    const paragraphs = flow.querySelectorAll('.turn-flow-paragraph');
+    expect(paragraphs).toHaveLength(1);
+    expect(paragraphs[0]).toHaveTextContent(
+      'Bu toplantıda bütçe ve proje planını değerlendiriyoruz.',
+    );
+    const tail = screen.getByTestId('turn-flow-tail');
+    expect(tail).toHaveTextContent('şimdi görev dağılımına');
+    expect(screen.queryByRole('button', { name: 'Metni düzelt' })).toBeNull();
   });
 
   it('keeps canonical input order for equal timestamps and splits source or silence boundaries', () => {
@@ -776,6 +828,7 @@ describe('TranscriptPanel', () => {
         onSegmentTextChange={onSegmentTextChange}
       />,
     );
+    await switchToRowsView();
 
     const paragraphs = document.querySelectorAll('.transcript-turn-paragraph');
     expect(paragraphs).toHaveLength(2);
@@ -1024,6 +1077,7 @@ describe('TranscriptPanel', () => {
         onSegmentReviewed={onSegmentReviewed}
       />,
     );
+    await switchToRowsView();
 
     const articles = screen.getAllByRole('article');
     expect(within(articles[1]).queryByRole('button', { name: 'Metni düzelt' })).toBeNull();
