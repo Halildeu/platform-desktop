@@ -54,6 +54,20 @@ export function MeetingPlanner({
   const [provider, setProvider] = useState<SttProvider>(sttProvider);
   const [mode, setMode] = useState<TranscriptionMode>(transcriptionMode);
   const [validationError, setValidationError] = useState('');
+  // Saha 2026-08-04: useState ilk-mount değerini saklar; pencere kapalıyken
+  // ana ekranda sağlayıcı değiştirilirse plan BAYAT değeri taşıyor ve
+  // plan.sttProvider kullanıcının görünür seçimini sessizce eziyordu
+  // (Dahili seçiliyken oturumun Speechmatics'ten gitmesi). Her açılışta
+  // ebeveynin güncel seçimine senkronlanır (WYSIWYG).
+  const [wasOpen, setWasOpen] = useState(open);
+  if (open !== wasOpen) {
+    setWasOpen(open);
+    if (open) {
+      setProvider(sttProvider);
+      setMode(transcriptionMode);
+      setValidationError('');
+    }
+  }
 
   if (!open) {
     return (
