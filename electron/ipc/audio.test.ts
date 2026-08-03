@@ -854,7 +854,10 @@ describe('audio IPC recorder consent gate', () => {
     expect(mocks.gatewayLiveStreamClose).toHaveBeenCalledTimes(1);
   });
 
-  it('keeps Speechmatics sessions on the provider-selected REST path', async () => {
+  it('forces Speechmatics sessions to realtime even when the caller asks for balanced', async () => {
+    // gitops#3419 saha raporu: planlayıcı/bağlanan toplantıdan 'balanced'
+    // sızınca canlı WS hiç kurulmuyor ve kullanıcı 5s REST pencerelerini
+    // izliyordu. Speechmatics'te modun tek doğru değeri realtime'dır.
     mocks.loadRecorderRuntimeConfig.mockReturnValue({
       meetingId,
       deviceId,
@@ -872,18 +875,20 @@ describe('audio IPC recorder consent gate', () => {
       deviceId,
       [],
       'speechmatics',
-    )) as { captureId: string; sttProvider: string };
+      'balanced',
+    )) as { captureId: string; sttProvider: string; transcriptionMode?: string };
 
     expect(started.sttProvider).toBe('speechmatics');
+    expect(started.transcriptionMode).toBe('realtime');
     expect(mocks.senderStart).toHaveBeenCalledWith(
       meetingId,
       deviceId,
       'tr',
       'IK-1',
       'speechmatics',
-      'balanced',
+      'realtime',
     );
-    expect(mocks.gatewayLiveStreamCtor).not.toHaveBeenCalled();
+    expect(mocks.gatewayLiveStreamCtor).toHaveBeenCalledTimes(1);
 
     await finishHandler()({}, started.captureId);
   });

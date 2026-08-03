@@ -896,7 +896,20 @@ export function registerAudioIpc(): void {
         const normalizedDeviceId = requireIdentifier(deviceId, 'deviceId');
         const normalizedContextTerms = normalizeGatewayLiveContextTerms(contextTerms);
         const normalizedSttProvider = requireSttProvider(sttProvider);
-        const normalizedTranscriptionMode = requireTranscriptionMode(transcriptionMode);
+        // Speechmatics oturumu HER ZAMAN realtime başlar (gitops#3419 saha
+        // raporu): planlayıcıdan/bağlanan toplantıdan 'balanced' sızarsa canlı
+        // WS hiç kurulmuyor ve kullanıcı kelime-kelime akış yerine 5s REST
+        // pencerelerini izliyordu. 'balanced' yalnız internal sağlayıcının GPU
+        // maliyet tercihi olarak anlamlı; sağlayıcı SaaS realtime ise modun
+        // tek doğru değeri realtime'dır.
+        const requestedTranscriptionMode = requireTranscriptionMode(transcriptionMode);
+        const normalizedTranscriptionMode =
+          normalizedSttProvider === 'speechmatics' ? 'realtime' : requestedTranscriptionMode;
+        if (normalizedTranscriptionMode !== requestedTranscriptionMode) {
+          console.info('Speechmatics session forced to realtime transcription mode', {
+            requested: requestedTranscriptionMode,
+          });
+        }
         pendingConsent = null;
         const captureId = randomUUID();
         const cfg = loadGatewayConfig();
