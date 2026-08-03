@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import '@testing-library/jest-dom/vitest';
 
@@ -293,6 +293,7 @@ describe('TranscriptPanel', () => {
   });
 
   it('defaults to the fluent view: sentence-bounded flow with an inline live tail', () => {
+    vi.useFakeTimers();
     const recording = startTranscriptSession(initialTranscriptSession(), {
       sessionId: 'SES-FLUENT',
       meetingId: '22222222-2222-4222-8222-222222222222',
@@ -327,6 +328,10 @@ describe('TranscriptPanel', () => {
 
     render(<TranscriptPanel session={withTail} />);
 
+    act(() => {
+      vi.advanceTimersByTime(3000);
+    });
+
     const flow = screen.getByTestId('turn-flow');
     const paragraphs = flow.querySelectorAll('.turn-flow-paragraph');
     expect(paragraphs).toHaveLength(1);
@@ -336,6 +341,7 @@ describe('TranscriptPanel', () => {
     const tail = screen.getByTestId('turn-flow-tail');
     expect(tail).toHaveTextContent('şimdi görev dağılımına');
     expect(screen.queryByRole('button', { name: 'Metni düzelt' })).toBeNull();
+    vi.useRealTimers();
   });
 
   it('keeps canonical input order for equal timestamps and splits source or silence boundaries', () => {
@@ -1009,6 +1015,7 @@ describe('TranscriptPanel', () => {
     });
 
     render(<TranscriptPanel session={withRevised} />);
+    await switchToRowsView();
 
     await userEvent.click(screen.getByRole('button', { name: 'Kontrol bekleyen' }));
 

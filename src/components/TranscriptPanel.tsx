@@ -17,6 +17,7 @@ import {
   type TranscriptSessionState,
 } from '../transcript/session-transcript';
 import { buildTurnFlow } from '../transcript/turn-flow';
+import { advanceTypewriter, typewriterBudget } from '../transcript/typewriter';
 import type { LiveSttPreflightState } from '../audio/live-stt-preflight';
 import type { LiveSttStreamStatusEvent } from '../audio/live-stt-stream';
 import type { AudioCapturePreflightState } from '../audio/capture';
@@ -79,6 +80,41 @@ function formatClock(ms: number): string {
     minute: '2-digit',
     second: '2-digit',
   });
+}
+
+const TYPEWRITER_TICK_MS = 30;
+
+/**
+ * Canlı kuyruğu daktilo gibi akıtır (gitops#3419): partial'lar ağdan 2-4
+ * kelimelik paketlerle gelir; hedefi bir anda basmak "toplu düşme" algısı
+ * yaratıyordu. Görünen metin hedefi 30ms adımlarla kovalar, birikim artarsa
+ * hızlanır (typewriterBudget), partial revize olursa ortak öneke anında
+ * döner. Aynı değerle setState React tarafından ucuza atlanır; interval
+ * yalnız kuyruk bileşeni yaşarken çalışır.
+ */
+function TypewriterText({ text }: { text: string }): ReactElement {
+  const [displayed, setDisplayed] = useState('');
+  const targetRef = useRef(text);
+
+  useEffect(() => {
+    targetRef.current = text;
+  }, [text]);
+
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setDisplayed((current) => {
+        const target = targetRef.current;
+        return advanceTypewriter(
+          current,
+          target,
+          typewriterBudget(Math.max(0, target.length - current.length)),
+        );
+      });
+    }, TYPEWRITER_TICK_MS);
+    return () => clearInterval(timer);
+  }, []);
+
+  return <>{displayed}</>;
 }
 
 function captureMode(hasLoopback: boolean): string {
@@ -1596,7 +1632,7 @@ export function TranscriptPanel({
                         const tail = flow.tailText ? (
                           <span className="turn-flow-tail" data-testid="turn-flow-tail">
                             {flow.paragraphs.length > 0 ? ' ' : ''}
-                            {flow.tailText}
+                            <TypewriterText text={flow.tailText} />
                             <span className="live-caret" aria-hidden="true">
                               |
                             </span>
