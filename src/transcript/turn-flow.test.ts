@@ -94,6 +94,24 @@ describe('buildTurnFlow', () => {
     expect(flow.tailText).toBe('');
   });
 
+  it('hides a stale tail the moment the final already covers its words', () => {
+    const flow = buildTurnFlow([
+      segment('a', 'Bütçe ve proje planını değerlendiriyoruz.', 'final', 0),
+      segment('b', 'bütçe ve proje planını değerlendiriyoruz', 'draft', 100),
+    ]);
+    expect(flow.paragraphs).toHaveLength(1);
+    expect(flow.tailText).toBe('');
+    expect(flow.tailSegmentIds).toEqual([]);
+  });
+
+  it('keeps a fresh tail that continues past the last final', () => {
+    const flow = buildTurnFlow([
+      segment('a', 'İlk cümle tamamlandı.', 'final', 0),
+      segment('b', 'şimdi yeni konuya geçiyoruz', 'draft', 2000),
+    ]);
+    expect(flow.tailText).toBe('şimdi yeni konuya geçiyoruz');
+  });
+
   it('flushes an unterminated trailing committed group as an open paragraph', () => {
     const flow = buildTurnFlow([segment('a', 'nokta olmadan biten akış', 'final', 0)]);
     expect(flow.paragraphs).toHaveLength(1);

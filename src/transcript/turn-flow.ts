@@ -100,12 +100,45 @@ export function buildTurnFlow(segments: readonly TranscriptSegment[]): TurnFlow 
   }
   flush();
 
+  let tailText = tail
+    .map((segment) => segment.text.trim())
+    .filter(Boolean)
+    .join(' ');
+  // Final indiği anda bayat kuyruk kısa süreliğine aynı kelimeleri taşır
+  // (Speechmatics final'i partial'ı kapsar; yeni partial gelene dek eski
+  // hipotez satırda kalır). Committed metin kuyruğu zaten kapsıyorsa gizle —
+  // bir sonraki partial kuyruğu kaldığı yerden tazeler.
+  const lastParagraph = paragraphs.at(-1);
+  if (tailText && lastParagraph && coversWords(lastParagraph.text, tailText)) {
+    tailText = '';
+  }
+
   return {
     paragraphs,
-    tailText: tail
-      .map((segment) => segment.text.trim())
-      .filter(Boolean)
-      .join(' '),
-    tailSegmentIds: tail.map((segment) => segment.id),
+    tailText,
+    tailSegmentIds: tailText ? tail.map((segment) => segment.id) : [],
   };
+}
+
+function normalizedWords(text: string): string[] {
+  return text
+    .toLocaleLowerCase('tr-TR')
+    .split(/\s+/)
+    .map((word) => word.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, ''))
+    .filter(Boolean);
+}
+
+/** Committed metin, kuyruğun kelimelerini bitişik bir pencere olarak içeriyor mu? */
+function coversWords(committedText: string, tailCandidate: string): boolean {
+  const haystack = normalizedWords(committedText);
+  const needle = normalizedWords(tailCandidate);
+  if (needle.length === 0 || needle.length > haystack.length) {
+    return false;
+  }
+  for (let index = 0; index <= haystack.length - needle.length; index += 1) {
+    if (needle.every((word, offset) => haystack[index + offset] === word)) {
+      return true;
+    }
+  }
+  return false;
 }
