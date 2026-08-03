@@ -83,6 +83,24 @@ const LIFECYCLE_RECONCILIATION_MAX_ATTEMPTS = 6;
 const LIFECYCLE_RECONCILIATION_BASE_DELAY_MS = 1_000;
 export const LIFECYCLE_RECONCILIATION_DURABLE_RETRY_MS = 60_000;
 
+// jsdom/packlenmiş ortam farkları ve kota hataları seçim akışını bozmasın diye
+// localStorage erişimi sessiz-toleranslıdır; storage yoksa seçim oturumla sınırlı kalır.
+function safeLocalStorageGet(key: string): string | null {
+  try {
+    return window.localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+function safeLocalStorageSet(key: string, value: string): void {
+  try {
+    window.localStorage.setItem(key, value);
+  } catch {
+    // sessiz: kalıcılık yoksa davranış eskisi gibi oturum-içi kalır
+  }
+}
+
 function isLifecycleReconciliationError(message: string): boolean {
   return (
     message.startsWith('Bekleyen kayıt durumu') ||
@@ -583,8 +601,28 @@ function App() {
   const [stopping, setStopping] = useState(false);
   const [startPending, setStartPending] = useState(false);
   const [contractPending, setContractPending] = useState(false);
-  const [sttProvider, setSttProvider] = useState<SttProvider>('internal');
-  const [transcriptionMode, setTranscriptionMode] = useState<TranscriptionMode>('realtime');
+  // Saha 2026-08-04: sağlayıcı seçimi yeniden başlatmada sıfırlanıp kullanıcıyı
+  // yanıltıyordu; son seçim kalıcıdır ve her değişimde (dropdown VEYA plan)
+  // aşağıdaki effect ile geri yazılır.
+  const [sttProvider, setSttProvider] = useState<SttProvider>(() => {
+    const stored = safeLocalStorageGet('mi.sttProvider');
+    return stored === 'speechmatics' || stored === 'internal' ? stored : 'internal';
+  });
+  const [transcriptionMode, setTranscriptionMode] = useState<TranscriptionMode>(() => {
+    const stored = safeLocalStorageGet('mi.transcriptionMode');
+    return stored === 'balanced' || stored === 'realtime' ? stored : 'realtime';
+  });
+  // Kalıcılaştırma effect yerine setter sarmalayıcılarında (yaz-geçir):
+  // React'in pasif-efekt zamanlayıcısı fake-timer testlerinde timer sızdırıyor
+  // ve semantik olarak da doğru an "seçimin değiştiği an"dır.
+  const updateSttProvider = useCallback((value: SttProvider) => {
+    setSttProvider(value);
+    safeLocalStorageSet('mi.sttProvider', value);
+  }, []);
+  const updateTranscriptionMode = useCallback((value: TranscriptionMode) => {
+    setTranscriptionMode(value);
+    safeLocalStorageSet('mi.transcriptionMode', value);
+  }, []);
   const [meetingPlannerOpen, setMeetingPlannerOpen] = useState(false);
   const [showConsent, setShowConsent] = useState(false);
   const [recorderConfig, setRecorderConfig] = useState<RecorderRuntimeConfig | null>(null);
@@ -1394,8 +1432,8 @@ function App() {
       if (!contract) {
         throw new Error('meeting-service response empty');
       }
-      setSttProvider(plan.sttProvider);
-      setTranscriptionMode(plan.transcriptionMode);
+      updateSttProvider(plan.sttProvider);
+      updateTranscriptionMode(plan.transcriptionMode);
       bindReadyMeetingContract(contract);
       setMeetingPlannerOpen(false);
     } catch (e) {
@@ -2015,7 +2053,7 @@ function App() {
                         id="stt-provider"
                         value={sttProvider}
                         disabled={startPending || contractPending || showConsent}
-                        onChange={(event) => setSttProvider(event.target.value as SttProvider)}
+                        onChange={(event) => updateSttProvider(event.target.value as SttProvider)}
                       >
                         <option value="internal">Dahili STT</option>
                         <option value="speechmatics">Speechmatics</option>
@@ -2031,7 +2069,7 @@ function App() {
                             value="realtime"
                             checked={transcriptionMode === 'realtime'}
                             disabled={startPending || contractPending || showConsent}
-                            onChange={() => setTranscriptionMode('realtime')}
+                            onChange={() => updateTranscriptionMode('realtime')}
                           />
                           <span>Anlık</span>
                         </label>
@@ -2042,7 +2080,7 @@ function App() {
                             value="balanced"
                             checked={transcriptionMode === 'balanced'}
                             disabled={startPending || contractPending || showConsent}
-                            onChange={() => setTranscriptionMode('balanced')}
+                            onChange={() => updateTranscriptionMode('balanced')}
                           />
                           <span>Dengeli</span>
                         </label>

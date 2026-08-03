@@ -124,6 +124,9 @@ export type GatewayLiveServerEvent =
       elapsed_ms?: number;
       rms?: number;
       source?: string;
+      // RT-5 gecikme çalışması (gitops#3419): gateway aşama zaman damgaları.
+      audio_sent_ms?: number;
+      emitted_at_ms?: number;
     }
   | {
       type: 'final';
@@ -353,6 +356,12 @@ function parseServerEvent(data: unknown): GatewayLiveServerEvent | null {
       const elapsedMs = optionalFiniteNumber(parsed.elapsed_ms) ? parsed.elapsed_ms : undefined;
       const eventRms = optionalFiniteNumber(parsed.rms) ? parsed.rms : undefined;
       const source = typeof parsed.source === 'string' ? parsed.source : undefined;
+      const audioSentMs = optionalFiniteNumber(parsed.audio_sent_ms)
+        ? parsed.audio_sent_ms
+        : undefined;
+      const emittedAtMs = optionalFiniteNumber(parsed.emitted_at_ms)
+        ? parsed.emitted_at_ms
+        : undefined;
       return {
         type: 'partial',
         seq: parsed.seq,
@@ -361,6 +370,8 @@ function parseServerEvent(data: unknown): GatewayLiveServerEvent | null {
         ...(elapsedMs === undefined ? {} : { elapsed_ms: elapsedMs }),
         ...(eventRms === undefined ? {} : { rms: eventRms }),
         ...(source === undefined ? {} : { source }),
+        ...(audioSentMs === undefined ? {} : { audio_sent_ms: audioSentMs }),
+        ...(emittedAtMs === undefined ? {} : { emitted_at_ms: emittedAtMs }),
       };
     }
     if (parsed.type === 'final') {

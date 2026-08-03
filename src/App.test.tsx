@@ -244,6 +244,10 @@ afterEach(() => {
 
 beforeEach(() => {
   vi.resetAllMocks();
+  // Sağlayıcı/mod seçimi artık localStorage'da kalıcı (mi.* anahtarları);
+  // jsdom aynı dosyadaki testler arasında paylaşıldığı için temizlenmezse
+  // bir testin seçimi sonrakinin varsayılan-akış varsayımını bozar.
+  window.localStorage.clear();
   mockReadyCaptureWorklet();
 });
 
