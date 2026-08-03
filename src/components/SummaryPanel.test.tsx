@@ -573,6 +573,54 @@ describe('SummaryPanel', () => {
     ).not.toBeInTheDocument();
   });
 
+  it('treats the durable-flow 422 rejection as submitted and arms the result poll', async () => {
+    const adapter: ExportAdapter = {
+      copyText: vi.fn().mockResolvedValue(undefined),
+      downloadText: vi.fn(),
+      print: vi.fn(),
+    };
+    const submitAdapter: MeetingAiSubmitAdapter = {
+      // meeting-ai (gitops#3399) durable modda doğrudan /analyze teslimini
+      // fail-closed reddeder; UI bunu hata değil kalıcı-akış onayı saymalı.
+      analyze: vi.fn().mockRejectedValue(new Error('analyzeMeetingIntelligence failed: 422')),
+    };
+    const transcript = reportReadyTranscriptState();
+    const onMeetingAiSubmitted = vi.fn();
+    const onMeetingAiError = vi.fn();
+    const base = readyState();
+    if (!base.result) {
+      throw new Error('readyState fixture must include a result');
+    }
+
+    render(
+      <SummaryPanel
+        intelligence={setMeetingIntelligenceResult(
+          {
+            ...initialMeetingIntelligence(),
+            meetingId: transcript.meetingId,
+            sessionId: transcript.sessionId,
+          },
+          {
+            ...base.result,
+            generatedAtMs: 1781820005000,
+          },
+        )}
+        transcript={transcript}
+        exportAdapter={adapter}
+        meetingAiSubmitAdapter={submitAdapter}
+        onMeetingAiSubmitted={onMeetingAiSubmitted}
+        onMeetingAiError={onMeetingAiError}
+      />,
+    );
+
+    await userEvent.click(screen.getByRole('button', { name: 'Meeting AI yenile' }));
+
+    expect(await screen.findByText(/Kalıcı analiz akışı aktif/)).toBeInTheDocument();
+    expect(onMeetingAiSubmitted).toHaveBeenCalledTimes(1);
+    expect(onMeetingAiError).not.toHaveBeenCalled();
+    expect(screen.queryByText(/Meeting AI gönderimi hazır değil/)).not.toBeInTheDocument();
+  });
+
   it('surfaces ERP CRM handoff review blockers before adapter export', async () => {
     const base = readyState();
     if (!base.result) {

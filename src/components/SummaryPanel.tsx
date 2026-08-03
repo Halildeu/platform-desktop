@@ -841,6 +841,17 @@ export function SummaryPanel({
       setMessage('Analiz tetiklendi; kalıcı sonuç hazırlanıyor.');
     } catch (error) {
       const text = error instanceof Error ? error.message : String(error);
+      if (/failed: 422\b/.test(text)) {
+        // meeting-ai (gitops#3399) durable modda /analyze doğrudan teslimini
+        // bilinçli reddeder; analiz kanonik transcript.ready hattında zaten
+        // üretiliyor. Bu red bir hata değil kalıcı-akış onayıdır: sonuç
+        // poll'unu başlat, kullanıcıya kırmızı banner gösterme.
+        onMeetingAiSubmitted?.();
+        setMessage(
+          'Kalıcı analiz akışı aktif: sonuç sunucuda otomatik üretiliyor, hazır olunca bu ekrana gelecek. (Doğrudan gönderim bu modda kapalı.)',
+        );
+        return;
+      }
       onMeetingAiError?.(text);
       setMessage(`Meeting AI gönderimi hazır değil: ${text}`);
     } finally {
