@@ -284,15 +284,26 @@ function emitGatewayLiveTranscriptEvent(
       ? ((event.source_end_sample! - event.source_start_sample!) / GATEWAY_LIVE_SAMPLE_RATE_HZ) *
         1000
       : null;
+  // Partial = canlı hipotez: TEK değişken satır (epoch başına sabit id) ve
+  // zaman damgası HER ZAMAN "şimdi". Eski `receivedAt - elapsed` formülü
+  // partial'ı oturum başlangıcına sabitliyordu; ilk final (kaynak-aralıklı,
+  // daha GEÇ startedAtMs) gelince partial sıralamada öne düşüyor, kuyruk
+  // olmaktan çıkıyor ve kullanıcı finale kadar hiçbir canlı metin göremiyordu.
+  // Sektör sözleşmesi (docs/faz24-realtime-stt-industry-survey.md §1.3):
+  // partial yerinde güncellenir, final onu düzeltilmiş metinle değiştirir.
+  const partialTail = event.type === 'partial';
   emitTranscriptEvent(send, {
-    eventId: `live-${sessionId}-${transportEpoch}-${event.seq}`,
+    eventId: partialTail
+      ? `live-${sessionId}-${transportEpoch}-tail`
+      : `live-${sessionId}-${transportEpoch}-${event.seq}`,
     sessionId,
     meetingId,
     chunkSeq: event.seq,
-    chunkStartedAtMs:
-      sourceStartedAtMs ?? (elapsedMs === null ? receivedAtMs : receivedAtMs - elapsedMs),
+    chunkStartedAtMs: partialTail
+      ? receivedAtMs
+      : (sourceStartedAtMs ?? (elapsedMs === null ? receivedAtMs : receivedAtMs - elapsedMs)),
     transportEpoch,
-    windowSeq: event.seq,
+    windowSeq: partialTail ? null : event.seq,
     windowStartedAtMs: sourceStartedAtMs,
     windowEndedAtMs: sourceEndedAtMs,
     audioDurationMs,
