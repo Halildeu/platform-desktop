@@ -50,8 +50,12 @@ export interface LiveAnalysisFrame {
 export interface LiveAnalysisApi {
   startLiveAnalysis(payload: { meetingId: string }): Promise<{ started: boolean }>;
   stopLiveAnalysis(payload: { meetingId: string }): Promise<{ stopped: boolean }>;
+  // The main process cannot vouch for the analyser contract, so it hands the
+  // frame over as `unknown` (see electron/services/meeting/live-analysis-stream.ts).
+  // This hook is the narrowing seam: it accepts the wire shape and only ever
+  // exposes a `LiveAnalysisPayload` after checking it is an object.
   onLiveAnalysisFrame(
-    callback: (frame: { meetingId: string } & LiveAnalysisFrame) => void,
+    callback: (frame: { meetingId: string; payload: unknown; receivedAt: string }) => void,
   ): () => void;
   onLiveAnalysisStatus(
     callback: (status: { meetingId: string; status: LiveAnalysisStatus }) => void,
@@ -101,13 +105,17 @@ export function useLiveAnalysis(
 
     const offFrame = resolvedApi.onLiveAnalysisFrame((frame) => {
       if (frame.meetingId !== meetingId) return;
-      const version = typeof frame.payload.version === 'number' ? frame.payload.version : 0;
+      // Narrow the wire payload once, here. A non-object frame (relay hiccup,
+      // upstream contract break) is dropped rather than rendered as garbage.
+      if (typeof frame.payload !== 'object' || frame.payload === null) return;
+      const payload = frame.payload as LiveAnalysisPayload;
+      const version = typeof payload.version === 'number' ? payload.version : 0;
       // Consumer contract: keep the highest version. A late partial with a
       // stale version is dropped — the panel never regresses to an older
       // summary just because a slow publisher fired late.
       if (version < highestVersionRef.current) return;
       highestVersionRef.current = version;
-      setLatest({ payload: frame.payload, receivedAt: frame.receivedAt });
+      setLatest({ payload, receivedAt: frame.receivedAt });
     });
 
     const offStatus = resolvedApi.onLiveAnalysisStatus((s) => {

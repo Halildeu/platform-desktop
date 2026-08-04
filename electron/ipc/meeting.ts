@@ -1,5 +1,6 @@
 import { BrowserWindow, ipcMain } from 'electron';
 
+import { loadGatewayConfig } from '../services/gateway/gateway-client.js';
 import {
   LiveAnalysisSubscriber,
   type LiveAnalysisFrame,
@@ -251,7 +252,9 @@ export function registerMeetingIpc(): void {
       if (liveAnalysisSubscribers.has(meetingId)) {
         return { started: false }; // already subscribed — idempotent
       }
-      const cfg = loadMeetingConfig();
+      // The live-analysis SSE relay lives on the audio-gateway (backend#1103),
+      // NOT on meeting-service — meeting-ai has no public route of its own.
+      const cfg = loadGatewayConfig();
       const token = await getValidAccessToken();
       const subscriber = new LiveAnalysisSubscriber({
         baseUrl: cfg.baseUrl,

@@ -24,6 +24,7 @@ import {
   CONSENT_TEXT_HASH,
   CONSENT_LOCALE,
 } from './components/ConsentDialog';
+import { LiveAnalysisPanel } from './components/LiveAnalysisPanel';
 import { MeetingResultPicker, type RecentMeetingsStatus } from './components/MeetingResultPicker';
 import { MeetingPlanner, type MeetingPlan } from './components/MeetingPlanner';
 import { SummaryPanel, type CanonicalResultLoadStatus } from './components/SummaryPanel';
@@ -2199,6 +2200,18 @@ function App() {
                 onSegmentTextChange={handleTranscriptSegmentTextChange}
                 onSegmentReviewed={handleTranscriptSegmentReviewed}
               />
+              {/*
+                Faz 24 İ5 — karar/aksiyon toplantı SÜRERKEN görünür. Panel yalnız
+                kayıt sırasında mount edilir: abonelik meetingId'ye bağlı ve
+                unmount'ta kapanır, böylece kayıt bitince boşta bir SSE bağlantısı
+                kalmaz. Kayıt sonrası kanonik sonuç zaten SummaryPanel'in işi.
+              */}
+              {recording && meetingIntelligence.meetingId && window.electronAPI?.meeting ? (
+                <LiveAnalysisPanel
+                  meetingId={meetingIntelligence.meetingId}
+                  api={window.electronAPI.meeting}
+                />
+              ) : null}
               <SummaryPanel
                 intelligence={meetingIntelligence}
                 transcript={transcriptSession}
