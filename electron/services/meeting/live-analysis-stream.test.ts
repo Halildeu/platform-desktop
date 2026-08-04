@@ -238,3 +238,51 @@ describe('LiveAnalysisSubscriber', () => {
     expect(fetchImpl.mock.calls.length).toBeLessThanOrEqual(3);
   });
 });
+
+describe('gateway relay route (Faz 24 İ5, backend#1103)', () => {
+  it('subscribes on the audio-gateway relay path, not on meeting-ai directly', async () => {
+    const fetchImpl = vi.fn(async () => makeStreamedResponse([]));
+
+    const sub = new LiveAnalysisSubscriber({
+      baseUrl: 'https://gw.example.com',
+      meetingId: MEETING_ID,
+      accessToken: 'jwt-token',
+      onFrame: () => {},
+      onStatus: () => {},
+      initialBackoffMs: 10_000,
+      maxBackoffMs: 10_000,
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+
+    sub.start();
+    await new Promise((r) => setTimeout(r, 25));
+    await sub.stop('test-cleanup');
+
+    const url = String(fetchImpl.mock.calls[0]?.[0]);
+    expect(url).toBe(
+      `https://gw.example.com/api/v1/audio-gateway/meetings/${MEETING_ID}/live-analysis/stream`,
+    );
+    // The pre-relay meeting-ai path must be gone: that endpoint has no public
+    // route and no tenant-aware authorisation.
+    expect(url).not.toContain('/analyze/live/stream/');
+  });
+
+  it('rejects a path-traversal meetingId before any request is built', () => {
+    const fetchImpl = vi.fn(async () => makeStreamedResponse([]));
+
+    // The UUID guard is the primary defence (a traversal value never reaches
+    // URL construction); `encodeURIComponent` in the path builder is the
+    // belt-and-braces second layer.
+    expect(
+      () =>
+        new LiveAnalysisSubscriber({
+          baseUrl: 'https://gw.example.com',
+          meetingId: '../../admin/secrets',
+          onFrame: () => {},
+          onStatus: () => {},
+          fetchImpl: fetchImpl as unknown as typeof fetch,
+        }),
+    ).toThrow('meetingId must be a UUID');
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+});

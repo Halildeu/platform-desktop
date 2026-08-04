@@ -1,10 +1,19 @@
 /**
  * Faz 24 live-analysis SSE consumer (main process).
  *
- * Subscribes to meeting-ai `GET /analyze/live/stream/{meeting_id}` and
+ * Subscribes to the audio-gateway relay
+ * `GET /api/v1/audio-gateway/meetings/{meetingId}/live-analysis/stream` and
  * dispatches each `event: analysis` frame + a coarse connection status
  * signal into the renderer via IPC. Runs entirely in the main process so
  * the renderer never has to hold long-lived HTTP handles.
+ *
+ * Why the gateway and not meeting-ai directly (platform-backend#1103):
+ * meeting-ai lives on the GPU host behind WireGuard, reachable only over a
+ * pinned-identity mTLS bridge, and has no tenant-aware authorisation. The
+ * gateway is already both the only client of meeting-ai and the component
+ * that checks `meeting:{id}#can_view` for this user, so it relays the very
+ * analysis body it already receives. The desktop therefore reuses the
+ * gateway base URL + bearer it already holds for the recording stream.
  *
  * Design:
  *   - Native Node.js `fetch()` streaming (Node 22+, native undici under
@@ -44,7 +53,7 @@ export interface LiveAnalysisFrame {
 }
 
 export interface LiveAnalysisSubscriberOptions {
-  /** Base URL for meeting-ai (gateway-fronted, e.g. https://ai.acik.com). */
+  /** Audio-gateway base URL (same origin the recorder streams to). */
   baseUrl: string;
   /** Meeting UUID; forms the SSE path parameter. */
   meetingId: string;
@@ -151,7 +160,9 @@ export class LiveAnalysisSubscriber {
   private async runLoop(): Promise<void> {
     let attempt = 0;
     let backoff = this.opts.initialBackoffMs;
-    const url = `${this.opts.baseUrl.replace(/\/+$/, '')}/analyze/live/stream/${this.opts.meetingId}`;
+    const url =
+      `${this.opts.baseUrl.replace(/\/+$/, '')}/api/v1/audio-gateway/meetings/` +
+      `${encodeURIComponent(this.opts.meetingId)}/live-analysis/stream`;
     const fetchFn = this.opts.fetchImpl ?? fetch;
 
     while (!this.stopped) {
