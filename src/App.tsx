@@ -17,7 +17,7 @@ import {
   type LiveSttPreflightState,
 } from './audio/live-stt-preflight';
 import type { LiveSttStreamStatusEvent, LiveSttTranscriptEvent } from './audio/live-stt-stream';
-import { meetingTitleContextTerms } from './audio/live-stt-context';
+import { combinedLiveSttContextTerms } from './audio/live-stt-context';
 import {
   ConsentDialog,
   CONSENT_VERSION,
@@ -622,6 +622,17 @@ function App() {
   const updateTranscriptionMode = useCallback((value: TranscriptionMode) => {
     setTranscriptionMode(value);
     safeLocalStorageSet('mi.transcriptionMode', value);
+  }, []);
+  // Sözlük (gitops#3435): kullanıcının özel adları — "Sevil Karakaş" bir kez
+  // girilir, kalıcı saklanır ve her kayıtta başlık terimleriyle birlikte STT
+  // motoruna bias olarak beslenir. Ham metin satır-başına-bir-ad tutulur;
+  // normalize/sınır uygulaması gönderim anında combinedLiveSttContextTerms'te.
+  const [customVocabText, setCustomVocabText] = useState<string>(
+    () => safeLocalStorageGet('mi.customVocabText') ?? '',
+  );
+  const updateCustomVocabText = useCallback((value: string) => {
+    setCustomVocabText(value);
+    safeLocalStorageSet('mi.customVocabText', value);
   }, []);
   const [meetingPlannerOpen, setMeetingPlannerOpen] = useState(false);
   const [showConsent, setShowConsent] = useState(false);
@@ -1601,7 +1612,10 @@ function App() {
         sttProvider,
         transcriptionMode,
         liveSttStreamUrl: liveSttStreamUrlForSession,
-        liveSttContextTerms: meetingTitleContextTerms(meetingTitle),
+        liveSttContextTerms: combinedLiveSttContextTerms(
+          meetingTitle,
+          customVocabText.split(/\r?\n|,/),
+        ),
         onLiveStreamReady: () => {
           setLiveStreamReady(true);
         },
@@ -2058,6 +2072,17 @@ function App() {
                         <option value="internal">Dahili STT</option>
                         <option value="speechmatics">Speechmatics</option>
                       </select>
+                    </label>
+                    <label className="stt-provider-field" htmlFor="stt-custom-vocab">
+                      <span>Sözlük — özel adlar (her satıra bir ad)</span>
+                      <textarea
+                        id="stt-custom-vocab"
+                        rows={3}
+                        placeholder={'Sevil Karakaş\nSergen Bediroğlu'}
+                        value={customVocabText}
+                        disabled={startPending || contractPending || showConsent}
+                        onChange={(event) => updateCustomVocabText(event.target.value)}
+                      />
                     </label>
                     <fieldset className="transcription-mode-field">
                       <legend>Transkript görünümü</legend>
