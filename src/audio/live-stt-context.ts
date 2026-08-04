@@ -138,3 +138,47 @@ export function meetingTitleContextTerms(title: string | null | undefined): stri
 
   return terms;
 }
+
+/**
+ * Kullanıcı sözlüğü (gitops#3435): kullanıcının açıkça girdiği adlar başlık
+ * çıkarımından ÖNCE gelir — bütçe (16 terim / 256 karakter) dolduğunda
+ * kırpılan taraf başlık terimleri olur. Sözlük girdileri kullanıcı seçimi
+ * olduğu için isim-görünümü sezgiseline tabi tutulmaz; yalnız karakter kümesi
+ * ve uzunluk doğrulanır, geçersiz satırlar sessizce atlanır.
+ */
+export function combinedLiveSttContextTerms(
+  title: string | null | undefined,
+  customTerms: readonly string[],
+): string[] {
+  const terms: string[] = [];
+  const seen = new Set<string>();
+  let totalChars = 0;
+
+  const addTerm = (candidate: string): void => {
+    const key = contextKey(candidate);
+    if (seen.has(key)) {
+      return;
+    }
+    if (terms.length >= MAX_CONTEXT_TERMS || totalChars + candidate.length > MAX_CONTEXT_CHARS) {
+      return;
+    }
+    seen.add(key);
+    terms.push(candidate);
+    totalChars += candidate.length;
+  };
+
+  for (const candidate of customTerms) {
+    if (typeof candidate !== 'string') {
+      continue;
+    }
+    const normalized = normalizeCandidate(candidate);
+    if (normalized) {
+      addTerm(normalized);
+    }
+  }
+  for (const titleTerm of meetingTitleContextTerms(title)) {
+    addTerm(titleTerm);
+  }
+
+  return terms;
+}

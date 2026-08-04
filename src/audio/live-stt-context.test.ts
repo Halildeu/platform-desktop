@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { meetingTitleContextTerms } from './live-stt-context';
+import { combinedLiveSttContextTerms, meetingTitleContextTerms } from './live-stt-context';
 
 describe('meetingTitleContextTerms', () => {
   it('keeps bounded name-like phrases without generic meeting-title words', () => {
@@ -31,5 +31,30 @@ describe('meetingTitleContextTerms', () => {
   it('returns no context for missing or punctuation-only titles', () => {
     expect(meetingTitleContextTerms(null)).toEqual([]);
     expect(meetingTitleContextTerms('---')).toEqual([]);
+  });
+});
+
+describe('combinedLiveSttContextTerms', () => {
+  it('puts user dictionary entries before title-derived terms', () => {
+    expect(
+      combinedLiveSttContextTerms('Zeynep Akkılıç - Faz 24', ['Sevil Karakaş', 'Sergen Bediroğlu']),
+    ).toEqual(['Sevil Karakaş', 'Sergen Bediroğlu', 'Zeynep Akkılıç', 'Zeynep', 'Akkılıç']);
+  });
+
+  it('accepts lowercase dictionary entries the title heuristic would reject', () => {
+    expect(combinedLiveSttContextTerms(null, ['sevil karakaş'])).toEqual(['sevil karakaş']);
+  });
+
+  it('skips invalid dictionary lines silently and dedupes against the title', () => {
+    expect(
+      combinedLiveSttContextTerms('Sevil Karakaş sunumu', ['', '  ', 'x', 'a{b}', 'SEVİL KARAKAŞ']),
+    ).toEqual(['SEVİL KARAKAŞ', 'Sevil', 'Karakaş']);
+  });
+
+  it('caps the combined budget so oversized dictionaries cannot flood the stream', () => {
+    const flood = Array.from({ length: 40 }, (_, index) => `Aday ${'X'.repeat(10)}${index}`);
+    const terms = combinedLiveSttContextTerms(null, flood);
+    expect(terms.length).toBeLessThanOrEqual(16);
+    expect(terms.join('').length).toBeLessThanOrEqual(256);
   });
 });
