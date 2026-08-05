@@ -956,6 +956,10 @@ export function registerAudioIpc(): void {
             startIntent.idempotencyKey,
             startIntent.sttProvider,
             startIntent.transcriptionMode,
+            // Sözlük oturum açılışında gider: Speechmatics onu yalnız
+            // StartRecognition'da kabul eder ve o mesaj ilk ses çerçevesinden
+            // önce çıkar (platform-backend#1104).
+            normalizedContextTerms,
           );
         } catch (error) {
           if (error instanceof GatewaySessionStartRejectedError) {

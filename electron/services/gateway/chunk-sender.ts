@@ -60,6 +60,7 @@ export class ChunkSender {
     idempotencyKey = newIdempotencyKey(),
     sttProvider: SttProvider = 'internal',
     transcriptionMode: TranscriptionMode = 'balanced',
+    contextTerms: readonly string[] = [],
   ): Promise<string> {
     if (this.state === 'active') {
       throw new Error('session already active');
@@ -71,7 +72,7 @@ export class ChunkSender {
         info = await startSession(
           this.cfg,
           jwt,
-          { meetingId, deviceId, language, sttProvider, transcriptionMode },
+          { meetingId, deviceId, language, sttProvider, transcriptionMode, contextTerms },
           idempotencyKey,
         );
         break;

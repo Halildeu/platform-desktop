@@ -455,6 +455,7 @@ describe('audio IPC recorder consent gate', () => {
       'IK-1',
       'internal',
       'balanced',
+      [],
     );
     expect(mocks.recordConsent.mock.invocationCallOrder[0]).toBeLessThan(
       mocks.senderStart.mock.invocationCallOrder[0],
@@ -887,6 +888,7 @@ describe('audio IPC recorder consent gate', () => {
       'IK-1',
       'speechmatics',
       'realtime',
+      [],
     );
     expect(mocks.gatewayLiveStreamCtor).toHaveBeenCalledTimes(1);
 
@@ -920,6 +922,7 @@ describe('audio IPC recorder consent gate', () => {
       'IK-1',
       'speechmatics',
       'realtime',
+      [],
     );
     const restBytes = new Uint8Array([0, 0]);
     await chunkHandler()(
