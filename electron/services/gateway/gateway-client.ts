@@ -195,6 +195,14 @@ export interface StartSessionArgs {
   language: string;
   sttProvider?: SttProvider;
   transcriptionMode?: TranscriptionMode;
+  /**
+   * Kullanıcı sözlüğü (özel adlar). Speechmatics bunları yalnız
+   * StartRecognition içinde kabul eder ve o mesaj ilk ses çerçevesinden önce
+   * gider — bu yüzden akış-içi `context` çerçevesi Speechmatics için her zaman
+   * geç kalır (platform-backend#1104). Sözlük oturumun özelliği olarak burada,
+   * istek GÖVDESİNDE taşınır; kişi adı içerebildiği için asla query string'de.
+   */
+  contextTerms?: readonly string[];
 }
 
 export type SttProvider = 'internal' | 'speechmatics';
@@ -457,6 +465,9 @@ export async function startSession(
         language: args.language,
         sttProvider,
         transcriptionMode,
+        ...(args.contextTerms && args.contextTerms.length > 0
+          ? { contextTerms: [...args.contextTerms] }
+          : {}),
         audioFormat: 'PCM16',
         sampleRateHz: 16000,
         channels: 1,

@@ -203,3 +203,56 @@ describe('ChunkSender (seq state machine)', () => {
     expect(getJwt).toHaveBeenCalled();
   });
 });
+
+describe('session-start dictionary (Faz 24 gitops#3435 dilim-3)', () => {
+  it('sends contextTerms in the session-start body so Speechmatics can bias', async () => {
+    const bodies: unknown[] = [];
+    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
+      bodies.push(JSON.parse(String(init?.body)));
+      return new Response(JSON.stringify({
+        sessionId: 's-1',
+        sttProvider: 'speechmatics',
+        transcriptionMode: 'realtime',
+      }), {
+        status: 201,
+        headers: { 'content-type': 'application/json' },
+      });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const sender = new ChunkSender({ baseUrl: 'https://gw.example.com' }, async () => 'jwt');
+    await sender.start('m-1', 'd-1', 'tr', 'idem-1', 'speechmatics', 'realtime', [
+      'Sevil Karakaş',
+      'Sergen Bediroğlu',
+    ]);
+
+    expect(bodies).toHaveLength(1);
+    expect(bodies[0]).toMatchObject({
+      sttProvider: 'speechmatics',
+      contextTerms: ['Sevil Karakaş', 'Sergen Bediroğlu'],
+    });
+  });
+
+  it('omits contextTerms entirely when the user has no dictionary', async () => {
+    const bodies: Record<string, unknown>[] = [];
+    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
+      bodies.push(JSON.parse(String(init?.body)));
+      return new Response(JSON.stringify({
+        sessionId: 's-2',
+        sttProvider: 'internal',
+        transcriptionMode: 'balanced',
+      }), {
+        status: 201,
+        headers: { 'content-type': 'application/json' },
+      });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const sender = new ChunkSender({ baseUrl: 'https://gw.example.com' }, async () => 'jwt');
+    await sender.start('m-1', 'd-1', 'tr', 'idem-2');
+
+    // Boş sözlükte istek şekli birebir eski hâlinde kalmalı — sunucuya
+    // anlamsız bir `contextTerms: []` göndermiyoruz.
+    expect(bodies[0]).not.toHaveProperty('contextTerms');
+  });
+});
