@@ -209,14 +209,17 @@ describe('session-start dictionary (Faz 24 gitops#3435 dilim-3)', () => {
     const bodies: unknown[] = [];
     const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
       bodies.push(JSON.parse(String(init?.body)));
-      return new Response(JSON.stringify({
-        sessionId: 's-1',
-        sttProvider: 'speechmatics',
-        transcriptionMode: 'realtime',
-      }), {
-        status: 201,
-        headers: { 'content-type': 'application/json' },
-      });
+      return new Response(
+        JSON.stringify({
+          sessionId: 's-1',
+          sttProvider: 'speechmatics',
+          transcriptionMode: 'realtime',
+        }),
+        {
+          status: 201,
+          headers: { 'content-type': 'application/json' },
+        },
+      );
     });
     vi.stubGlobal('fetch', fetchMock);
 
@@ -237,14 +240,17 @@ describe('session-start dictionary (Faz 24 gitops#3435 dilim-3)', () => {
     const bodies: Record<string, unknown>[] = [];
     const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
       bodies.push(JSON.parse(String(init?.body)));
-      return new Response(JSON.stringify({
-        sessionId: 's-2',
-        sttProvider: 'internal',
-        transcriptionMode: 'balanced',
-      }), {
-        status: 201,
-        headers: { 'content-type': 'application/json' },
-      });
+      return new Response(
+        JSON.stringify({
+          sessionId: 's-2',
+          sttProvider: 'internal',
+          transcriptionMode: 'balanced',
+        }),
+        {
+          status: 201,
+          headers: { 'content-type': 'application/json' },
+        },
+      );
     });
     vi.stubGlobal('fetch', fetchMock);
 
