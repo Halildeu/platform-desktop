@@ -2215,3 +2215,71 @@ button:disabled {
   color: var(--muted, #64748b);
   font-style: italic;
 }
+
+/* Faz 24 Görevler dilim-3 — canlı panel aksiyon→görev atama */
+.live-analysis-panel__item--action {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.5rem;
+}
+.live-analysis-panel__action-text {
+  flex: 1 1 60%;
+}
+.live-analysis-panel__assign-btn {
+  font-size: 0.78rem;
+  padding: 0.15rem 0.55rem;
+  border-radius: 999px;
+  border: 1px solid var(--border-subtle, #4443);
+  background: transparent;
+  cursor: pointer;
+}
+.live-analysis-panel__assign-btn:hover {
+  background: var(--surface-raised, #8881);
+}
+.live-analysis-panel__assign-form {
+  flex-basis: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  padding: 0.5rem;
+  border: 1px dashed var(--border-subtle, #4443);
+  border-radius: 8px;
+}
+.live-analysis-panel__assign-row {
+  display: flex;
+  gap: 0.4rem;
+  align-items: center;
+}
+.live-analysis-panel__assign-row input[type='text'] {
+  flex: 1;
+}
+.live-analysis-panel__assign-options {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  max-height: 9rem;
+  overflow-y: auto;
+}
+.live-analysis-panel__assign-options button {
+  width: 100%;
+  text-align: left;
+  padding: 0.25rem 0.5rem;
+}
+.live-analysis-panel__assign-selected {
+  margin: 0;
+  font-size: 0.85rem;
+}
+.live-analysis-panel__assign-error {
+  margin: 0;
+  color: #b3261e;
+  font-size: 0.82rem;
+}
+.live-analysis-panel__task-done {
+  color: #1b7f4d;
+  font-size: 0.85rem;
+  font-weight: 600;
+}

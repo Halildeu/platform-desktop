@@ -134,3 +134,91 @@ describe('<LiveAnalysisPanel />', () => {
     expect(screen.getByText(/Bağlantı kurulamadı/)).toBeInTheDocument();
   });
 });
+
+// ── Faz 24 Görevler dilim-3 (gitops#3486): aksiyon → görev atama ────────────
+
+import { vi } from 'vitest';
+import userEvent from '@testing-library/user-event';
+import type { LiveTasksApi } from './LiveAnalysisPanel';
+
+function fireActionFrame(api: StubApi): void {
+  act(() => {
+    api.fireStatus(MEETING_A, { kind: 'open', connectedAt: '2026-08-29T10:00:00Z' });
+    api.fireFrame(MEETING_A, {
+      payload: {
+        is_partial: true,
+        version: 1,
+        summary: 'Plan konuşuldu',
+        action_items: [{ text: 'Raporu Zeynep hazırlayacak' }],
+      },
+      receivedAt: '2026-08-29T10:00:05Z',
+    });
+  });
+}
+
+describe('<LiveAnalysisPanel /> görev atama', () => {
+  afterEach(() => cleanup());
+
+  it('creates a task from an action item with assignee and due date', async () => {
+    const api = makeStubApi();
+    const createAction = vi.fn().mockResolvedValue({ id: 't-1' });
+    const searchAssignees = vi
+      .fn()
+      .mockResolvedValue([{ subject: 'kc-zeynep', label: 'Zeynep Akkılıç (zeynep@acik.com)' }]);
+    const tasksApi: LiveTasksApi = { createAction, searchAssignees };
+    render(<LiveAnalysisPanel meetingId={MEETING_A} api={api} tasksApi={tasksApi} />);
+    fireActionFrame(api);
+    await waitFor(() =>
+      expect(screen.getByText('Raporu Zeynep hazırlayacak')).toBeInTheDocument(),
+    );
+
+    await userEvent.click(screen.getByRole('button', { name: 'Göreve ata' }));
+    await userEvent.type(screen.getByLabelText('Atanacak kişiyi ara'), 'zeynep');
+    await userEvent.click(screen.getByRole('button', { name: 'Ara' }));
+    await waitFor(() =>
+      expect(screen.getByText('Zeynep Akkılıç (zeynep@acik.com)')).toBeInTheDocument(),
+    );
+    await userEvent.click(screen.getByText('Zeynep Akkılıç (zeynep@acik.com)'));
+    await userEvent.click(screen.getByRole('button', { name: 'Görev oluştur' }));
+
+    await waitFor(() => expect(screen.getByText(/Görev oluşturuldu/)).toBeInTheDocument());
+    expect(searchAssignees).toHaveBeenCalledWith({ query: 'zeynep' });
+    expect(createAction).toHaveBeenCalledWith({
+      meetingId: MEETING_A,
+      description: 'Raporu Zeynep hazırlayacak',
+      assigneeSubject: 'kc-zeynep',
+      dueAt: null,
+    });
+  });
+
+  it('surfaces a create failure without losing the form', async () => {
+    const api = makeStubApi();
+    const tasksApi: LiveTasksApi = {
+      createAction: vi.fn().mockRejectedValue(new Error('createMeetingAction failed: 403')),
+      searchAssignees: vi.fn().mockResolvedValue([]),
+    };
+    render(<LiveAnalysisPanel meetingId={MEETING_A} api={api} tasksApi={tasksApi} />);
+    fireActionFrame(api);
+    await waitFor(() =>
+      expect(screen.getByText('Raporu Zeynep hazırlayacak')).toBeInTheDocument(),
+    );
+
+    await userEvent.click(screen.getByRole('button', { name: 'Göreve ata' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Görev oluştur' }));
+
+    await waitFor(() =>
+      expect(screen.getByText(/Görev oluşturulamadı: .*403/)).toBeInTheDocument(),
+    );
+    expect(screen.getByRole('button', { name: 'Görev oluştur' })).toBeInTheDocument();
+  });
+
+  it('hides the assign affordance when no tasks API bridge exists', async () => {
+    const api = makeStubApi();
+    render(<LiveAnalysisPanel meetingId={MEETING_A} api={api} />);
+    fireActionFrame(api);
+    await waitFor(() =>
+      expect(screen.getByText('Raporu Zeynep hazırlayacak')).toBeInTheDocument(),
+    );
+    expect(screen.queryByRole('button', { name: 'Göreve ata' })).not.toBeInTheDocument();
+  });
+});

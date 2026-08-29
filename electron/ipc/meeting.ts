@@ -8,11 +8,16 @@ import {
 } from '../services/meeting/live-analysis-stream.js';
 import {
   analyzeMeetingIntelligence,
+  createMeetingAction,
   createMeetingContract,
   listRecentMeetings,
   loadMeetingConfig,
   readMeetingIntelligenceResult,
+  searchAssignees,
+  type AssigneeOption,
+  type CreateMeetingActionArgs,
   type CreateMeetingContractArgs,
+  type MeetingActionRecord,
   type MeetingAiAnalyzeArgs,
   type MeetingAiAnalyzeRequest,
   type MeetingAiAnalyzeResponse,
@@ -209,6 +214,40 @@ function parseResultReadArgs(value: unknown): string {
   return requiredCanonicalMeetingId(record.meetingId, 'meetingId');
 }
 
+function parseActionCreateArgs(value: unknown): CreateMeetingActionArgs {
+  if (!value || typeof value !== 'object') {
+    throw new Error('meeting action payload must be an object');
+  }
+  const record = value as Record<string, unknown>;
+  const meetingId = requiredCanonicalMeetingId(record.meetingId, 'meetingId');
+  if (typeof record.description !== 'string' || !record.description.trim()) {
+    throw new Error('description is required');
+  }
+  const assigneeSubject =
+    typeof record.assigneeSubject === 'string' && record.assigneeSubject.trim()
+      ? record.assigneeSubject.trim().slice(0, 256)
+      : null;
+  const dueAt =
+    typeof record.dueAt === 'string' && record.dueAt.trim() ? record.dueAt.trim() : null;
+  return {
+    meetingId,
+    description: record.description.trim().slice(0, 2000),
+    assigneeSubject,
+    dueAt,
+  };
+}
+
+function parseAssigneeSearchArgs(value: unknown): string {
+  if (!value || typeof value !== 'object') {
+    throw new Error('assignee search payload must be an object');
+  }
+  const record = value as Record<string, unknown>;
+  if (typeof record.query !== 'string' || !record.query.trim()) {
+    throw new Error('query is required');
+  }
+  return record.query.trim().slice(0, 128);
+}
+
 export function registerMeetingIpc(): void {
   ipcMain.handle(
     'meeting:create-contract',
@@ -245,6 +284,22 @@ export function registerMeetingIpc(): void {
   // frame is broadcast as `meeting:live-analysis-frame` to every window;
   // status transitions (connecting/open/closed/error) are broadcast as
   // `meeting:live-analysis-status`. The renderer filters on meetingId.
+  // ── Faz 24 Görevler dilim-3 (gitops#3486): live-panel task assignment ───
+  ipcMain.handle(
+    'meeting:action-create',
+    async (_e, payload: unknown): Promise<MeetingActionRecord> => {
+      const args = parseActionCreateArgs(payload);
+      return createMeetingAction(loadMeetingConfig(), await getValidAccessToken(), args);
+    },
+  );
+  ipcMain.handle(
+    'meeting:assignee-search',
+    async (_e, payload: unknown): Promise<AssigneeOption[]> => {
+      const query = parseAssigneeSearchArgs(payload);
+      return searchAssignees(loadMeetingConfig(), await getValidAccessToken(), query);
+    },
+  );
+
   ipcMain.handle(
     'meeting:live-analysis-start',
     async (_e, payload: unknown): Promise<{ started: boolean }> => {
