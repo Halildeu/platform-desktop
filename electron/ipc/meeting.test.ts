@@ -110,9 +110,9 @@ describe('meeting action IPC boundary', () => {
   it('rejects an action create with a bad meetingId before token access', async () => {
     const handler = mocks.handlers.get('meeting:action-create');
 
-    await expect(
-      handler?.({}, { meetingId: 'nope', description: 'Rapor' }),
-    ).rejects.toThrow('meetingId must be a canonical UUID');
+    await expect(handler?.({}, { meetingId: 'nope', description: 'Rapor' })).rejects.toThrow(
+      'meetingId must be a canonical UUID',
+    );
     expect(mocks.getValidAccessToken).not.toHaveBeenCalled();
     expect(mocks.createMeetingAction).not.toHaveBeenCalled();
   });

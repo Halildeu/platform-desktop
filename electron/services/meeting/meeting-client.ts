@@ -1162,11 +1162,14 @@ export async function searchAssignees(
   );
   const rows: unknown[] = Array.isArray(payload)
     ? payload
-    : payload && typeof payload === 'object' && Array.isArray((payload as { items?: unknown[] }).items)
-      ? ((payload as { items: unknown[] }).items)
-      : payload && typeof payload === 'object' &&
+    : payload &&
+        typeof payload === 'object' &&
+        Array.isArray((payload as { items?: unknown[] }).items)
+      ? (payload as { items: unknown[] }).items
+      : payload &&
+          typeof payload === 'object' &&
           Array.isArray((payload as { content?: unknown[] }).content)
-        ? ((payload as { content: unknown[] }).content)
+        ? (payload as { content: unknown[] }).content
         : [];
   const options: AssigneeOption[] = [];
   for (const raw of rows) {

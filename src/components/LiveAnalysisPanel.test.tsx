@@ -168,9 +168,7 @@ describe('<LiveAnalysisPanel /> görev atama', () => {
     const tasksApi: LiveTasksApi = { createAction, searchAssignees };
     render(<LiveAnalysisPanel meetingId={MEETING_A} api={api} tasksApi={tasksApi} />);
     fireActionFrame(api);
-    await waitFor(() =>
-      expect(screen.getByText('Raporu Zeynep hazırlayacak')).toBeInTheDocument(),
-    );
+    await waitFor(() => expect(screen.getByText('Raporu Zeynep hazırlayacak')).toBeInTheDocument());
 
     await userEvent.click(screen.getByRole('button', { name: 'Göreve ata' }));
     await userEvent.type(screen.getByLabelText('Atanacak kişiyi ara'), 'zeynep');
@@ -199,9 +197,7 @@ describe('<LiveAnalysisPanel /> görev atama', () => {
     };
     render(<LiveAnalysisPanel meetingId={MEETING_A} api={api} tasksApi={tasksApi} />);
     fireActionFrame(api);
-    await waitFor(() =>
-      expect(screen.getByText('Raporu Zeynep hazırlayacak')).toBeInTheDocument(),
-    );
+    await waitFor(() => expect(screen.getByText('Raporu Zeynep hazırlayacak')).toBeInTheDocument());
 
     await userEvent.click(screen.getByRole('button', { name: 'Göreve ata' }));
     await userEvent.click(screen.getByRole('button', { name: 'Görev oluştur' }));
@@ -216,9 +212,7 @@ describe('<LiveAnalysisPanel /> görev atama', () => {
     const api = makeStubApi();
     render(<LiveAnalysisPanel meetingId={MEETING_A} api={api} />);
     fireActionFrame(api);
-    await waitFor(() =>
-      expect(screen.getByText('Raporu Zeynep hazırlayacak')).toBeInTheDocument(),
-    );
+    await waitFor(() => expect(screen.getByText('Raporu Zeynep hazırlayacak')).toBeInTheDocument());
     expect(screen.queryByRole('button', { name: 'Göreve ata' })).not.toBeInTheDocument();
   });
 });
