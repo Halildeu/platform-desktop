@@ -14,6 +14,16 @@ const mocks = vi.hoisted(() => ({
   })),
   analyzeMeetingIntelligence: vi.fn(),
   readMeetingIntelligenceResult: vi.fn(async () => ({ status: 'not_ready' as const })),
+  createMeetingAction: vi.fn(async () => ({
+    id: 'a-1',
+    meetingId: '33333333-3333-4333-8333-333333333333',
+    description: 'stub',
+    assigneeSubject: null,
+    status: 'OPEN',
+    dueAt: null,
+    version: 0,
+  })),
+  searchAssignees: vi.fn(async () => [{ userId: 30, label: 'Ali Veli' }]),
 }));
 
 vi.mock('electron', () => ({
@@ -26,7 +36,9 @@ vi.mock('electron', () => ({
 
 vi.mock('../services/meeting/meeting-client', () => ({
   analyzeMeetingIntelligence: mocks.analyzeMeetingIntelligence,
+  createMeetingAction: mocks.createMeetingAction,
   createMeetingContract: mocks.createMeetingContract,
+  searchAssignees: mocks.searchAssignees,
   listRecentMeetings: mocks.listRecentMeetings,
   loadMeetingConfig: mocks.loadMeetingConfig,
   readMeetingIntelligenceResult: mocks.readMeetingIntelligenceResult,
@@ -82,6 +94,71 @@ describe('meeting result IPC boundary', () => {
     expect(mocks.listRecentMeetings).toHaveBeenCalledWith(
       { baseUrl: 'https://testai.acik.com' },
       'JWT',
+    );
+  });
+});
+
+// ── Faz 24 Görevler dilim-3 (gitops#3486): action-create / assignee-search ──
+
+describe('meeting action IPC boundary', () => {
+  beforeEach(async () => {
+    await registerFreshMeetingIpc();
+    mocks.createMeetingAction.mockClear();
+    mocks.searchAssignees.mockClear();
+  });
+
+  it('rejects an action create with a bad meetingId before token access', async () => {
+    const handler = mocks.handlers.get('meeting:action-create');
+
+    await expect(handler?.({}, { meetingId: 'nope', description: 'Rapor' })).rejects.toThrow(
+      'meetingId must be a canonical UUID',
+    );
+    expect(mocks.getValidAccessToken).not.toHaveBeenCalled();
+    expect(mocks.createMeetingAction).not.toHaveBeenCalled();
+  });
+
+  it('trims and forwards a validated action create with the main-process token', async () => {
+    const handler = mocks.handlers.get('meeting:action-create');
+    const meetingId = '33333333-3333-4333-8333-333333333333';
+
+    await expect(
+      handler?.(
+        {},
+        {
+          meetingId,
+          description: '  Raporu hazırla  ',
+          assigneeSubject: ' kc-9 ',
+          assigneeUserId: 42,
+          dueAt: '',
+        },
+      ),
+    ).resolves.toMatchObject({ id: 'a-1' });
+    expect(mocks.createMeetingAction).toHaveBeenCalledWith(
+      { baseUrl: 'https://testai.acik.com' },
+      'JWT',
+      {
+        meetingId,
+        description: 'Raporu hazırla',
+        assigneeSubject: 'kc-9',
+        assigneeUserId: 42,
+        dueAt: null,
+      },
+    );
+  });
+
+  it('requires a non-empty assignee search query', async () => {
+    const handler = mocks.handlers.get('meeting:assignee-search');
+
+    await expect(handler?.({}, { query: '   ' })).rejects.toThrow('query is required');
+    expect(mocks.searchAssignees).not.toHaveBeenCalled();
+
+    await expect(handler?.({}, { query: ' zeynep ' })).resolves.toEqual([
+      { userId: 30, label: 'Ali Veli' },
+    ]);
+    expect(mocks.searchAssignees).toHaveBeenCalledWith(
+      { baseUrl: 'https://testai.acik.com' },
+      'JWT',
+      'zeynep',
     );
   });
 });

@@ -233,6 +233,26 @@ const electronAPI = {
       meetingId: string;
     }): Promise<MeetingIntelligenceReadOutcome> =>
       ipcRenderer.invoke('meeting:get-intelligence-result', payload),
+    /** Faz 24 Görevler dilim-3: canlı panelden aksiyonu göreve dönüştür. */
+    createAction: (payload: {
+      meetingId: string;
+      description: string;
+      assigneeSubject?: string | null;
+      assigneeUserId?: number | null;
+      dueAt?: string | null;
+    }): Promise<{
+      id: string;
+      meetingId: string;
+      description: string;
+      assigneeSubject: string | null;
+      status: string;
+      dueAt: string | null;
+      version: number;
+    }> => ipcRenderer.invoke('meeting:action-create', payload),
+    searchAssignees: (payload: {
+      query: string;
+    }): Promise<Array<{ userId: number; label: string }>> =>
+      ipcRenderer.invoke('meeting:assignee-search', payload),
     /** Start the SSE subscription for a meeting's live analysis stream.
      *  Idempotent (a second start for the same meetingId returns
      *  `{started:false}`). Frames arrive via `onLiveAnalysisFrame`.

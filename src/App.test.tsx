@@ -190,6 +190,16 @@ function installElectronApiMock(recorderConfig: {
       stopLiveAnalysis: vi.fn().mockResolvedValue({ stopped: true }),
       onLiveAnalysisFrame: vi.fn(() => (): void => {}),
       onLiveAnalysisStatus: vi.fn(() => (): void => {}),
+      createAction: vi.fn(async () => ({
+        id: 'stub-action',
+        meetingId: 'stub',
+        description: 'stub',
+        assigneeSubject: null,
+        status: 'OPEN',
+        dueAt: null,
+        version: 0,
+      })),
+      searchAssignees: vi.fn(async () => []),
     },
     audio: {
       recorderConfig: vi.fn().mockResolvedValue({

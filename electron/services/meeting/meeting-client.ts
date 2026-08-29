@@ -1046,3 +1046,153 @@ export async function readMeetingIntelligenceResult(
 
   throw new Error('readMeetingIntelligenceResult failed: retry loop exhausted');
 }
+
+// ── Faz 24 Görevler dilim-3 (gitops#3486): live-panel task assignment ───────
+//
+// The live panel turns an analyzer action item into a platform task by
+// calling the same admin CRUD the web Görevler panel uses. Create is NOT
+// retried: the endpoint is not idempotent and a duplicated task is worse
+// than a surfaced failure.
+
+const ACTION_ATTEMPT_TIMEOUT_MS = 6_000;
+const ASSIGNEE_SEARCH_MAX_QUERY = 128;
+
+export interface MeetingActionRecord {
+  id: string;
+  meetingId: string;
+  description: string;
+  assigneeSubject: string | null;
+  status: string;
+  dueAt: string | null;
+  version: number;
+}
+
+export interface CreateMeetingActionArgs {
+  meetingId: string;
+  description: string;
+  assigneeSubject?: string | null;
+  /** gitops#3507: numeric public-directory id; backend resolves it to the KC subject. */
+  assigneeUserId?: number | null;
+  dueAt?: string | null;
+}
+
+export interface AssigneeOption {
+  /** Numeric public-directory id (kcSubject is server-to-server by design). */
+  userId: number;
+  label: string;
+}
+
+export function meetingActionsUrl(cfg: MeetingClientConfig, meetingId: string): string {
+  if (!MEETING_ID_PATTERN.test(meetingId)) {
+    throw new Error('meetingId must be a canonical UUID');
+  }
+  return `${meetingsUrl(cfg)}/${meetingId}/actions`;
+}
+
+export function assigneeSearchUrl(cfg: MeetingClientConfig, query: string): string {
+  const params = new URLSearchParams({ search: query, pageSize: '10' });
+  return `${cfg.baseUrl}/api/v1/users?${params.toString()}`;
+}
+
+function parseMeetingActionRecord(value: unknown): MeetingActionRecord {
+  if (!value || typeof value !== 'object') {
+    throw new Error('meeting action response must be an object');
+  }
+  const record = value as Record<string, unknown>;
+  return {
+    id: requiredString(record.id, 'meeting action id'),
+    meetingId: requiredCanonicalUuid(record.meetingId, 'meeting action meetingId'),
+    description: requiredString(record.description, 'meeting action description'),
+    assigneeSubject: nullableString(record.assigneeSubject, 'meeting action assigneeSubject'),
+    status: requiredString(record.status, 'meeting action status'),
+    dueAt: nullableString(record.dueAt, 'meeting action dueAt'),
+    version: typeof record.version === 'number' ? record.version : 0,
+  };
+}
+
+export async function createMeetingAction(
+  cfg: MeetingClientConfig,
+  jwt: string,
+  args: CreateMeetingActionArgs,
+): Promise<MeetingActionRecord> {
+  const description = boundedString(args.description, 'meeting action description', 2000);
+  // Backend rejects both identity forms at once (400); send exactly one.
+  const body = {
+    description,
+    assigneeSubject: args.assigneeUserId != null ? null : (args.assigneeSubject ?? null),
+    assigneeUserId: args.assigneeUserId ?? null,
+    dueAt: args.dueAt ? canonicalIsoInstant(args.dueAt, 'meeting action dueAt') : null,
+  };
+  return withDesktopFetchDeadline(
+    meetingActionsUrl(cfg, args.meetingId),
+    {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${jwt}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(body),
+    },
+    ACTION_ATTEMPT_TIMEOUT_MS,
+    'createMeetingAction',
+    async (response) => {
+      if (!response.ok) {
+        throw new Error(await httpErrorMessage(response, 'createMeetingAction'));
+      }
+      return parseMeetingActionRecord(await response.json());
+    },
+  );
+}
+
+export async function searchAssignees(
+  cfg: MeetingClientConfig,
+  jwt: string,
+  query: string,
+): Promise<AssigneeOption[]> {
+  const bounded = boundedString(query, 'assignee search query', ASSIGNEE_SEARCH_MAX_QUERY);
+  const payload: unknown = await withDesktopFetchDeadline(
+    assigneeSearchUrl(cfg, bounded),
+    {
+      method: 'GET',
+      headers: { Authorization: `Bearer ${jwt}` },
+    },
+    ACTION_ATTEMPT_TIMEOUT_MS,
+    'searchAssignees',
+    async (response) => {
+      if (!response.ok) {
+        throw new Error(await httpErrorMessage(response, 'searchAssignees'));
+      }
+      return (await response.json()) as unknown;
+    },
+  );
+  const rows: unknown[] = Array.isArray(payload)
+    ? payload
+    : payload &&
+        typeof payload === 'object' &&
+        Array.isArray((payload as { items?: unknown[] }).items)
+      ? (payload as { items: unknown[] }).items
+      : payload &&
+          typeof payload === 'object' &&
+          Array.isArray((payload as { content?: unknown[] }).content)
+        ? (payload as { content: unknown[] }).content
+        : [];
+  const options: AssigneeOption[] = [];
+  for (const raw of rows) {
+    if (!raw || typeof raw !== 'object') continue;
+    const row = raw as Record<string, unknown>;
+    // gitops#3507: the directory exposes only the numeric id; the backend
+    // resolves id → KC subject at create time.
+    if (typeof row.id !== 'number') continue;
+    const userId = row.id;
+    const name =
+      typeof row.name === 'string' && row.name.trim()
+        ? row.name.trim()
+        : typeof row.displayName === 'string'
+          ? row.displayName.trim()
+          : '';
+    const email = typeof row.email === 'string' ? row.email.trim() : '';
+    const label = name && email ? `${name} (${email})` : name || email || String(userId);
+    options.push({ userId, label });
+  }
+  return options;
+}
