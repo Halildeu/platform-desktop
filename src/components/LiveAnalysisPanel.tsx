@@ -37,10 +37,10 @@ export interface LiveTasksApi {
   createAction(payload: {
     meetingId: string;
     description: string;
-    assigneeSubject?: string | null;
+    assigneeUserId?: number | null;
     dueAt?: string | null;
   }): Promise<{ id: string }>;
-  searchAssignees(payload: { query: string }): Promise<Array<{ subject: string; label: string }>>;
+  searchAssignees(payload: { query: string }): Promise<Array<{ userId: number; label: string }>>;
 }
 
 export interface LiveAnalysisPanelProps {
@@ -125,8 +125,8 @@ function ActionItemRow({
 }): JSX.Element {
   const [phase, setPhase] = useState<AssignPhase>({ kind: 'idle' });
   const [query, setQuery] = useState('');
-  const [options, setOptions] = useState<Array<{ subject: string; label: string }>>([]);
-  const [selected, setSelected] = useState<{ subject: string; label: string } | null>(null);
+  const [options, setOptions] = useState<Array<{ userId: number; label: string }>>([]);
+  const [selected, setSelected] = useState<{ userId: number; label: string } | null>(null);
   const [dueDate, setDueDate] = useState('');
 
   const search = (): void => {
@@ -144,7 +144,7 @@ function ActionItemRow({
       .createAction({
         meetingId,
         description: text,
-        assigneeSubject: selected?.subject ?? null,
+        assigneeUserId: selected?.userId ?? null,
         dueAt: dueDate ? new Date(`${dueDate}T17:00:00`).toISOString() : null,
       })
       .then(() => setPhase({ kind: 'done' }))
@@ -203,7 +203,7 @@ function ActionItemRow({
           {options.length > 0 && !selected ? (
             <ul className="live-analysis-panel__assign-options">
               {options.map((o) => (
-                <li key={o.subject}>
+                <li key={o.userId}>
                   <button type="button" onClick={() => setSelected(o)}>
                     {o.label}
                   </button>

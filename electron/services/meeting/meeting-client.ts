@@ -1071,11 +1071,14 @@ export interface CreateMeetingActionArgs {
   meetingId: string;
   description: string;
   assigneeSubject?: string | null;
+  /** gitops#3507: numeric public-directory id; backend resolves it to the KC subject. */
+  assigneeUserId?: number | null;
   dueAt?: string | null;
 }
 
 export interface AssigneeOption {
-  subject: string;
+  /** Numeric public-directory id (kcSubject is server-to-server by design). */
+  userId: number;
   label: string;
 }
 
@@ -1113,9 +1116,11 @@ export async function createMeetingAction(
   args: CreateMeetingActionArgs,
 ): Promise<MeetingActionRecord> {
   const description = boundedString(args.description, 'meeting action description', 2000);
+  // Backend rejects both identity forms at once (400); send exactly one.
   const body = {
     description,
-    assigneeSubject: args.assigneeSubject ?? null,
+    assigneeSubject: args.assigneeUserId != null ? null : (args.assigneeSubject ?? null),
+    assigneeUserId: args.assigneeUserId ?? null,
     dueAt: args.dueAt ? canonicalIsoInstant(args.dueAt, 'meeting action dueAt') : null,
   };
   return withDesktopFetchDeadline(
@@ -1175,17 +1180,19 @@ export async function searchAssignees(
   for (const raw of rows) {
     if (!raw || typeof raw !== 'object') continue;
     const row = raw as Record<string, unknown>;
-    const subject =
-      typeof row.kcSubject === 'string' && row.kcSubject
-        ? row.kcSubject
-        : typeof row.id === 'string' && row.id
-          ? row.id
-          : null;
-    if (!subject) continue;
-    const name = typeof row.displayName === 'string' ? row.displayName.trim() : '';
+    // gitops#3507: the directory exposes only the numeric id; the backend
+    // resolves id → KC subject at create time.
+    if (typeof row.id !== 'number') continue;
+    const userId = row.id;
+    const name =
+      typeof row.name === 'string' && row.name.trim()
+        ? row.name.trim()
+        : typeof row.displayName === 'string'
+          ? row.displayName.trim()
+          : '';
     const email = typeof row.email === 'string' ? row.email.trim() : '';
-    const label = name && email ? `${name} (${email})` : name || email || subject;
-    options.push({ subject, label });
+    const label = name && email ? `${name} (${email})` : name || email || String(userId);
+    options.push({ userId, label });
   }
   return options;
 }

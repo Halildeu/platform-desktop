@@ -227,12 +227,17 @@ function parseActionCreateArgs(value: unknown): CreateMeetingActionArgs {
     typeof record.assigneeSubject === 'string' && record.assigneeSubject.trim()
       ? record.assigneeSubject.trim().slice(0, 256)
       : null;
+  const assigneeUserId =
+    typeof record.assigneeUserId === 'number' && Number.isInteger(record.assigneeUserId)
+      ? record.assigneeUserId
+      : null;
   const dueAt =
     typeof record.dueAt === 'string' && record.dueAt.trim() ? record.dueAt.trim() : null;
   return {
     meetingId,
     description: record.description.trim().slice(0, 2000),
     assigneeSubject,
+    assigneeUserId,
     dueAt,
   };
 }

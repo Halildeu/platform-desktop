@@ -238,6 +238,7 @@ const electronAPI = {
       meetingId: string;
       description: string;
       assigneeSubject?: string | null;
+      assigneeUserId?: number | null;
       dueAt?: string | null;
     }): Promise<{
       id: string;
@@ -250,7 +251,7 @@ const electronAPI = {
     }> => ipcRenderer.invoke('meeting:action-create', payload),
     searchAssignees: (payload: {
       query: string;
-    }): Promise<Array<{ subject: string; label: string }>> =>
+    }): Promise<Array<{ userId: number; label: string }>> =>
       ipcRenderer.invoke('meeting:assignee-search', payload),
     /** Start the SSE subscription for a meeting's live analysis stream.
      *  Idempotent (a second start for the same meetingId returns

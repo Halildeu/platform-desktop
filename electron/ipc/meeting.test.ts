@@ -23,7 +23,7 @@ const mocks = vi.hoisted(() => ({
     dueAt: null,
     version: 0,
   })),
-  searchAssignees: vi.fn(async () => [{ subject: 'kc-1', label: 'Ali Veli' }]),
+  searchAssignees: vi.fn(async () => [{ userId: 30, label: 'Ali Veli' }]),
 }));
 
 vi.mock('electron', () => ({
@@ -124,13 +124,25 @@ describe('meeting action IPC boundary', () => {
     await expect(
       handler?.(
         {},
-        { meetingId, description: '  Raporu hazırla  ', assigneeSubject: ' kc-9 ', dueAt: '' },
+        {
+          meetingId,
+          description: '  Raporu hazırla  ',
+          assigneeSubject: ' kc-9 ',
+          assigneeUserId: 42,
+          dueAt: '',
+        },
       ),
     ).resolves.toMatchObject({ id: 'a-1' });
     expect(mocks.createMeetingAction).toHaveBeenCalledWith(
       { baseUrl: 'https://testai.acik.com' },
       'JWT',
-      { meetingId, description: 'Raporu hazırla', assigneeSubject: 'kc-9', dueAt: null },
+      {
+        meetingId,
+        description: 'Raporu hazırla',
+        assigneeSubject: 'kc-9',
+        assigneeUserId: 42,
+        dueAt: null,
+      },
     );
   });
 
@@ -141,7 +153,7 @@ describe('meeting action IPC boundary', () => {
     expect(mocks.searchAssignees).not.toHaveBeenCalled();
 
     await expect(handler?.({}, { query: ' zeynep ' })).resolves.toEqual([
-      { subject: 'kc-1', label: 'Ali Veli' },
+      { userId: 30, label: 'Ali Veli' },
     ]);
     expect(mocks.searchAssignees).toHaveBeenCalledWith(
       { baseUrl: 'https://testai.acik.com' },

@@ -164,7 +164,7 @@ describe('<LiveAnalysisPanel /> görev atama', () => {
     const createAction = vi.fn().mockResolvedValue({ id: 't-1' });
     const searchAssignees = vi
       .fn()
-      .mockResolvedValue([{ subject: 'kc-zeynep', label: 'Zeynep Akkılıç (zeynep@acik.com)' }]);
+      .mockResolvedValue([{ userId: 77, label: 'Zeynep Akkılıç (zeynep@acik.com)' }]);
     const tasksApi: LiveTasksApi = { createAction, searchAssignees };
     render(<LiveAnalysisPanel meetingId={MEETING_A} api={api} tasksApi={tasksApi} />);
     fireActionFrame(api);
@@ -184,7 +184,7 @@ describe('<LiveAnalysisPanel /> görev atama', () => {
     expect(createAction).toHaveBeenCalledWith({
       meetingId: MEETING_A,
       description: 'Raporu Zeynep hazırlayacak',
-      assigneeSubject: 'kc-zeynep',
+      assigneeUserId: 77,
       dueAt: null,
     });
   });
