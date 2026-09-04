@@ -82,6 +82,26 @@ function optionalIsoInstant(value: unknown, label: string): string | undefined {
   return new Date(parsed).toISOString();
 }
 
+function optionalStringArray(value: unknown, label: string): string[] | undefined {
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+  if (!Array.isArray(value)) {
+    throw new Error(`${label} must be an array of strings`);
+  }
+  for (const entry of value) {
+    if (typeof entry !== 'string') {
+      throw new Error(`${label} entries must be strings`);
+    }
+  }
+  // meeting-client normalizes (NFKC, dedupe, <=64 chars, cap 32); the IPC layer only
+  // enforces the wire type and the count ceiling to reject abusive payloads early.
+  if (value.length > 64) {
+    throw new Error(`${label} must not exceed 64 raw entries`);
+  }
+  return value as string[];
+}
+
 function parseCreateArgs(value: unknown): CreateMeetingContractArgs {
   if (value === undefined || value === null) {
     return {};
@@ -95,6 +115,7 @@ function parseCreateArgs(value: unknown): CreateMeetingContractArgs {
     description: optionalText(record.description, 'description', 4000),
     scheduledStart: optionalIsoInstant(record.scheduledStart, 'scheduledStart'),
     scheduledEnd: optionalIsoInstant(record.scheduledEnd, 'scheduledEnd'),
+    speechContextTerms: optionalStringArray(record.speechContextTerms, 'speechContextTerms'),
   };
 }
 
