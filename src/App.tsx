@@ -1440,6 +1440,12 @@ function App() {
         description: plan.description || 'Meeting Intelligence desktop recording.',
         scheduledStart: plan.scheduledStart,
         scheduledEnd: plan.scheduledEnd,
+        // Faz 24 STT (platform-backend#1024 slice 4): consent-bound meeting
+        // vocabulary. The main process re-normalizes before POST; omit when empty
+        // so a term-less meeting keeps a byte-identical contract body.
+        ...(plan.speechContextTerms.length > 0
+          ? { speechContextTerms: plan.speechContextTerms }
+          : {}),
       });
       if (!contract) {
         throw new Error('meeting-service response empty');

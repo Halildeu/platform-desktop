@@ -87,6 +87,42 @@ describe('MeetingPlanner', () => {
         scheduledEnd: expect.stringMatching(/^2026-08-02T/),
         sttProvider: 'speechmatics',
         transcriptionMode: 'realtime',
+        // No vocabulary entered → empty array (contract body omits it downstream).
+        speechContextTerms: [],
+      }),
+    );
+  });
+
+  it('carries normalized speech-context terms on submit', () => {
+    const onSubmit = vi.fn();
+    render(
+      <MeetingPlanner
+        open
+        pending={false}
+        sttProvider="internal"
+        transcriptionMode="realtime"
+        onOpen={vi.fn()}
+        onCancel={vi.fn()}
+        onSubmit={onSubmit}
+      />,
+    );
+
+    fireEvent.change(screen.getByRole('textbox', { name: 'Toplantı başlığı' }), {
+      target: { value: 'Faz 24 senkron' },
+    });
+
+    const vocab = screen.getByRole('textbox', { name: 'Toplantı sözlüğü — özel terimler' });
+    fireEvent.change(vocab, { target: { value: '  OpenFGA  ' } }); // trims/collapses to "OpenFGA"
+    fireEvent.keyDown(vocab, { key: 'Enter' });
+    fireEvent.change(vocab, { target: { value: 'openfga' } }); // case-distinct → kept
+    fireEvent.keyDown(vocab, { key: 'Enter' });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Toplantıyı oluştur' }));
+
+    expect(onSubmit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: 'Faz 24 senkron',
+        speechContextTerms: ['OpenFGA', 'openfga'],
       }),
     );
   });

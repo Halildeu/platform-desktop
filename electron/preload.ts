@@ -213,6 +213,10 @@ const electronAPI = {
       description?: string;
       scheduledStart?: string;
       scheduledEnd?: string;
+      // Faz 24 STT (platform-backend#1024): consent-bound speech-context terms.
+      // The meeting:create-contract IPC handler already parses + normalizes this
+      // (slice 3); exposing it here lets the renderer set the meeting vocabulary.
+      speechContextTerms?: string[];
     }): Promise<{
       id: string;
       title: string;

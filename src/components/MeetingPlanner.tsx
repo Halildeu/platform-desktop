@@ -1,6 +1,8 @@
 import { useState, type FormEvent } from 'react';
 
+import { normalizeSpeechContextTerms } from '../audio/speech-context-terms';
 import type { SttProvider, TranscriptionMode } from '../audio/capture';
+import { SpeechContextTermsInput } from './SpeechContextTermsInput';
 
 export interface MeetingPlan {
   title: string;
@@ -9,6 +11,12 @@ export interface MeetingPlan {
   scheduledEnd: string;
   sttProvider: SttProvider;
   transcriptionMode: TranscriptionMode;
+  /**
+   * Faz 24 STT (platform-backend#1024): consent-bound speech-context vocabulary
+   * persisted on the meeting contract. Normalized (NFKC, dedupe, <=32 x <=64);
+   * empty when the user added no terms.
+   */
+  speechContextTerms: string[];
 }
 
 interface MeetingPlannerProps {
@@ -49,6 +57,7 @@ export function MeetingPlanner({
   const [{ start, end }] = useState(defaultSchedule);
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
+  const [speechContextTerms, setSpeechContextTerms] = useState<string[]>([]);
   const [scheduledStart, setScheduledStart] = useState(start);
   const [scheduledEnd, setScheduledEnd] = useState(end);
   const [provider, setProvider] = useState<SttProvider>(sttProvider);
@@ -102,6 +111,9 @@ export function MeetingPlanner({
       scheduledEnd: endAt.toISOString(),
       sttProvider: provider,
       transcriptionMode: mode,
+      // Chips are already normalized; re-run so a caller can trust the caps
+      // regardless of how terms were assembled.
+      speechContextTerms: normalizeSpeechContextTerms(speechContextTerms),
     });
   };
 
@@ -142,6 +154,12 @@ export function MeetingPlanner({
           onChange={(event) => setDescription(event.target.value)}
         />
       </label>
+
+      <SpeechContextTermsInput
+        terms={speechContextTerms}
+        onChange={setSpeechContextTerms}
+        disabled={pending}
+      />
 
       <div className="meeting-planner-grid">
         <label className="meeting-planner-field">
