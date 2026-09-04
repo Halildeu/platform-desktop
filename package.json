@@ -78,6 +78,9 @@
     "vitest": "^4.1.9",
     "yaml": "^2.9.0"
   },
+  "overrides": {
+    "fast-uri": "^3.1.7"
+  },
   "build": {
     "appId": "com.acik.platform.meeting-intelligence",
     "productName": "Meeting Intelligence",

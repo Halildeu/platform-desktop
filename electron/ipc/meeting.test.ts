@@ -161,4 +161,35 @@ describe('meeting action IPC boundary', () => {
       'zeynep',
     );
   });
+
+  it('parses and forwards speechContextTerms on create-contract', async () => {
+    mocks.createMeetingContract.mockClear();
+    mocks.createMeetingContract.mockResolvedValueOnce({
+      id: '77777777-7777-4777-8777-777777777777',
+      title: 'Kayıt',
+      status: 'SCHEDULED',
+      scheduledStart: null,
+      scheduledEnd: null,
+    });
+    const handler = mocks.handlers.get('meeting:create-contract');
+    expect(handler).toBeDefined();
+
+    await handler?.({}, { title: 'Kayıt', speechContextTerms: ['Açık Holding', 'OpenFGA'] });
+
+    expect(mocks.createMeetingContract).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.any(String),
+      expect.objectContaining({ speechContextTerms: ['Açık Holding', 'OpenFGA'] }),
+    );
+  });
+
+  it('rejects a create-contract whose speechContextTerms is not an array of strings', async () => {
+    const handler = mocks.handlers.get('meeting:create-contract');
+    await expect(handler?.({}, { title: 'Kayıt', speechContextTerms: 'OpenFGA' })).rejects.toThrow(
+      'speechContextTerms must be an array of strings',
+    );
+    await expect(handler?.({}, { title: 'Kayıt', speechContextTerms: [1, 2] })).rejects.toThrow(
+      'speechContextTerms entries must be strings',
+    );
+  });
 });

@@ -62,6 +62,40 @@ export interface CreateMeetingContractArgs {
   description?: string;
   scheduledStart?: string;
   scheduledEnd?: string;
+  /**
+   * Faz 24 STT (platform-backend#1024): consent-bound speech-context terms persisted on the
+   * canonical meeting contract. The audio gateway later merges these ahead of the recorder's
+   * own session terms before Speechmatics additional_vocab, so setting them here biases live
+   * transcription for every recording of this meeting. Bounded to 32 terms of <=64 chars.
+   */
+  speechContextTerms?: string[];
+}
+
+/** Mirrors meeting-service SpeechContextTerms + the gateway merger: NFKC, whitespace collapse,
+ *  drop blank/oversized, case-sensitive exact dedupe, cap 32. Case matters (STT spelling hint). */
+export const MAX_SPEECH_CONTEXT_TERMS = 32;
+export const MAX_SPEECH_CONTEXT_TERM_LENGTH = 64;
+export function normalizeSpeechContextTerms(terms: readonly string[] | undefined): string[] {
+  if (!terms) {
+    return [];
+  }
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const raw of terms) {
+    if (out.length >= MAX_SPEECH_CONTEXT_TERMS) {
+      break;
+    }
+    if (typeof raw !== 'string') {
+      continue;
+    }
+    const term = raw.normalize('NFKC').replace(/\s+/g, ' ').trim();
+    if (!term || term.length > MAX_SPEECH_CONTEXT_TERM_LENGTH || seen.has(term)) {
+      continue;
+    }
+    seen.add(term);
+    out.push(term);
+  }
+  return out;
 }
 
 export interface RecordingLifecycleSyncArgs {
@@ -748,11 +782,14 @@ export async function createMeetingContract(
   jwt: string,
   args: CreateMeetingContractArgs = {},
 ): Promise<MeetingContract> {
+  const speechContextTerms = normalizeSpeechContextTerms(args.speechContextTerms);
   const body = {
     title: normalizeTitle(args.title),
     description: args.description?.slice(0, 4000) ?? 'Faz 24 desktop recorder contract.',
     scheduledStart: args.scheduledStart ?? new Date().toISOString(),
     scheduledEnd: args.scheduledEnd,
+    // Omit when empty so the meeting contract stays byte-identical for term-less recordings.
+    ...(speechContextTerms.length > 0 ? { speechContextTerms } : {}),
   };
 
   const requestInit = {

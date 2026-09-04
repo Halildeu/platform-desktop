@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   analyzeMeetingIntelligence,
   createMeetingContract,
+  normalizeSpeechContextTerms,
   listRecentMeetings,
   loadMeetingConfig,
   meetingIntelligenceAnalyzeUrl,
@@ -501,6 +502,78 @@ describe('meeting-client', () => {
         }),
       }),
     );
+  });
+
+  it('normalizes and sends consent-bound speech-context terms in the create body', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        id: '55555555-5555-4555-8555-555555555555',
+        title: 'Desktop contract',
+        status: 'SCHEDULED',
+        scheduledStart: '2026-06-29T14:30:00.000Z',
+      }),
+      headers: new Headers({ 'content-type': 'application/json' }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const cfg = loadMeetingConfig({ MEETING_BASE_URL: 'https://testai.acik.com' });
+    await createMeetingContract(cfg, 'JWT', {
+      title: 'Desktop contract',
+      description: 'Recorder test',
+      scheduledStart: '2026-06-29T14:30:00.000Z',
+      // duplicate spelling collapses, padding trims, case is preserved (STT hint).
+      speechContextTerms: ['Açık Holding', 'OpenFGA', '  OpenFGA ', 'openfga', '   '],
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://testai.acik.com/api/v1/admin/meetings',
+      expect.objectContaining({
+        body: JSON.stringify({
+          title: 'Desktop contract',
+          description: 'Recorder test',
+          scheduledStart: '2026-06-29T14:30:00.000Z',
+          speechContextTerms: ['Açık Holding', 'OpenFGA', 'openfga'],
+        }),
+      }),
+    );
+  });
+
+  it('omits speechContextTerms from the body when no usable term remains', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        id: '66666666-6666-4666-8666-666666666666',
+        title: 'Desktop contract',
+        status: 'SCHEDULED',
+        scheduledStart: '2026-06-29T14:30:00.000Z',
+      }),
+      headers: new Headers({ 'content-type': 'application/json' }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const cfg = loadMeetingConfig({ MEETING_BASE_URL: 'https://testai.acik.com' });
+    await createMeetingContract(cfg, 'JWT', {
+      title: 'Desktop contract',
+      description: 'Recorder test',
+      scheduledStart: '2026-06-29T14:30:00.000Z',
+      speechContextTerms: ['   ', ''],
+    });
+
+    const [, requestInit] = fetchMock.mock.calls[0];
+    expect(JSON.parse((requestInit as { body: string }).body)).not.toHaveProperty(
+      'speechContextTerms',
+    );
+  });
+
+  it('normalizeSpeechContextTerms caps at 32 terms with first-seen precedence', () => {
+    const many = Array.from({ length: 40 }, (_, i) => `term-${i}`);
+    const result = normalizeSpeechContextTerms([...many, 'term-0']);
+    expect(result).toHaveLength(32);
+    expect(result[0]).toBe('term-0');
+    expect(result[31]).toBe('term-31');
+    expect(normalizeSpeechContextTerms(undefined)).toEqual([]);
+    expect(normalizeSpeechContextTerms(['x'.repeat(65)])).toEqual([]);
   });
 
   it('retries transient socket failures before failing the meeting contract flow', async () => {
