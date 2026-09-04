@@ -188,8 +188,8 @@ describe('meeting action IPC boundary', () => {
     await expect(handler?.({}, { title: 'Kayıt', speechContextTerms: 'OpenFGA' })).rejects.toThrow(
       'speechContextTerms must be an array of strings',
     );
-    await expect(
-      handler?.({}, { title: 'Kayıt', speechContextTerms: [1, 2] }),
-    ).rejects.toThrow('speechContextTerms entries must be strings');
+    await expect(handler?.({}, { title: 'Kayıt', speechContextTerms: [1, 2] })).rejects.toThrow(
+      'speechContextTerms entries must be strings',
+    );
   });
 });
