@@ -177,6 +177,125 @@ body {
   color: #b91c1c;
 }
 
+/* Faz 24 STT (platform-backend#1024 slice 4): speech-context term chip input. */
+.speech-context-terms {
+  display: grid;
+  gap: 6px;
+  margin: 0 0 14px;
+}
+
+.speech-context-terms-label > span {
+  color: #334155;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.speech-context-terms-help {
+  margin: 0;
+  color: #64748b;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.speech-context-terms-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 2px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.speech-context-terms-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  padding: 4px 6px 4px 10px;
+  border: 1px solid rgba(15, 118, 110, 0.35);
+  border-radius: 999px;
+  background: rgba(15, 118, 110, 0.1);
+  color: #0f766e;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.speech-context-terms-chip-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.speech-context-terms-chip-remove {
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: rgba(15, 118, 110, 0.16);
+  color: #0f766e;
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.speech-context-terms-chip-remove:hover:not(:disabled) {
+  background: rgba(15, 118, 110, 0.28);
+}
+
+.speech-context-terms-chip-remove:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.speech-context-terms-input {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  height: 40px;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  background: #ffffff;
+  color: #111827;
+  font: inherit;
+  padding: 9px 10px;
+}
+
+.speech-context-terms-input:focus {
+  border-color: #0f766e;
+  box-shadow: 0 0 0 3px rgba(15, 118, 110, 0.12);
+  outline: none;
+}
+
+.speech-context-terms-input:disabled {
+  background: #f1f5f9;
+  color: #94a3b8;
+  cursor: not-allowed;
+}
+
+.speech-context-terms-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 0;
+  min-height: 16px;
+}
+
+.speech-context-terms-hint {
+  color: #b91c1c;
+  font-size: 12px;
+}
+
+.speech-context-terms-count {
+  margin-left: auto;
+  color: #64748b;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
 .transcription-mode-field {
   min-width: 0;
   margin: 0 0 14px;
