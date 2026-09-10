@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type ReactElement } from 'react';
+import { useCanonicalSource } from '../intelligence/use-canonical-source';
+import { CanonicalSourcePanel, CitationLinks } from './CanonicalSourcePanel';
 
 import { CONSENT_LOCALE, CONSENT_TEXT_HASH, CONSENT_VERSION } from './ConsentDialog';
 import {
@@ -19,13 +21,11 @@ import {
   buildMeetingOutputHandoffObjectPlan,
   buildMeetingOutputAdapterManifestJson,
   decisionStatusLabel,
-  formatCitationTime,
   intelligenceStatusLabel,
   type ActionItem,
   type ActionStatus,
   type DecisionItem,
   type DecisionStatus,
-  type IntelligenceCitation,
   type MeetingIntelligenceResult,
   type MeetingIntelligenceState,
   type MeetingOutputHandoffIssue,
@@ -588,7 +588,12 @@ export function SummaryPanel({
     transcript?.meetingId &&
     intelligence.meetingId !== transcript.meetingId,
   );
-  const boundTranscript = transcriptMeetingMismatch ? undefined : transcript;
+  const transcriptSessionMismatch = Boolean(
+    intelligence.result?.canonicalSessionId &&
+    intelligence.result.canonicalSessionId !== transcript?.sessionId,
+  );
+  const boundTranscript =
+    transcriptMeetingMismatch || transcriptSessionMismatch ? undefined : transcript;
   const transcriptSourceSegments = transcriptSegments(boundTranscript);
   const hasTranscriptSource = transcriptSourceSegments.length > 0;
   const transcriptReadiness = boundTranscript
@@ -603,6 +608,7 @@ export function SummaryPanel({
       : null;
   const visibleIntelligence = intelligence;
   const result = visibleIntelligence.status === 'ready' ? visibleIntelligence.result : null;
+  const canonicalSource = useCanonicalSource(intelligence.meetingId, result);
   const resultKey = result
     ? [
         visibleIntelligence.meetingId ?? '',
@@ -621,15 +627,38 @@ export function SummaryPanel({
         actionItems: applyActionReviewDrafts(result.actionItems, actionDrafts),
       }
     : null;
-  const outputFreshness = result
+  const liveOutputFreshness = result
     ? buildOutputFreshness(result, boundTranscript, transcriptSourceSegments)
     : null;
-  const outputSourceEvidence = buildOutputSourceEvidence(
+  const outputFreshness =
+    canonicalSource.source && liveOutputFreshness?.status === 'no_source'
+      ? {
+          ...liveOutputFreshness,
+          status: 'unknown' as const,
+          label: 'Analiz kaynağı doğrulandı',
+          detail:
+            'Analizin tam sürümü okundu; sonraki transkript değişiklikleri karşılaştırılmadı.',
+        }
+      : liveOutputFreshness;
+  const liveSourceEvidence = buildOutputSourceEvidence(
     boundTranscript,
     transcriptReadiness,
     transcriptSourceSegments.length,
     outputFreshness,
   );
+  const outputSourceEvidence: MeetingOutputSourceEvidence | null = canonicalSource.source
+    ? {
+        ...liveSourceEvidence,
+        transcript: liveSourceEvidence?.transcript ?? null,
+        canonical_source: {
+          analysis_run_id: canonicalSource.source.analysisRunId,
+          session_id: canonicalSource.source.sessionId,
+          finalization_version: canonicalSource.source.finalizationVersion,
+          transcript_sha256: canonicalSource.source.transcriptSha256,
+          raw_transcript_included: false,
+        },
+      }
+    : liveSourceEvidence;
   const baseHandoffReadiness = displayResult
     ? analyzeMeetingOutputHandoffReadiness(displayResult)
     : null;
@@ -966,6 +995,13 @@ export function SummaryPanel({
 
   return (
     <section className="summary-panel" aria-labelledby="summary-title">
+      {result?.storageMode === 'canonical' ? (
+        <CanonicalSourcePanel
+          source={canonicalSource.source}
+          status={canonicalSource.status}
+          onRetry={canonicalSource.retry}
+        />
+      ) : null}
       <div className="panel-header">
         <div>
           <h2 id="summary-title">Toplantı Çıktısı</h2>
@@ -1443,7 +1479,12 @@ export function SummaryPanel({
                             ))}
                           </select>
                         </span>
-                        <span role="cell">{formatCitations(decision.citations)}</span>
+                        <span role="cell">
+                          <CitationLinks
+                            citations={decision.citations}
+                            source={canonicalSource.source}
+                          />
+                        </span>
                         <span className="row-review" role="cell">
                           {issues.length > 0
                             ? issues.map((issue) => <small key={issue}>{issue}</small>)
@@ -1526,7 +1567,12 @@ export function SummaryPanel({
                             ))}
                           </select>
                         </span>
-                        <span role="cell">{formatCitations(item.citations)}</span>
+                        <span role="cell">
+                          <CitationLinks
+                            citations={item.citations}
+                            source={canonicalSource.source}
+                          />
+                        </span>
                         <span className="row-review" role="cell">
                           {issues.length > 0
                             ? issues.map((issue) => <small key={issue}>{issue}</small>)
@@ -1767,13 +1813,6 @@ const initialTranscriptSessionFallback: TranscriptSessionState = {
   error: null,
   segments: [],
 };
-
-function formatCitations(citations: IntelligenceCitation[]): string {
-  if (citations.length === 0) {
-    return '-';
-  }
-  return citations.map(formatCitationTime).join(', ');
-}
 
 function canonicalResultStatusLabel(
   canonicalStatus: CanonicalResultLoadStatus,

@@ -47,6 +47,8 @@ function toProductCitations(
     return [
       {
         segmentId: `meeting-ai:${citation.source_index}`,
+        sourceIndex: citation.source_index,
+        sourceHash: citation.source_hash,
         startedAtMs:
           typeof citation.start_sec === 'number' && Number.isFinite(citation.start_sec)
             ? Math.max(0, Math.round(citation.start_sec * 1000))
@@ -93,6 +95,7 @@ export function meetingIntelligenceResultFromCanonicalResponse(
     providerLabel: providerLabel(response),
     citationCoverage: citationCoverage(response),
     analysisRunId: response.analysisRunId,
+    canonicalSessionId: response.sessionId,
     storageMode: 'canonical',
     decisions: response.decisions.map((title, index) => ({
       id: `${response.analysisRunId}:decision:${index}`,

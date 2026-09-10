@@ -26,6 +26,10 @@ import {
   type RecentMeetingsPage,
 } from '../services/meeting/meeting-client.js';
 import { getValidAccessToken } from './auth.js';
+import {
+  parseTranscriptRequest,
+  readCanonicalTranscript,
+} from '../services/meeting/canonical-transcript.js';
 
 // Faz 24 İ3 — live-analysis SSE subscribers, keyed by meetingId. One
 // subscriber per meeting; a second start for the same meeting is idempotent
@@ -275,6 +279,10 @@ function parseAssigneeSearchArgs(value: unknown): string {
 }
 
 export function registerMeetingIpc(): void {
+  ipcMain.handle('meeting:get-canonical-transcript', async (_e, payload: unknown) => {
+    const request = parseTranscriptRequest(payload);
+    return readCanonicalTranscript(loadMeetingConfig(), await getValidAccessToken(), request);
+  });
   ipcMain.handle(
     'meeting:create-contract',
     async (_e, payload: unknown): Promise<MeetingContract> => {

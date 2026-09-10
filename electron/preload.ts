@@ -8,6 +8,10 @@
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron';
 
 import type { AuthStatus } from './ipc/auth.js';
+import type {
+  CanonicalTranscriptRequest,
+  CanonicalTranscriptSource,
+} from './services/meeting/canonical-transcript.js';
 import type { AudioFinishResult } from './ipc/audio.js';
 import type {
   LiveAnalysisFrame,
@@ -237,6 +241,10 @@ const electronAPI = {
       meetingId: string;
     }): Promise<MeetingIntelligenceReadOutcome> =>
       ipcRenderer.invoke('meeting:get-intelligence-result', payload),
+    getCanonicalTranscript: (
+      payload: CanonicalTranscriptRequest,
+    ): Promise<CanonicalTranscriptSource> =>
+      ipcRenderer.invoke('meeting:get-canonical-transcript', payload),
     /** Faz 24 Görevler dilim-3: canlı panelden aksiyonu göreve dönüştür. */
     createAction: (payload: {
       meetingId: string;
