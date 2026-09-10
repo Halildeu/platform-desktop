@@ -166,6 +166,21 @@ Open acceptance boundaries before recorder can be called end-to-end production-r
 
 ## Current Product Surface Scope
 
+### Canonical result source readback (GitOps #3648)
+
+Persisted results read their source through the authenticated, exact-analysis-run
+meeting-service transcript endpoint. Source content stays in memory and is read
+again on reopen; failed authorization, retention, integrity or network checks do
+not fall back to another session or a local transcript cache. Decision/action
+links require the canonical sentence ordinal and SHA-256 to match. Canonical
+timestamps are not assumed to be elapsed recording time; links use source ordinals.
+Source retrieval alone does not grant ERP/CRM handoff readiness or content-quality
+acceptance. Active live transcripts and immutable result sources remain separate.
+
+Run `npm run test:source-ui` after `npx playwright install chromium --only-shell`
+for the synthetic renderer navigation/reload checks at desktop and narrow widths.
+These checks are not normal-user packaged TEST recording acceptance.
+
 The recorder now exposes two user-facing workspaces:
 
 - **Canlı Transkript**: recorder session metadata, lifecycle state, transcript timeline states

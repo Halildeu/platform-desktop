@@ -186,6 +186,7 @@ function installElectronApiMock(recorderConfig: {
       }),
       analyze: vi.fn(),
       getIntelligenceResult: vi.fn().mockResolvedValue({ status: 'not_ready' }),
+      getCanonicalTranscript: vi.fn().mockRejectedValue(new Error('Source unavailable')),
       startLiveAnalysis: vi.fn().mockResolvedValue({ started: true }),
       stopLiveAnalysis: vi.fn().mockResolvedValue({ stopped: true }),
       onLiveAnalysisFrame: vi.fn(() => (): void => {}),

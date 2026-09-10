@@ -61,7 +61,14 @@ describe('canonical Meeting Intelligence result mapper', () => {
       expect.objectContaining({
         id: `${RUN_ID}:decision:0`,
         status: 'proposed',
-        citations: [{ segmentId: 'meeting-ai:1', startedAtMs: null }],
+        citations: [
+          {
+            segmentId: 'meeting-ai:1',
+            startedAtMs: null,
+            sourceIndex: 1,
+            sourceHash: 'c'.repeat(64),
+          },
+        ],
       }),
     ]);
     expect(result.actionItems).toEqual([
@@ -104,7 +111,7 @@ describe('canonical Meeting Intelligence result mapper', () => {
     const result = meetingIntelligenceResultFromCanonicalResponse(response);
 
     expect(result.decisions[0].citations).toEqual([
-      { segmentId: 'meeting-ai:1', startedAtMs: null },
+      { segmentId: 'meeting-ai:1', startedAtMs: null, sourceIndex: 1, sourceHash: 'c'.repeat(64) },
     ]);
     expect(result.citationCoverage).toBe(2 / 3);
   });

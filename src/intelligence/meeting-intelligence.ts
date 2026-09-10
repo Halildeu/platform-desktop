@@ -16,6 +16,8 @@ export type DecisionStatus = 'proposed' | 'accepted' | 'revised';
 
 export interface IntelligenceCitation {
   segmentId: string;
+  sourceIndex?: number;
+  sourceHash?: string;
   startedAtMs: number | null;
   endedAtMs?: number;
 }
@@ -46,6 +48,7 @@ export interface MeetingIntelligenceResult {
   providerLabel?: string;
   citationCoverage: number;
   analysisRunId?: string;
+  canonicalSessionId?: string;
   storageMode?: 'canonical';
 }
 
@@ -105,6 +108,13 @@ export interface MeetingIntelligenceState {
 }
 
 export interface MeetingOutputSourceEvidence {
+  canonical_source?: {
+    analysis_run_id: string;
+    session_id: string;
+    finalization_version: number;
+    transcript_sha256: string;
+    raw_transcript_included: false;
+  };
   transcript: {
     source_level: string;
     source_label: string;
@@ -278,6 +288,8 @@ export function decisionStatusLabel(status: DecisionStatus): string {
 }
 
 export function formatCitationTime(citation: IntelligenceCitation): string {
+  // Canonical start_sec has no elapsed-time contract. Do not format epoch as duration.
+  if (citation.sourceIndex !== undefined) return `Kaynak #${citation.sourceIndex + 1}`;
   if (citation.startedAtMs === null) {
     const sourceIndex = citation.segmentId.match(/:(\d+)$/)?.[1];
     return sourceIndex ? `Kaynak #${Number(sourceIndex) + 1}` : 'Kaynak referansı';
@@ -493,6 +505,14 @@ function sourceEvidenceReadinessIssue(
   sourceEvidence: MeetingOutputSourceEvidence | null,
 ): MeetingOutputHandoffIssue | null {
   if (!sourceEvidence?.transcript) {
+    if (sourceEvidence?.canonical_source) {
+      return {
+        code: 'unknown_source_freshness',
+        severity: 'warning',
+        label: 'Analiz kaynağı doğrulandı; aktarım güncelliği doğrulanmadı',
+        count: 1,
+      };
+    }
     return {
       code: 'missing_source_evidence',
       severity: 'warning',

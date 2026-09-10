@@ -34,6 +34,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "playwright test",
+    "test:source-ui": "playwright test --config playwright.source.config.ts",
     "release:mac:assert-env": "node scripts/macos-release-contract.mjs assert-env",
     "release:mac:verify-update": "node scripts/macos-release-contract.mjs verify-update",
     "release:mac:manifest": "node scripts/macos-release-contract.mjs create-manifest"

@@ -1,0 +1,41 @@
+.canonical-source {
+  border-top: 1px solid #aab2ba;
+  padding: 16px 0;
+  min-width: 0;
+}
+.canonical-source h3 {
+  font-size: 16px;
+  margin: 0 0 8px;
+}
+.canonical-source-lines {
+  max-height: 360px;
+  overflow: auto;
+  padding: 8px 12px 8px 36px;
+  scroll-margin: 16px;
+}
+.canonical-source-lines li {
+  padding: 8px 4px;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+.canonical-source-lines li:focus {
+  outline: 2px solid #28716b;
+  outline-offset: -2px;
+  background: #e4f3ef;
+  color: #142c28;
+}
+.citation-links {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  max-width: 100%;
+}
+.citation-links a {
+  color: inherit;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.citation-links a:focus-visible {
+  outline: 2px solid #28716b;
+  outline-offset: 2px;
+}
