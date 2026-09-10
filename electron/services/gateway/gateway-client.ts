@@ -496,26 +496,52 @@ export async function sendChunk(
 ): Promise<void> {
   const body = new ArrayBuffer(chunk.bytes.byteLength);
   new Uint8Array(body).set(chunk.bytes);
-  await fetchWithTimeout(
-    chunksUrl(cfg, sessionId),
-    {
-      method: 'POST',
-      headers: chunkHeaders({
-        jwt,
-        idempotencyKey,
-        seq: chunk.seq,
-        startedAtMs: chunk.startedAtMs,
-        byteLength: chunk.bytes.byteLength,
-      }),
-      body,
-    },
-    'sendChunk',
-    async (res) => {
-      if (!res.ok) {
-        throw new Error(`${await httpErrorMessage(res, 'sendChunk')} (seq=${chunk.seq})`);
+  const init: RequestInit = {
+    method: 'POST',
+    headers: chunkHeaders({
+      jwt,
+      idempotencyKey,
+      seq: chunk.seq,
+      startedAtMs: chunk.startedAtMs,
+      byteLength: chunk.bytes.byteLength,
+    }),
+    body,
+  };
+  const deadline = performance.now() + HTTP_TIMEOUT_MS;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    let responseObserved = false;
+    try {
+      await fetchWithTimeout(
+        chunksUrl(cfg, sessionId),
+        init,
+        'sendChunk',
+        async (res) => {
+          responseObserved = true;
+          if (!res.ok) {
+            throw new Error(`${await httpErrorMessage(res, 'sendChunk')} (seq=${chunk.seq})`);
+          }
+        },
+        Math.max(1, deadline - performance.now()),
+      );
+      return;
+    } catch (error) {
+      // A lost response may already have admitted this chunk. Replay only the same
+      // immutable request, before advancing the sequence, within the original budget.
+      if (
+        attempt !== 0 ||
+        responseObserved ||
+        !(error instanceof TypeError) ||
+        error.message !== 'fetch failed' ||
+        deadline - performance.now() <= 250
+      ) {
+        throw error;
       }
-    },
-  );
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      if (performance.now() >= deadline) {
+        throw error;
+      }
+    }
+  }
 }
 
 /** POST /sessions/{id}/finish — oturumu terminal yap. */
