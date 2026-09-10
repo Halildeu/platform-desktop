@@ -298,6 +298,100 @@ describe('gateway-client HTTP fetch wrapper', () => {
     expect(Array.from(new Uint8Array(opts.body as ArrayBuffer))).toEqual(Array.from(bytes));
   });
 
+  it('replays a lost chunk response with identical identity and an immutable PCM copy', async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi
+      .fn()
+      .mockRejectedValueOnce(new TypeError('fetch failed'))
+      .mockResolvedValueOnce({ ok: true });
+    vi.stubGlobal('fetch', fetchMock);
+    const bytes = new Uint8Array([1, 2, 3, 4]);
+    const pending = sendChunk(cfg, 'JWT', 'SES-9', { seq: 7, bytes, startedAtMs: 10 }, 'IK');
+    bytes.fill(0);
+    await vi.advanceTimersByTimeAsync(250);
+    await pending;
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const first = fetchMock.mock.calls[0];
+    const second = fetchMock.mock.calls[1];
+    expect(second[0]).toBe(first[0]);
+    expect(second[1].headers).toEqual(first[1].headers);
+    expect(second[1].body).toBe(first[1].body);
+    expect(Array.from(new Uint8Array(second[1].body))).toEqual([1, 2, 3, 4]);
+  });
+
+  it('stops after the second ambiguous chunk failure', async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi.fn().mockRejectedValue(new TypeError('fetch failed'));
+    vi.stubGlobal('fetch', fetchMock);
+    const pending = sendChunk(cfg, 'JWT', 'SES-9', {
+      seq: 0,
+      bytes: new Uint8Array(2),
+      startedAtMs: 0,
+    });
+    const rejection = expect(pending).rejects.toThrow('fetch failed');
+    await vi.advanceTimersByTimeAsync(250);
+    await rejection;
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([401, 403, 409, 429, 503])(
+    'does not replay an HTTP %s chunk rejection',
+    async (status) => {
+      const fetchMock = vi.fn().mockResolvedValue(new Response('', { status }));
+      vi.stubGlobal('fetch', fetchMock);
+      await expect(
+        sendChunk(cfg, 'JWT', 'SES-9', { seq: 0, bytes: new Uint8Array(2), startedAtMs: 0 }),
+      ).rejects.toThrow();
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it('does not replay programming errors or an exhausted deadline', async () => {
+    const fetchMock = vi.fn().mockRejectedValue(new TypeError('invalid body'));
+    vi.stubGlobal('fetch', fetchMock);
+    await expect(
+      sendChunk(cfg, 'JWT', 'SES-9', { seq: 0, bytes: new Uint8Array(2), startedAtMs: 0 }),
+    ).rejects.toThrow('invalid body');
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    fetchMock.mockClear().mockRejectedValue(new TypeError('fetch failed'));
+    vi.spyOn(performance, 'now').mockReturnValueOnce(0).mockReturnValue(15_000);
+    await expect(
+      sendChunk(cfg, 'JWT', 'SES-9', { seq: 0, bytes: new Uint8Array(2), startedAtMs: 0 }),
+    ).rejects.toThrow('fetch failed');
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('shares the original fifteen-second budget across chunk attempts', async () => {
+    vi.useFakeTimers();
+    vi.spyOn(performance, 'now').mockReturnValueOnce(0).mockReturnValue(10_000);
+    const fetchMock = vi
+      .fn()
+      .mockRejectedValueOnce(new TypeError('fetch failed'))
+      .mockImplementationOnce(
+        (_url: string, opts: RequestInit) =>
+          new Promise((_resolve, reject) => {
+            opts.signal?.addEventListener('abort', () =>
+              reject(new DOMException('aborted', 'AbortError')),
+            );
+          }),
+      );
+    vi.stubGlobal('fetch', fetchMock);
+    const pending = sendChunk(cfg, 'JWT', 'SES-9', {
+      seq: 0,
+      bytes: new Uint8Array(2),
+      startedAtMs: 0,
+    });
+    const rejection = expect(pending).rejects.toMatchObject({ name: 'TimeoutError' });
+    await vi.advanceTimersByTimeAsync(250);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const signal = fetchMock.mock.calls[1][1].signal;
+    await vi.advanceTimersByTimeAsync(4_999);
+    expect(signal?.aborted).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    await rejection;
+    expect(signal?.aborted).toBe(true);
+  });
+
   it('finishSession posts finish request', async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
