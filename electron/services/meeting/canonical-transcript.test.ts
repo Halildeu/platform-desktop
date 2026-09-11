@@ -12,8 +12,7 @@ const request = {
   sessionId: '66666666-6666-4666-8666-666666666666',
 };
 const hash = (text: string) => createHash('sha256').update(text).digest('hex');
-function fixture() {
-  const transcript = 'Plan kabul edildi.\nTakip yarin yapilacak! Son satir';
+function fixture(transcript = 'Plan kabul edildi.\nTakip yarin yapilacak! Son satir') {
   return {
     ...request,
     state: 'FINALIZED',
@@ -26,6 +25,39 @@ function fixture() {
 }
 afterEach(() => vi.unstubAllGlobals());
 describe('canonical transcript readback', () => {
+  it.each([
+    [
+      'Plan\nkabul\nedildi\n.\nTakip\nyarin yapilacak!',
+      ['Plan kabul edildi.', 'Takip yarin yapilacak!'],
+    ],
+    [
+      'Plan kabul edildi.\n\nTakip\n  yarin\t yapilacak\n!\nSon satir',
+      ['Plan kabul edildi.', 'Takip yarin yapilacak!', 'Son satir'],
+    ],
+    ['Birinci\nplan\n; ikinci\nplan\n…\nSon satir', ['Birinci plan; ikinci plan…', 'Son satir']],
+    ['  Tek\t  satir.  ', ['Tek\t  satir.']],
+    ['\u0085Plan\u001c\nkabul\u3000edildi\n.\u0085', ['Plan kabul edildi.']],
+    ['\ufeffPlan\nkabul edildi.', ['\ufeffPlan kabul edildi.']],
+    ['', []],
+  ])('matches meeting-ai fragment merging for %j', (transcript, sentences) => {
+    const source = parseCanonicalTranscript(fixture(transcript as string), request);
+    expect(source.sentences).toEqual(
+      (sentences as string[]).map((text, index) => ({
+        text,
+        index,
+        sha256: hash(text),
+      })),
+    );
+    expect(source.transcriptSha256).toBe(hash(transcript as string));
+  });
+  it('retains the producer 40-word boundary for unpunctuated fragments', () => {
+    const first = Array.from({ length: 40 }, () => 'iş_2').join('\n');
+    const source = parseCanonicalTranscript(fixture(`${first}\nSon\nsatir.`), request);
+    expect(source.sentences.map((row) => row.text)).toEqual([
+      first.replaceAll('\n', ' '),
+      'Son satir.',
+    ]);
+  });
   it('keeps occurrence identity and exact sentence hashes without inferred timings', () => {
     const source = parseCanonicalTranscript(fixture(), request);
     expect(source.sentences).toEqual(

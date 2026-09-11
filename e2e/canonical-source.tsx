@@ -25,7 +25,7 @@ createRoot(document.getElementById('root')!).render(
               {
                 segmentId: 'meeting-ai:0',
                 sourceIndex: 0,
-                sourceHash: 'test-hash',
+                sourceHash: '793aedef586413ef705212124d30bfea6201f835810d356ccf42b317c33e2391',
                 startedAtMs: 1789046520809,
               },
             ],
