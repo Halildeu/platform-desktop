@@ -33,6 +33,50 @@ function sha256(text: string): string {
   return createHash('sha256').update(text, 'utf8').digest('hex');
 }
 
+// Python citation.py uses Unicode \s/\w, not JavaScript's whitespace/ASCII \w.
+const PY_SPACE =
+  '[\\t-\\r\\u001c-\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]';
+const SENTENCE_SPLIT = new RegExp(`(?<=[.!?])${PY_SPACE}+|\\n+`, 'u');
+const TRIM_SPACE = new RegExp(`^${PY_SPACE}+|${PY_SPACE}+$`, 'gu');
+const SPACE_RUN = new RegExp(`${PY_SPACE}+`, 'gu');
+const SPACE_BEFORE_PUNCT = new RegExp(`${PY_SPACE}+(?=[.,!?;:\u2026])`, 'gu');
+
+function canonicalSentences(transcript: string): string[] {
+  // Match platform-ai citation.py split_sentences + _merge_unpunctuated_fragments
+  // (ff179d9). Never normalize the immutable transcript or bypass citation hashes.
+  const sentences: string[] = [];
+  let position = 0;
+  let carry: { start: number; text: string } | null = null;
+  for (const raw of transcript.split(SENTENCE_SPLIT)) {
+    const text = raw.replace(TRIM_SPACE, '');
+    if (!text) continue;
+    const start = transcript.indexOf(text, position);
+    const end = start + text.length;
+    position = end;
+    const sentence: { start: number; text: string } = carry
+      ? {
+          start: carry.start,
+          text: transcript
+            .slice(carry.start, end)
+            .replace(TRIM_SPACE, '')
+            .replace(SPACE_RUN, ' ')
+            .replace(SPACE_BEFORE_PUNCT, ''),
+        }
+      : { start, text };
+    carry = null;
+    if (
+      !/[.!?\u2026]$/u.test(sentence.text) &&
+      (sentence.text.match(/[\p{L}\p{N}_]+/gu)?.length ?? 0) < 40
+    ) {
+      carry = sentence;
+    } else {
+      sentences.push(sentence.text);
+    }
+  }
+  if (carry) sentences.push(carry.text);
+  return sentences;
+}
+
 export function parseCanonicalTranscript(
   value: unknown,
   request: CanonicalTranscriptRequest,
@@ -61,12 +105,7 @@ export function parseCanonicalTranscript(
     row.segmentCount !== row.segments.length
   )
     throw new Error('Canonical transcript integrity mismatch');
-  // Same boundaries as meeting-ai citation.py. Hash matching remains mandatory:
-  // a tokenizer change must never silently link another sentence.
-  const sentences = row.transcript
-    .split(/(?<=[.!?])\s+|\n+/u)
-    .map((text) => text.trim())
-    .filter(Boolean);
+  const sentences = canonicalSentences(row.transcript);
   return {
     ...actual,
     finalizationVersion: row.finalizationVersion as number,
