@@ -33,6 +33,11 @@ export const REALTIME_MAX_PENDING_FRAME_COUNT = 600;
 export const REALTIME_CIRCUIT_COOLDOWN_LADDER_MS = [
   5_000, 15_000, 30_000, 60_000, 120_000, 300_000,
 ] as const;
+// #138: after a reconnect the whole backlog (12-14s of audio in the attended
+// trace) left in one burst and parts of it never came back as transcript.
+// Realtime replays at 4x real time instead: 4 x 100ms frames per 100ms tick.
+export const REALTIME_REPLAY_FRAMES_PER_TICK = 4;
+const REPLAY_PACE_INTERVAL_MS = 100;
 const SOCKET_BUFFER_HIGH_WATER_BYTES = 512 * 1024;
 const SOCKET_BUFFER_LOW_WATER_BYTES = 128 * 1024;
 const BACKPRESSURE_RETRY_MS = 25;
@@ -250,6 +255,11 @@ export interface GatewayLiveStreamOptions {
   maxPendingFrames?: number;
   /** Circuit cooldowns after immediate retries; defaults to 30s..300s. */
   circuitCooldownLadderMs?: readonly number[];
+  /**
+   * Cap on frames written per flush tick while a backlog is replayed; the rest
+   * follow every REPLAY_PACE_INTERVAL_MS. Unset = write the whole backlog at once.
+   */
+  replayFramesPerTick?: number;
 }
 
 export function normalizeGatewayLiveContextTerms(value: unknown): string[] {
@@ -509,6 +519,7 @@ export class GatewayLiveStream {
   private pendingAudioBytes = 0;
   private readonly pendingFrames = new Map<number, PendingAudioFrame>();
   private backpressureTimer: ReturnType<typeof setTimeout> | null = null;
+  private replayPaceTimer: ReturnType<typeof setTimeout> | null = null;
   private backpressured = false;
   private ackSilenceTimer: ReturnType<typeof setTimeout> | null = null;
   private delivery: LiveDeliveryState = { kind: 'healthy' };
@@ -1047,13 +1058,23 @@ export class GatewayLiveStream {
       }
       this.backpressured = false;
     }
+    if (this.replayPaceTimer) {
+      // A paced replay is draining the backlog in order; it picks this frame up.
+      return false;
+    }
 
+    const perTick = this.options.replayFramesPerTick;
     let sent = false;
+    let written = 0;
     for (const pending of this.pendingFrames.values()) {
       if (pending.sentGeneration === expectedGeneration) {
         continue;
       }
       if (this.socket !== socket || !this.ready) {
+        return sent;
+      }
+      if (perTick !== undefined && written >= perTick) {
+        this.scheduleReplayPace(expectedGeneration);
         return sent;
       }
       if (socket.bufferedAmount >= SOCKET_BUFFER_HIGH_WATER_BYTES) {
@@ -1073,8 +1094,37 @@ export class GatewayLiveStream {
       pending.sentGeneration = expectedGeneration;
       this.armAckSilenceTimer(expectedGeneration);
       sent = true;
+      written += 1;
     }
     return sent;
+  }
+
+  private scheduleReplayPace(generation: number): void {
+    if (this.replayPaceTimer || this.closed) {
+      return;
+    }
+    this.replayPaceTimer = setTimeout(() => {
+      this.replayPaceTimer = null;
+      this.flushPendingFrames(generation);
+    }, REPLAY_PACE_INTERVAL_MS);
+  }
+
+  /**
+   * An independent signal that the network is back (the durable REST upload
+   * just recovered). Waiting out the circuit cooldown after that only delays
+   * the backlog: in the attended trace the live lane sat 17-31s behind a REST
+   * upload that had already recovered.
+   */
+  notifyNetworkRecovered(): void {
+    if (this.closed || this.stopping || !this.started) {
+      return;
+    }
+    const state = this.delivery;
+    if (state.kind !== 'degraded') {
+      return;
+    }
+    state.probeNotBeforeMs = Date.now();
+    this.considerRecoveryProgress();
   }
 
   /**
@@ -1389,6 +1439,10 @@ export class GatewayLiveStream {
     if (this.backpressureTimer) {
       clearTimeout(this.backpressureTimer);
       this.backpressureTimer = null;
+    }
+    if (this.replayPaceTimer) {
+      clearTimeout(this.replayPaceTimer);
+      this.replayPaceTimer = null;
     }
   }
 

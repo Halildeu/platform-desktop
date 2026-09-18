@@ -168,6 +168,7 @@ vi.mock('../services/gateway/gateway-live-stream', () => ({
   GATEWAY_LIVE_SAMPLE_RATE_HZ: 16_000,
   REALTIME_MAX_PENDING_FRAME_COUNT: 600,
   REALTIME_CIRCUIT_COOLDOWN_LADDER_MS: [5_000, 15_000, 30_000, 60_000, 120_000, 300_000],
+  REALTIME_REPLAY_FRAMES_PER_TICK: 4,
   normalizeGatewayLiveContextTerms: (value: unknown) =>
     Array.isArray(value) ? value.map(String) : [],
   GatewayLiveStream: class MockGatewayLiveStream {
@@ -931,6 +932,7 @@ describe('audio IPC recorder consent gate', () => {
       expect.objectContaining({
         maxPendingFrames: 600,
         circuitCooldownLadderMs: expect.arrayContaining([5_000]),
+        replayFramesPerTick: 4,
       }),
     );
     const restBytes = new Uint8Array([0, 0]);
