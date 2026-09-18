@@ -717,6 +717,29 @@ describe('SummaryPanel', () => {
     expect(within(actionTable).getAllByText('Hazır')).toHaveLength(1);
   });
 
+  it('saves a real PDF file through the adapter instead of printing the window', async () => {
+    const adapter: ExportAdapter = {
+      copyText: vi.fn().mockResolvedValue(undefined),
+      downloadText: vi.fn(),
+      print: vi.fn(),
+      savePdf: vi.fn().mockResolvedValue({ fileName: 'meeting-intelligence-x.pdf' }),
+    };
+    render(<SummaryPanel intelligence={readyState()} exportAdapter={adapter} />);
+
+    await userEvent.click(screen.getByRole('button', { name: 'PDF' }));
+
+    await waitFor(() => {
+      expect(adapter.savePdf).toHaveBeenCalledWith(
+        expect.stringMatching(/^meeting-intelligence-.*\.pdf$/),
+        expect.stringContaining('<h2>Aksiyonlar</h2>'),
+      );
+    });
+    expect(adapter.print).not.toHaveBeenCalled();
+    expect(
+      screen.getByText('PDF İndirilenler klasörüne kaydedildi: meeting-intelligence-x.pdf'),
+    ).toBeInTheDocument();
+  });
+
   it('uses export adapter for copy and file downloads', async () => {
     const adapter: ExportAdapter = {
       copyText: vi.fn().mockResolvedValue(undefined),
@@ -806,7 +829,7 @@ describe('SummaryPanel', () => {
 
     await userEvent.click(screen.getByRole('button', { name: 'CSV' }));
     const csv = String(vi.mocked(adapter.downloadText).mock.calls.at(-1)?.[1]);
-    expect(csv).toContain('decision,dec-1');
+    expect(csv).toContain('decision;dec-1');
     expect(csv).toContain('Halil');
     expect(csv).toContain('Revize');
 

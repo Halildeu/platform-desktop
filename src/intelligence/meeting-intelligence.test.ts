@@ -171,6 +171,26 @@ describe('meeting intelligence state and exports', () => {
     });
   });
 
+  it('escapes transcript-derived text in the PDF document', () => {
+    const ready = setMeetingIntelligenceResult(
+      {
+        ...initialMeetingIntelligence(),
+        meetingId: '22222222-2222-4222-8222-222222222222',
+        sessionId: 'SES-1',
+      },
+      {
+        ...RESULT,
+        summaryMarkdown: '<script>alert(1)</script> & "özet"',
+      },
+    );
+
+    const { pdfHtml } = buildIntelligenceExport(ready, 1782741700000);
+
+    expect(pdfHtml).not.toContain('<script>');
+    expect(pdfHtml).toContain('&lt;script&gt;alert(1)&lt;/script&gt; &amp; &quot;özet&quot;');
+    expect(pdfHtml).toContain("default-src 'none'");
+  });
+
   it('builds markdown and CSV exports from approved intelligence output', () => {
     const ready = setMeetingIntelligenceResult(
       {
@@ -197,8 +217,16 @@ describe('meeting intelligence state and exports', () => {
     expect(bundle.markdown).toContain('Desktop recorder fresh login ile tekrar denenecek');
     expect(bundle.markdown).toContain('[0:30-0:42]');
     expect(bundle.csv).toContain(
-      'action,act-1,audio_record rolü yeni token claim özetinde doğrulanacak,Zeynep,2026-06-30,Açık,high,1:04',
+      'action;act-1;audio_record rolü yeni token claim özetinde doğrulanacak;Zeynep;2026-06-30;Açık;high;1:04',
     );
+    // #5: UTF-8 BOM + ';' + CRLF so a double-click opens it in Turkish Excel.
+    expect(bundle.csv.startsWith('﻿type;id;title;')).toBe(true);
+    expect(bundle.csv).toContain('\r\n');
+    expect(bundle.pdfFileName).toMatch(
+      /^meeting-intelligence-22222222-2222-4222-8222-222222222222-.*\.pdf$/,
+    );
+    expect(bundle.pdfHtml).toContain('<h2>Aksiyonlar</h2>');
+    expect(bundle.pdfHtml).toContain('audio_record rolü yeni token claim özetinde doğrulanacak');
 
     const integrationPackage = JSON.parse(bundle.integrationJson) as Record<string, unknown>;
     expect(integrationPackage).toMatchObject({

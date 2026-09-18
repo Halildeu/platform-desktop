@@ -52,6 +52,8 @@ export interface ExportAdapter {
   copyText(text: string): Promise<void>;
   downloadText(fileName: string, content: string, mimeType: string): void;
   print(): void;
+  /** Writes a real PDF of the output to Downloads (desktop#5); print() is the fallback. */
+  savePdf?(fileName: string, html: string): Promise<{ fileName: string }>;
   openExternal?(url: string): void;
 }
 
@@ -94,6 +96,17 @@ const browserExportAdapter: ExportAdapter = {
   print() {
     window.print();
   },
+  ...(typeof window !== 'undefined' && window.electronAPI?.export
+    ? {
+        savePdf(fileName: string, html: string) {
+          const api = window.electronAPI?.export;
+          if (!api) {
+            return Promise.reject(new Error('PDF export is unavailable'));
+          }
+          return api.savePdf({ fileName, html });
+        },
+      }
+    : {}),
   openExternal(url: string) {
     window.open(url, '_blank', 'noopener,noreferrer');
   },
@@ -748,6 +761,9 @@ export function SummaryPanel({
           'application/json',
         );
         setMessage(handoffPackageDownloadMessage(handoffReadiness));
+      } else if (exportAdapter.savePdf) {
+        const saved = await exportAdapter.savePdf(bundle.pdfFileName, bundle.pdfHtml);
+        setMessage(`PDF İndirilenler klasörüne kaydedildi: ${saved.fileName}`);
       } else {
         exportAdapter.print();
         setMessage('PDF için yazdırma penceresi açıldı.');

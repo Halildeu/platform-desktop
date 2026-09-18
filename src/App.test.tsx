@@ -145,6 +145,9 @@ function installElectronApiMock(recorderConfig: {
   trayPauseHandler = null;
   trayResumeHandler = null;
   window.electronAPI = {
+    export: {
+      savePdf: vi.fn(),
+    },
     app: {
       getVersion: vi.fn().mockResolvedValue('0.1.0-test'),
       getAutoLaunch: vi.fn().mockResolvedValue(false),

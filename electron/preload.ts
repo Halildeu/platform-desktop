@@ -288,6 +288,11 @@ const electronAPI = {
       return () => ipcRenderer.removeListener('meeting:live-analysis-status', listener);
     },
   },
+  export: {
+    /** Renders the escaped output HTML to a PDF file in Downloads (#5). */
+    savePdf: (payload: { fileName: string; html: string }): Promise<{ fileName: string }> =>
+      ipcRenderer.invoke('export:save-pdf', payload),
+  },
 };
 
 contextBridge.exposeInMainWorld('electronAPI', electronAPI);
