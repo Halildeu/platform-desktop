@@ -910,8 +910,9 @@ describe('audio IPC recorder consent gate', () => {
     });
     await acceptConsent();
 
+    const rendererSendSpy = vi.fn();
     const started = (await startHandler()(
-      { sender: { id: 9, send: vi.fn() } },
+      { sender: { id: 9, send: rendererSendSpy } },
       meetingId,
       deviceId,
       [],
@@ -934,6 +935,15 @@ describe('audio IPC recorder consent gate', () => {
         circuitCooldownLadderMs: expect.arrayContaining([5_000]),
         replayFramesPerTick: 4,
       }),
+    );
+    // Measured lag reaches the renderer tagged with the gateway session.
+    const liveStreamOptions = mocks.gatewayLiveStreamCtor.mock.calls.at(-1)?.[0] as {
+      onLagSnapshot?: (snapshot: { deliveryBacklogMs: number; engineLagMs: number | null }) => void;
+    };
+    liveStreamOptions.onLagSnapshot?.({ deliveryBacklogMs: 1_200, engineLagMs: 300 });
+    expect(rendererSendSpy).toHaveBeenCalledWith(
+      'audio:live-lag',
+      expect.objectContaining({ deliveryBacklogMs: 1_200, engineLagMs: 300 }),
     );
     const restBytes = new Uint8Array([0, 0]);
     await chunkHandler()(

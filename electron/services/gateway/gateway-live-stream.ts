@@ -155,6 +155,7 @@ export type GatewayLiveServerEvent =
       rms?: number;
       source_start_sample?: number;
       source_end_sample?: number;
+      audio_sent_ms?: number;
     }
   | { type: 'audio_ack'; chunk_seq: number }
   | { type: 'eof_ack' | 'drained' }
@@ -224,7 +225,27 @@ interface PendingAudioFrame {
   encoded: ArrayBuffer;
   byteLength: number;
   sentGeneration: number | null;
+  /** Wall clock when the frame entered the replay window (delivery backlog age). */
+  enqueuedAtMs: number;
 }
+
+/**
+ * Transcript lag split into the two things that can actually be late.
+ * Neither depends on whether anybody is speaking: an idle room is neither a
+ * delivery backlog nor an engine backlog (the old "last audio frame minus last
+ * text" reported silence and room noise as lag).
+ */
+export interface GatewayLiveLagSnapshot {
+  /** Age of the oldest frame the gateway has not acknowledged yet; 0 when none. */
+  deliveryBacklogMs: number;
+  /** audio_sent_ms - elapsed_ms of a recent transcript event; null when unknown. */
+  engineLagMs: number | null;
+}
+
+const LAG_REPORT_INTERVAL_MS = 1_000;
+// An engine reading older than this is not reported: without newer events the
+// engine's position is unknown, and a stale catch-up value must not stick.
+const ENGINE_LAG_FRESH_MS = 10_000;
 
 type GatewaySocketFactory = (url: string, jwt: string) => GatewaySocket;
 
@@ -260,6 +281,8 @@ export interface GatewayLiveStreamOptions {
    * follow every REPLAY_PACE_INTERVAL_MS. Unset = write the whole backlog at once.
    */
   replayFramesPerTick?: number;
+  /** Receives a lag snapshot every second while started; unset = no reporting. */
+  onLagSnapshot?: (snapshot: GatewayLiveLagSnapshot) => void;
 }
 
 export function normalizeGatewayLiveContextTerms(value: unknown): string[] {
@@ -411,6 +434,9 @@ function parseServerEvent(data: unknown): GatewayLiveServerEvent | null {
           : undefined;
       const elapsedMs = optionalFiniteNumber(parsed.elapsed_ms) ? parsed.elapsed_ms : undefined;
       const eventRms = optionalFiniteNumber(parsed.rms) ? parsed.rms : undefined;
+      const audioSentMs = optionalFiniteNumber(parsed.audio_sent_ms)
+        ? parsed.audio_sent_ms
+        : undefined;
       const hasSourceRange = Boolean(
         nonNegativeSequence(parsed.source_start_sample) &&
         nonNegativeSequence(parsed.source_end_sample) &&
@@ -423,6 +449,7 @@ function parseServerEvent(data: unknown): GatewayLiveServerEvent | null {
         ...(reason === undefined ? {} : { reason }),
         ...(elapsedMs === undefined ? {} : { elapsed_ms: elapsedMs }),
         ...(eventRms === undefined ? {} : { rms: eventRms }),
+        ...(audioSentMs === undefined ? {} : { audio_sent_ms: audioSentMs }),
         ...(hasSourceRange
           ? {
               source_start_sample: parsed.source_start_sample as number,
@@ -520,6 +547,8 @@ export class GatewayLiveStream {
   private readonly pendingFrames = new Map<number, PendingAudioFrame>();
   private backpressureTimer: ReturnType<typeof setTimeout> | null = null;
   private replayPaceTimer: ReturnType<typeof setTimeout> | null = null;
+  private lagReportTimer: ReturnType<typeof setInterval> | null = null;
+  private lastEngineLag: { lagMs: number; atMs: number; generation: number } | null = null;
   private backpressured = false;
   private ackSilenceTimer: ReturnType<typeof setTimeout> | null = null;
   private delivery: LiveDeliveryState = { kind: 'healthy' };
@@ -565,7 +594,64 @@ export class GatewayLiveStream {
     // connection to recover, so audio handed in early must be buffered rather
     // than treated as a delivery failure.
     this.started = true;
+    this.startLagReporting();
     await this.connect();
+  }
+
+  /** Current lag reading; independent of speech, room noise or silence. */
+  getLagSnapshot(nowMs = Date.now()): GatewayLiveLagSnapshot {
+    const oldest = this.pendingFrames.values().next();
+    const deliveryBacklogMs = oldest.done ? 0 : Math.max(0, nowMs - oldest.value.enqueuedAtMs);
+    const engine = this.lastEngineLag;
+    const engineLagMs =
+      engine !== null &&
+      engine.generation === this.socketGeneration &&
+      nowMs - engine.atMs <= ENGINE_LAG_FRESH_MS
+        ? engine.lagMs
+        : null;
+    return { deliveryBacklogMs, engineLagMs };
+  }
+
+  private startLagReporting(): void {
+    const report = this.options.onLagSnapshot;
+    if (!report || this.lagReportTimer) {
+      return;
+    }
+    this.lagReportTimer = setInterval(() => {
+      if (this.closed) {
+        this.stopLagReporting();
+        return;
+      }
+      report(this.getLagSnapshot());
+    }, LAG_REPORT_INTERVAL_MS);
+  }
+
+  private stopLagReporting(): void {
+    if (this.lagReportTimer) {
+      clearInterval(this.lagReportTimer);
+      this.lagReportTimer = null;
+    }
+  }
+
+  private noteEngineProgress(event: GatewayLiveServerEvent): void {
+    if (event.type !== 'partial' && event.type !== 'final') {
+      return;
+    }
+    const sentMs = event.audio_sent_ms;
+    const engineMs = event.elapsed_ms;
+    if (
+      typeof sentMs !== 'number' ||
+      typeof engineMs !== 'number' ||
+      !Number.isFinite(sentMs) ||
+      !Number.isFinite(engineMs)
+    ) {
+      return;
+    }
+    this.lastEngineLag = {
+      lagMs: Math.max(0, sentMs - engineMs),
+      atMs: Date.now(),
+      generation: this.socketGeneration,
+    };
   }
 
   sendAfterRestAccepted(pcm16: Uint8Array, chunkSeq: number, capturedAtMs: number): boolean {
@@ -664,6 +750,7 @@ export class GatewayLiveStream {
   close(): void {
     this.closed = true;
     this.stopping = true;
+    this.stopLagReporting();
     this.rejectOpen?.('gateway live stream closed while waiting for readiness');
     this.rejectOpen = null;
     this.clearOpenTimers();
@@ -875,6 +962,7 @@ export class GatewayLiveStream {
         this.handleSocketFailure(socket, 'socket-error');
       }
     }
+    this.noteEngineProgress(event);
     if (this.stopping && event.type === 'drained') {
       // Top-level state describes the terminal drain, not historical live
       // coverage: a gap in the preview must never read as "the recording is
@@ -945,7 +1033,12 @@ export class GatewayLiveStream {
       lastDropped = oldest.value;
     }
 
-    this.pendingFrames.set(chunkSeq, { encoded, byteLength, sentGeneration: null });
+    this.pendingFrames.set(chunkSeq, {
+      encoded,
+      byteLength,
+      sentGeneration: null,
+      enqueuedAtMs: Date.now(),
+    });
     this.pendingAudioBytes += byteLength;
 
     if (droppedCount > 0 && firstDropped !== null && lastDropped !== null) {
@@ -1396,6 +1489,7 @@ export class GatewayLiveStream {
     this.settleStop = null;
     this.closed = true;
     this.ready = false;
+    this.stopLagReporting();
     this.clearReconnectTimer();
     this.clearBackpressureTimer();
     this.clearAckSilenceTimer();

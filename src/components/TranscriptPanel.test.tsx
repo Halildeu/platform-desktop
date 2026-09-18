@@ -1544,6 +1544,75 @@ describe('TranscriptPanel', () => {
     ).toBeInTheDocument();
   });
 
+  // Attended 17-18 Sep: "Metin gecikiyor" grew to 36-46 s while nobody spoke,
+  // including in a noisy room (RMS 0.003-0.007). With measured live lag the
+  // badge no longer depends on speech, noise or silence.
+  it.each([
+    {
+      label: 'silence/noise on a healthy lane',
+      liveLag: { deliveryBacklogMs: 0, engineLagMs: null },
+      warns: null,
+    },
+    {
+      label: 'engine keeping up',
+      liveLag: { deliveryBacklogMs: 200, engineLagMs: 800 },
+      warns: null,
+    },
+    {
+      label: 'network backlog',
+      liveLag: { deliveryBacklogMs: 7_000, engineLagMs: null },
+      warns: '7 sn',
+    },
+    {
+      label: 'engine behind',
+      liveLag: { deliveryBacklogMs: 0, engineLagMs: 9_000 },
+      warns: '9 sn',
+    },
+  ])('uses measured live lag: $label', ({ liveLag, warns }) => {
+    const recording = startTranscriptSession(initialTranscriptSession(), {
+      sessionId: 'SES-1',
+      meetingId: '22222222-2222-4222-8222-222222222222',
+      deviceId: 'desktop-1',
+      hasLoopback: false,
+      startedAtMs: 1781820000123,
+    });
+    const withTranscript = upsertTranscriptSegment(recording, {
+      id: 'seg-1',
+      speakerLabel: 'Konuşmacı',
+      startedAtMs: 1781820001000,
+      status: 'draft',
+      text: 'İlk canlı metin geldi',
+      source: 'direct-stream',
+      receivedAtMs: 1781820002000,
+    });
+
+    render(
+      <TranscriptPanel
+        session={withTranscript}
+        stream={{
+          directConfigured: true,
+          directReady: true,
+          directActive: true,
+          audioRms: 0.007,
+          audioActive: true,
+          // 46 s after the last text: the old estimate would warn here.
+          lastAudioAtMs: 1781820048000,
+          liveLag,
+          disabledReason: null,
+        }}
+      />,
+    );
+
+    if (warns) {
+      expect(screen.getByText(`Gecikiyor · ${warns}`)).toHaveClass('stream-lag-warning');
+      const flowHealth = screen.getByLabelText('Transkript akış kalitesi');
+      expect(within(flowHealth).getByText('Metin gecikiyor')).toBeInTheDocument();
+    } else {
+      expect(screen.queryByText(/Metin gecikiyor/)).not.toBeInTheDocument();
+      expect(screen.queryByText(/Gecikiyor ·/)).not.toBeInTheDocument();
+    }
+  });
+
   it('flags low word coverage when audio is active but transcript text is sparse', () => {
     const recording = startTranscriptSession(initialTranscriptSession(), {
       sessionId: 'SES-1',

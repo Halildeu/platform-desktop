@@ -198,6 +198,7 @@ function installElectronApiMock(): void {
       onTranscriptEvent: vi.fn(() => vi.fn()),
       onTranscriptError: vi.fn(() => vi.fn()),
       onTranscriptRecovered: vi.fn(() => () => {}),
+      onLiveLag: vi.fn(() => () => {}),
     },
   };
 }

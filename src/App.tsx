@@ -673,6 +673,10 @@ function App() {
   );
   const [audioRms, setAudioRms] = useState<number | null>(null);
   const [lastAudioAtMs, setLastAudioAtMs] = useState<number | null>(null);
+  const [liveLag, setLiveLag] = useState<{
+    deliveryBacklogMs: number;
+    engineLagMs: number | null;
+  } | null>(null);
   const recorderRef = useRef<Recorder | null>(null);
   const startInFlightRef = useRef(false);
   const stopInFlightRef = useRef(false);
@@ -1356,6 +1360,15 @@ function App() {
         return { ...current, error: null };
       });
     });
+    const offLiveLag = window.electronAPI?.audio.onLiveLag?.((event) => {
+      if (event.sessionId !== transcriptSessionIdRef.current) {
+        return;
+      }
+      setLiveLag({
+        deliveryBacklogMs: event.deliveryBacklogMs,
+        engineLagMs: event.engineLagMs,
+      });
+    });
     const notifyRendererUnload = (): void => {
       window.electronAPI?.audio.rendererUnloaded?.();
     };
@@ -1367,6 +1380,7 @@ function App() {
       offTranscriptEvent?.();
       offTranscriptError?.();
       offTranscriptRecovered?.();
+      offLiveLag?.();
       window.removeEventListener('beforeunload', notifyRendererUnload);
     };
   }, []);
@@ -1509,6 +1523,7 @@ function App() {
       setLiveStreamPreflight(initialLiveSttPreflightState);
       setAudioRms(null);
       setLastAudioAtMs(null);
+      setLiveLag(null);
       setTranscriptSession(initialTranscriptSession());
       setMeetingIntelligence(initialMeetingIntelligence());
       recentMeetingsReadSequenceRef.current += 1;
@@ -1642,6 +1657,7 @@ function App() {
       setLiveStreamStatus(null);
       setAudioRms(null);
       setLastAudioAtMs(null);
+      setLiveLag(null);
       transcriptSessionIdRef.current = null;
       pendingLiveTranscriptEventsRef.current = [];
       const rec = await startRecordingWithTimeout(meetingId, deviceId, {
@@ -1702,6 +1718,7 @@ function App() {
         setLiveStreamStatus(null);
         setAudioRms(null);
         setLastAudioAtMs(null);
+        setLiveLag(null);
         setRecording(false);
         setPaused(false);
         const message = `Kayıt hatası (ses kaybı): ${err.message}`;
@@ -1748,6 +1765,7 @@ function App() {
       setLiveStreamStatus(null);
       setAudioRms(null);
       setLastAudioAtMs(null);
+      setLiveLag(null);
       setError(message);
       setTranscriptSession((current) => failTranscriptSession(current, message));
       setMeetingIntelligence((current) => failMeetingIntelligence(current, message));
@@ -1925,6 +1943,7 @@ function App() {
       setLiveStreamStatus(null);
       setAudioRms(null);
       setLastAudioAtMs(null);
+      setLiveLag(null);
       if (degradedStream) {
         const warning = `Kayıt gönderildi; canlı transkriptin son onayı alınamadı (${degradedStream.reason}). Kalıcı sonuç işleniyor.`;
         stopOutcome = 'degraded';
@@ -1953,6 +1972,7 @@ function App() {
       setLiveStreamStatus(null);
       setAudioRms(null);
       setLastAudioAtMs(null);
+      setLiveLag(null);
       window.electronAPI?.tray.setRecordingActive(false, stopOutcome, stopErrorMessage);
       stopInFlightRef.current = false;
       setStopping(false);
@@ -2235,6 +2255,7 @@ function App() {
                   audioRms,
                   audioActive: typeof audioRms === 'number' && audioRms >= ACTIVE_AUDIO_RMS,
                   lastAudioAtMs,
+                  liveLag,
                   disabledReason: recorderConfig?.liveSttStreamReason ?? null,
                   preflight: liveStreamPreflight,
                   capturePreflight: audioCapturePreflight,

@@ -244,6 +244,7 @@ function installElectronApiMock(recorderConfig: {
       onTranscriptRecovered: vi.fn((_callback: (event: { sessionId: string }) => void) => {
         return vi.fn();
       }),
+      onLiveLag: vi.fn(() => vi.fn()),
     },
   };
 }

@@ -67,6 +67,13 @@ export interface TranscriptPanelProps {
     audioRms?: number | null;
     audioActive?: boolean;
     lastAudioAtMs?: number | null;
+    /**
+     * Measured live-lane lag (gateway live mode). When present it replaces the
+     * "last audio frame minus last text" estimate, which read silence and room
+     * noise as lag: deliveryBacklogMs is the age of the oldest unacknowledged
+     * frame, engineLagMs how far the STT engine is behind the audio it received.
+     */
+    liveLag?: { deliveryBacklogMs: number; engineLagMs: number | null } | null;
     disabledReason: string | null;
     preflight?: LiveSttPreflightState;
     capturePreflight?: AudioCapturePreflightState;
@@ -154,11 +161,27 @@ function streamLoadingStageLabel(stage: string | undefined): string {
   return 'model';
 }
 
+function measuredLagMs(stream: TranscriptPanelProps['stream']): number | null {
+  const lag = stream?.liveLag;
+  if (!lag) {
+    return null;
+  }
+  const delivery = Number.isFinite(lag.deliveryBacklogMs) ? Math.max(0, lag.deliveryBacklogMs) : 0;
+  const engine =
+    typeof lag.engineLagMs === 'number' && Number.isFinite(lag.engineLagMs)
+      ? Math.max(0, lag.engineLagMs)
+      : 0;
+  return Math.max(delivery, engine);
+}
+
 function streamLagMs(
   stream: TranscriptPanelProps['stream'],
   lastTranscriptAtMs: number | null,
   recordingActive: boolean,
 ): number | null {
+  if (recordingActive && stream?.liveLag) {
+    return measuredLagMs(stream);
+  }
   if (
     !recordingActive ||
     !stream?.audioActive ||
@@ -185,6 +208,19 @@ function transcriptLagLabel(
   lastTranscriptAtMs: number | null,
   recordingActive: boolean,
 ): string {
+  if (recordingActive && stream?.liveLag) {
+    const measured = measuredLagMs(stream) ?? 0;
+    if (measured >= TRANSCRIPT_LAG_WARN_MS) {
+      return `Gecikiyor · ${formatDuration(measured)}`;
+    }
+    if (
+      stream.audioActive &&
+      (typeof lastTranscriptAtMs !== 'number' || !Number.isFinite(lastTranscriptAtMs))
+    ) {
+      return 'İlk metin bekleniyor';
+    }
+    return formatDuration(measured);
+  }
   if (
     !recordingActive ||
     !stream?.directConfigured ||
