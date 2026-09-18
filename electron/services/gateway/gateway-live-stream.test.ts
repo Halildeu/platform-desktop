@@ -7,6 +7,7 @@ import {
   normalizeGatewayLiveContextTerms,
   REALTIME_CIRCUIT_COOLDOWN_LADDER_MS,
   REALTIME_MAX_PENDING_FRAME_COUNT,
+  REALTIME_REPLAY_FRAMES_PER_TICK,
   type GatewayLiveDeliverySummary,
 } from './gateway-live-stream';
 
@@ -817,6 +818,101 @@ describe('GatewayLiveStream', () => {
     // One `recovering` for the episode, then one `degraded` carrying the wait.
     expect(statuses.map((s) => s.kind)).toEqual(['recovering', 'degraded']);
     expect(statuses[1].retryInMs).toBe(30_000);
+    stream.close();
+  });
+
+  // #138: a whole backlog written in one burst came back partly untranscribed.
+  it('replays a reconnect backlog in order at the paced rate', async () => {
+    vi.useFakeTimers();
+    vi.spyOn(Math, 'random').mockReturnValue(0.5);
+    const sockets: FakeSocket[] = [];
+    const stream = new GatewayLiveStream({
+      cfg: { baseUrl: 'https://testai.acik.com' },
+      sessionId: 'SES-1',
+      getJwt: async () => 'JWT',
+      onEvent: vi.fn(),
+      onError: vi.fn(),
+      maxPendingFrames: REALTIME_MAX_PENDING_FRAME_COUNT,
+      replayFramesPerTick: REALTIME_REPLAY_FRAMES_PER_TICK,
+      socketFactory: () => {
+        const socket = new FakeSocket();
+        sockets.push(socket);
+        return socket;
+      },
+    });
+    const started = stream.start();
+    await vi.advanceTimersByTimeAsync(0);
+    sockets[0].open();
+    sockets[0].message(JSON.stringify({ type: 'ready' }));
+    await started;
+
+    const frame = new Uint8Array(3_200);
+    for (let index = 0; index < 20; index += 1) {
+      stream.sendRealtimeFrame(frame, 1_000 + index * 100);
+    }
+    await vi.advanceTimersByTimeAsync(7_250);
+    await vi.advanceTimersByTimeAsync(0);
+    sockets[1].open();
+    sockets[1].message(JSON.stringify({ type: 'ready' }));
+    await vi.advanceTimersByTimeAsync(0);
+
+    const binary = (socket: FakeSocket) =>
+      socket.sent.filter((entry) => entry instanceof ArrayBuffer).map(frameSeq);
+    expect(binary(sockets[1])).toEqual([0, 1, 2, 3]);
+
+    // New speech during the replay queues behind the backlog, never ahead of it.
+    stream.sendRealtimeFrame(frame, 5_000);
+    expect(binary(sockets[1])).toEqual([0, 1, 2, 3]);
+
+    await vi.advanceTimersByTimeAsync(100);
+    expect(binary(sockets[1])).toEqual([0, 1, 2, 3, 4, 5, 6, 7]);
+    await vi.advanceTimersByTimeAsync(500);
+    expect(binary(sockets[1])).toEqual(Array.from({ length: 21 }, (_, index) => index));
+    stream.close();
+  });
+
+  it('probes immediately when the REST upload proves the network is back', async () => {
+    vi.useFakeTimers();
+    vi.spyOn(Math, 'random').mockReturnValue(0.5);
+    const sockets: FakeSocket[] = [];
+    const statuses: Array<{ kind: string; retryInMs?: number }> = [];
+    const stream = new GatewayLiveStream({
+      cfg: { baseUrl: 'https://testai.acik.com' },
+      sessionId: 'SES-1',
+      getJwt: async () => 'JWT',
+      onEvent: vi.fn(),
+      onError: vi.fn(),
+      onDeliveryStatus: (status) => statuses.push(status),
+      circuitCooldownLadderMs: [60_000],
+      socketFactory: () => {
+        const socket = new FakeSocket();
+        sockets.push(socket);
+        return socket;
+      },
+    });
+    const started = stream.start();
+    await vi.advanceTimersByTimeAsync(0);
+    sockets[0].open();
+    sockets[0].message(JSON.stringify({ type: 'ready' }));
+    await started;
+    stream.sendAfterRestAccepted(new Uint8Array([0, 0]), 0, 1);
+
+    // Network down: the ack watchdog fires and every immediate attempt fails.
+    for (let recovery = 1; recovery <= 3; recovery += 1) {
+      await vi.advanceTimersByTimeAsync(9_000);
+      await vi.advanceTimersByTimeAsync(0);
+      sockets[recovery].failClose();
+      await vi.advanceTimersByTimeAsync(0);
+    }
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(statuses.at(-1)).toMatchObject({ kind: 'degraded', retryInMs: 60_000 });
+    const socketsBeforeRecovery = sockets.length;
+
+    stream.notifyNetworkRecovered();
+    await vi.advanceTimersByTimeAsync(3_000);
+
+    // Well inside the 60s cooldown, a new probe socket is already open.
+    expect(sockets.length).toBe(socketsBeforeRecovery + 1);
     stream.close();
   });
 

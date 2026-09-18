@@ -31,6 +31,7 @@ import {
   normalizeGatewayLiveContextTerms,
   REALTIME_CIRCUIT_COOLDOWN_LADDER_MS,
   REALTIME_MAX_PENDING_FRAME_COUNT,
+  REALTIME_REPLAY_FRAMES_PER_TICK,
   type GatewayLiveDeliveryStatus,
   type GatewayLiveServerEvent,
   type GatewayLiveStreamStopResult,
@@ -950,8 +951,16 @@ export function registerAudioIpc(): void {
         }
         assertStartupOwnerPresent(rendererId);
         const uploadStatusSend = rendererSend(event);
+        // Assigned once the live lane exists; a recovered REST upload proves the
+        // network is back, so the live lane may probe without its cooldown.
+        let recoveryListener: GatewayLiveStream | null = null;
         const sender = new ChunkSender(cfg, () => getValidAccessToken(), {
-          onDeliveryStatus: (status) => emitChunkDeliveryStatus(uploadStatusSend, status),
+          onDeliveryStatus: (status) => {
+            emitChunkDeliveryStatus(uploadStatusSend, status);
+            if (status.state === 'recovered') {
+              recoveryListener?.notifyNetworkRecovered();
+            }
+          },
         });
         const canonicalStartedAt = new Date().toISOString();
         const startIdempotencyKey = newIdempotencyKey();
@@ -1095,9 +1104,11 @@ export function registerAudioIpc(): void {
               ? {
                   maxPendingFrames: REALTIME_MAX_PENDING_FRAME_COUNT,
                   circuitCooldownLadderMs: REALTIME_CIRCUIT_COOLDOWN_LADDER_MS,
+                  replayFramesPerTick: REALTIME_REPLAY_FRAMES_PER_TICK,
                 }
               : {}),
           });
+          recoveryListener = liveStream;
           startingLiveStream = liveStream;
           try {
             await liveStream.start();
