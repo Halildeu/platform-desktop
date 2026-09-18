@@ -669,6 +669,7 @@ button:disabled {
 }
 
 .meeting-result-picker-search input {
+  box-sizing: border-box;
   flex: 1 1 auto;
   min-width: 0;
   height: 34px;
@@ -1744,6 +1745,9 @@ button:disabled {
 
 .share-field input,
 .share-field textarea {
+  /* width:100% plus padding and border overflowed the dialog without this
+     (no global border-box); the recipient field was cut off on the right. */
+  box-sizing: border-box;
   width: 100%;
   min-width: 0;
   border: 1px solid #cbd5e1;
