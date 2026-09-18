@@ -211,7 +211,10 @@ const electronAPI = {
     logout: (): Promise<AuthStatus> => ipcRenderer.invoke('auth:logout'),
   },
   meeting: {
-    listRecent: (): Promise<RecentMeetingsPage> => ipcRenderer.invoke('meeting:list-recent'),
+    listRecent: (query?: { page?: number; title?: string }): Promise<RecentMeetingsPage> =>
+      query === undefined
+        ? ipcRenderer.invoke('meeting:list-recent')
+        : ipcRenderer.invoke('meeting:list-recent', query),
     createContract: (payload?: {
       title?: string;
       description?: string;

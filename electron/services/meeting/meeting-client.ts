@@ -220,13 +220,39 @@ export function meetingsUrl(cfg: MeetingClientConfig): string {
   return `${cfg.baseUrl}${API}`;
 }
 
+export const RECENT_MEETINGS_MAX_PAGE = 1_000;
+export const RECENT_MEETINGS_MAX_TITLE_QUERY = 100;
+
+export interface RecentMeetingsQuery {
+  /** Zero-based page; later pages reach meetings beyond the first 20 (desktop list). */
+  page?: number;
+  /** Case-insensitive title search, served by meeting-service `title=`. */
+  title?: string;
+}
+
+export function normalizeRecentMeetingsQuery(query: RecentMeetingsQuery = {}): {
+  page: number;
+  title: string | null;
+} {
+  const rawPage = Number.isFinite(query.page) ? Math.trunc(query.page as number) : 0;
+  const page = Math.min(RECENT_MEETINGS_MAX_PAGE, Math.max(0, rawPage));
+  const title = typeof query.title === 'string' ? query.title.trim() : '';
+  if (title.length > RECENT_MEETINGS_MAX_TITLE_QUERY) {
+    throw new Error('meeting title search is too long');
+  }
+  return { page, title: title === '' ? null : title };
+}
+
 export function recentMeetingsUrl(
   cfg: MeetingClientConfig,
   size = RECENT_MEETINGS_DEFAULT_SIZE,
+  query: RecentMeetingsQuery = {},
 ): string {
   const normalizedSize = Number.isFinite(size) ? Math.trunc(size) : RECENT_MEETINGS_DEFAULT_SIZE;
   const boundedSize = Math.min(RECENT_MEETINGS_MAX_SIZE, Math.max(1, normalizedSize));
-  return `${meetingsUrl(cfg)}?page=0&size=${boundedSize}`;
+  const { page, title } = normalizeRecentMeetingsQuery(query);
+  const titleParam = title === null ? '' : `&title=${encodeURIComponent(title)}`;
+  return `${meetingsUrl(cfg)}?page=${page}&size=${boundedSize}${titleParam}`;
 }
 
 export function meetingIntelligenceAnalyzeUrl(cfg: MeetingClientConfig, meetingId: string): string {
@@ -519,7 +545,7 @@ function parseRecentMeetingSummary(value: unknown, index: number): RecentMeeting
   };
 }
 
-export function parseRecentMeetingsPage(value: unknown): RecentMeetingsPage {
+export function parseRecentMeetingsPage(value: unknown, expectedPage = 0): RecentMeetingsPage {
   const record = requiredRecord(value, 'meeting list response');
   if (!Array.isArray(record.content)) {
     throw new Error('meeting list response content is not an array');
@@ -536,7 +562,7 @@ export function parseRecentMeetingsPage(value: unknown): RecentMeetingsPage {
     0,
   );
   const totalPages = boundedInteger(record.totalPages, 'meeting list response totalPages', 0);
-  if (page !== 0 || size > RECENT_MEETINGS_MAX_SIZE || record.content.length > size) {
+  if (page !== expectedPage || size > RECENT_MEETINGS_MAX_SIZE || record.content.length > size) {
     throw new Error('meeting list response pagination metadata is invalid');
   }
 
@@ -917,7 +943,9 @@ export async function listRecentMeetings(
   cfg: MeetingClientConfig,
   jwt: string,
   size = RECENT_MEETINGS_DEFAULT_SIZE,
+  query: RecentMeetingsQuery = {},
 ): Promise<RecentMeetingsPage> {
+  const { page } = normalizeRecentMeetingsQuery(query);
   const requestInit = {
     method: 'GET',
     headers: {
@@ -930,7 +958,7 @@ export async function listRecentMeetings(
   for (let attempt = 1; attempt <= CREATE_CONTRACT_MAX_ATTEMPTS; attempt += 1) {
     let res: Response;
     try {
-      res = await desktopFetch(recentMeetingsUrl(cfg, size), requestInit);
+      res = await desktopFetch(recentMeetingsUrl(cfg, size, query), requestInit);
     } catch (error) {
       if (attempt < CREATE_CONTRACT_MAX_ATTEMPTS && isRetryableNetworkError(error)) {
         await retryDelay(attempt);
@@ -955,7 +983,7 @@ export async function listRecentMeetings(
       throw new Error(await httpErrorMessage(res, 'listRecentMeetings'));
     }
 
-    return parseRecentMeetingsPage(await res.json());
+    return parseRecentMeetingsPage(await res.json(), page);
   }
 
   throw new Error('listRecentMeetings failed: retry loop exhausted');
