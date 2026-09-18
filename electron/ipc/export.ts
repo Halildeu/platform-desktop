@@ -65,7 +65,6 @@ async function renderPdf(html: string): Promise<Buffer> {
         window.webContents.printToPDF({
           pageSize: 'A4',
           printBackground: true,
-          margins: { marginType: 'default' },
         }),
         timeout,
       ]);
