@@ -8,6 +8,7 @@
 
 import {
   type GatewayConfig,
+  GatewayChunkRejectedError,
   GatewaySessionStartRejectedError,
   finishSession,
   newIdempotencyKey,
@@ -19,6 +20,71 @@ import {
 
 export type SessionState = 'idle' | 'active' | 'finished';
 const START_MAX_ATTEMPTS = 2;
+
+/**
+ * #138: a short network outage must not end the recording. The renderer keeps
+ * later chunks queued for up to 120s (capture.ts MAX_PENDING_AUDIO_MS), so the
+ * head chunk is replayed with the SAME seq, bytes and Idempotency-Key for a
+ * bounded budget below that. contract-v1 answers an identical replay with
+ * 200 `replayed`, so a chunk admitted before its response was lost is not
+ * counted twice.
+ */
+export const CHUNK_OUTAGE_BUDGET_MS = 100_000;
+const CHUNK_RETRY_BACKOFF_MS = [1_000, 2_000, 4_000] as const;
+const CHUNK_RETRY_MAX_BACKOFF_MS = 5_000;
+const CHUNK_AUTH_RETRY_LIMIT = 1;
+
+export type ChunkDeliveryStatus =
+  | {
+      state: 'retrying';
+      sessionId: string;
+      seq: number;
+      outageDurationMs: number;
+      attempts: number;
+      reason: string;
+    }
+  | {
+      state: 'recovered';
+      sessionId: string;
+      seq: number;
+      outageDurationMs: number;
+      attempts: number;
+    };
+
+export interface ChunkSenderOptions {
+  onDeliveryStatus?: (status: ChunkDeliveryStatus) => void;
+  now?: () => number;
+  sleep?: (ms: number) => Promise<void>;
+}
+
+function isTransientChunkFailure(error: unknown): boolean {
+  if (error instanceof GatewayChunkRejectedError) {
+    return error.status === 429 || error.status >= 500 || error.retryable === true;
+  }
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  if (error.name === 'TimeoutError') {
+    return true;
+  }
+  // Undici reports DNS (ENOTFOUND), refused and reset connections as
+  // TypeError('fetch failed'); other TypeErrors are programming errors.
+  return error instanceof TypeError && error.message === 'fetch failed';
+}
+
+function isAuthChunkFailure(error: unknown): boolean {
+  return error instanceof GatewayChunkRejectedError && error.status === 401;
+}
+
+function failureReason(error: unknown): string {
+  if (error instanceof GatewayChunkRejectedError) {
+    return `http-${error.status}`;
+  }
+  if (error instanceof Error && error.name === 'TimeoutError') {
+    return 'timeout';
+  }
+  return 'network';
+}
 
 export class AmbiguousGatewaySessionStartError extends Error {
   constructor(error: unknown) {
@@ -35,10 +101,22 @@ export class ChunkSender {
   private failed: Error | null = null;
   private sttProvider: SttProvider | null = null;
 
+  private readonly now: () => number;
+  private readonly sleep: (ms: number) => Promise<void>;
+
   constructor(
     private readonly cfg: GatewayConfig,
     private readonly getJwt: () => string | Promise<string>,
-  ) {}
+    private readonly options: ChunkSenderOptions = {},
+  ) {
+    this.now = options.now ?? Date.now;
+    this.sleep =
+      options.sleep ??
+      ((ms) =>
+        new Promise((resolve) => {
+          setTimeout(resolve, ms);
+        }));
+  }
 
   getState(): SessionState {
     return this.state;
@@ -113,13 +191,11 @@ export class ChunkSender {
         throw new Error('no active session');
       }
       const seq = this.seq + 1;
-      await sendChunk(
-        this.cfg,
-        await this.getJwt(),
-        this.sessionId,
-        { seq, bytes, startedAtMs },
-        newIdempotencyKey(),
-      );
+      await this.sendWithOutageRetry(this.sessionId, {
+        seq,
+        bytes: bytes.slice(),
+        startedAtMs,
+      });
       this.seq = seq;
       return seq;
     });
@@ -127,6 +203,56 @@ export class ChunkSender {
       this.failed = err instanceof Error ? err : new Error(String(err));
     });
     return op;
+  }
+
+  private async sendWithOutageRetry(
+    sessionId: string,
+    chunk: { seq: number; bytes: Uint8Array; startedAtMs: number },
+  ): Promise<void> {
+    // One key per chunk for its whole life: every replay is the identical request.
+    const idempotencyKey = newIdempotencyKey();
+    let outageStartedAtMs: number | null = null;
+    let attempts = 0;
+    let authRetries = 0;
+    for (;;) {
+      attempts += 1;
+      try {
+        await sendChunk(this.cfg, await this.getJwt(), sessionId, chunk, idempotencyKey);
+        if (outageStartedAtMs !== null) {
+          this.options.onDeliveryStatus?.({
+            state: 'recovered',
+            sessionId,
+            seq: chunk.seq,
+            outageDurationMs: this.now() - outageStartedAtMs,
+            attempts,
+          });
+        }
+        return;
+      } catch (error) {
+        const authRetry = isAuthChunkFailure(error) && authRetries < CHUNK_AUTH_RETRY_LIMIT;
+        if (!authRetry && !isTransientChunkFailure(error)) {
+          throw error;
+        }
+        if (authRetry) {
+          authRetries += 1;
+        }
+        outageStartedAtMs ??= this.now();
+        const elapsedMs = this.now() - outageStartedAtMs;
+        const backoffMs = CHUNK_RETRY_BACKOFF_MS[attempts - 1] ?? CHUNK_RETRY_MAX_BACKOFF_MS;
+        if (elapsedMs + backoffMs > CHUNK_OUTAGE_BUDGET_MS) {
+          throw error;
+        }
+        this.options.onDeliveryStatus?.({
+          state: 'retrying',
+          sessionId,
+          seq: chunk.seq,
+          outageDurationMs: elapsedMs,
+          attempts,
+          reason: failureReason(error),
+        });
+        await this.sleep(backoffMs);
+      }
+    }
   }
 
   async finish(idempotencyKey = newIdempotencyKey()): Promise<void> {

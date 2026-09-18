@@ -11,6 +11,7 @@ import { randomUUID } from 'node:crypto';
 
 import {
   AmbiguousGatewaySessionStartError,
+  type ChunkDeliveryStatus,
   ChunkSender,
 } from '../services/gateway/chunk-sender.js';
 import {
@@ -28,6 +29,8 @@ import {
   GATEWAY_LIVE_SAMPLE_RATE_HZ,
   GatewayLiveStream,
   normalizeGatewayLiveContextTerms,
+  REALTIME_CIRCUIT_COOLDOWN_LADDER_MS,
+  REALTIME_MAX_PENDING_FRAME_COUNT,
   type GatewayLiveDeliveryStatus,
   type GatewayLiveServerEvent,
   type GatewayLiveStreamStopResult,
@@ -366,6 +369,20 @@ function emitTranscriptError(send: RendererSend | null, sessionId: string, error
   send?.('audio:transcript-error', {
     sessionId,
     message: transcriptErrorMessage(error),
+  });
+}
+
+function emitChunkDeliveryStatus(send: RendererSend | null, status: ChunkDeliveryStatus): void {
+  if (status.state === 'recovered') {
+    send?.('audio:transcript-recovered', { sessionId: status.sessionId });
+    return;
+  }
+  const waitedSeconds = Math.round(status.outageDurationMs / 1000);
+  send?.('audio:transcript-error', {
+    sessionId: status.sessionId,
+    message:
+      `Bağlantı kesildi; kayıt sürüyor, ses bağlantı gelince gönderilecek` +
+      (waitedSeconds > 0 ? ` (${waitedSeconds} sn bekliyor).` : '.'),
   });
 }
 
@@ -932,7 +949,10 @@ export function registerAudioIpc(): void {
           throw unconfirmedGatewayMutation(CONSENT_UNCONFIRMED_CODE, error);
         }
         assertStartupOwnerPresent(rendererId);
-        const sender = new ChunkSender(cfg, () => getValidAccessToken());
+        const uploadStatusSend = rendererSend(event);
+        const sender = new ChunkSender(cfg, () => getValidAccessToken(), {
+          onDeliveryStatus: (status) => emitChunkDeliveryStatus(uploadStatusSend, status),
+        });
         const canonicalStartedAt = new Date().toISOString();
         const startIdempotencyKey = newIdempotencyKey();
         const gatewayFinishIdempotencyKey = newIdempotencyKey();
@@ -1071,6 +1091,12 @@ export function registerAudioIpc(): void {
               ),
             onError: (streamError) => emitTranscriptError(send, sessionId, streamError),
             onDeliveryStatus: (status) => emitLiveDeliveryStatus(send, sessionId, status),
+            ...(normalizedTranscriptionMode === 'realtime'
+              ? {
+                  maxPendingFrames: REALTIME_MAX_PENDING_FRAME_COUNT,
+                  circuitCooldownLadderMs: REALTIME_CIRCUIT_COOLDOWN_LADDER_MS,
+                }
+              : {}),
           });
           startingLiveStream = liveStream;
           try {
