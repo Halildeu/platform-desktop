@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { ChunkSender } from './chunk-sender';
+import { CHUNK_OUTAGE_BUDGET_MS, type ChunkDeliveryStatus, ChunkSender } from './chunk-sender';
 import { loadGatewayConfig } from './gateway-client';
 
 const cfg = loadGatewayConfig({ GATEWAY_BASE_URL: 'https://gw.example.com' });
@@ -201,6 +201,124 @@ describe('ChunkSender (seq state machine)', () => {
     await s.start(meetingId, 'dev1');
     await s.send(new Uint8Array([1]), 0);
     expect(getJwt).toHaveBeenCalled();
+  });
+});
+
+describe('ChunkSender outage recovery (#138)', () => {
+  type ChunkReply = 'ok' | 'timeout' | 'network' | number;
+
+  function outageHarness(replies: ChunkReply[], jwts: string[] = ['JWT']) {
+    const chunkCalls: Array<{ seq: string; key: string; auth: string; body: number[] }> = [];
+    const statuses: ChunkDeliveryStatus[] = [];
+    let clock = 0;
+    const fetchMock = vi.fn(async (url: string, opts?: RequestInit) => {
+      if (url.endsWith('/sessions')) {
+        return { ok: true, json: async () => ({ sessionId: 'SES-1', sttProvider: 'internal' }) };
+      }
+      const headers = opts?.headers as Record<string, string>;
+      chunkCalls.push({
+        seq: headers['X-Audio-Chunk-Seq'],
+        key: headers['Idempotency-Key'],
+        auth: headers.Authorization,
+        body: Array.from(new Uint8Array(opts?.body as ArrayBuffer)),
+      });
+      const reply = replies.shift() ?? 'ok';
+      if (reply === 'timeout') {
+        throw Object.assign(new Error('sendChunk timed out after 15000ms'), {
+          name: 'TimeoutError',
+        });
+      }
+      if (reply === 'network') {
+        throw new TypeError('fetch failed');
+      }
+      if (typeof reply === 'number') {
+        return {
+          ok: false,
+          status: reply,
+          headers: { get: () => 'application/json' },
+          text: async () => JSON.stringify({ code: 'AUDIO_GATEWAY_TEST' }),
+        };
+      }
+      return { ok: true };
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    let jwtIndex = 0;
+    const sender = new ChunkSender(cfg, () => jwts[Math.min(jwtIndex++, jwts.length - 1)], {
+      onDeliveryStatus: (status) => statuses.push(status),
+      now: () => clock,
+      sleep: async (ms) => {
+        clock += ms;
+      },
+    });
+    return { sender, chunkCalls, statuses };
+  }
+
+  it('replays a timed-out chunk with the same seq, key and bytes, then continues', async () => {
+    const { sender, chunkCalls, statuses } = outageHarness(['timeout', 'timeout', 'ok']);
+    await sender.start(meetingId, 'dev1');
+
+    await expect(sender.send(new Uint8Array([7, 7]), 10)).resolves.toBe(0);
+    await expect(sender.send(new Uint8Array([8, 8]), 20)).resolves.toBe(1);
+
+    expect(chunkCalls.map((call) => call.seq)).toEqual(['0', '0', '0', '1']);
+    expect(new Set(chunkCalls.slice(0, 3).map((call) => call.key)).size).toBe(1);
+    expect(chunkCalls[3].key).not.toBe(chunkCalls[0].key);
+    expect(chunkCalls.slice(0, 3).every((call) => call.body.join() === '7,7')).toBe(true);
+    expect(statuses.map((status) => status.state)).toEqual(['retrying', 'retrying', 'recovered']);
+    expect(statuses[2]).toMatchObject({ sessionId: 'SES-1', seq: 0, attempts: 3 });
+  });
+
+  it('rides out a DNS/connection outage and a transient 503', async () => {
+    const { sender, chunkCalls } = outageHarness(['network', 'network', 503, 'ok']);
+    await sender.start(meetingId, 'dev1');
+
+    await expect(sender.send(new Uint8Array([1]), 10)).resolves.toBe(0);
+    expect(chunkCalls.every((call) => call.seq === '0')).toBe(true);
+  });
+
+  it('does not replay a definite rejection such as an out-of-order 409', async () => {
+    const { sender, chunkCalls, statuses } = outageHarness([409]);
+    await sender.start(meetingId, 'dev1');
+
+    await expect(sender.send(new Uint8Array([1]), 10)).rejects.toMatchObject({
+      name: 'GatewayChunkRejectedError',
+      status: 409,
+    });
+    expect(chunkCalls).toHaveLength(1);
+    expect(statuses).toEqual([]);
+    await expect(sender.send(new Uint8Array([2]), 20)).rejects.toMatchObject({ status: 409 });
+    expect(chunkCalls).toHaveLength(1);
+  });
+
+  it('gives up once the outage budget is spent and stays failed', async () => {
+    const { sender, chunkCalls } = outageHarness(Array<ChunkReply>(200).fill('timeout'));
+    await sender.start(meetingId, 'dev1');
+
+    await expect(sender.send(new Uint8Array([1]), 10)).rejects.toMatchObject({
+      name: 'TimeoutError',
+    });
+    const attempts = chunkCalls.length;
+    // 1s + 2s + 4s, then 5s steps: bounded by CHUNK_OUTAGE_BUDGET_MS.
+    expect(attempts).toBe(Math.floor((CHUNK_OUTAGE_BUDGET_MS - 7_000) / 5_000) + 4);
+    await expect(sender.send(new Uint8Array([2]), 20)).rejects.toMatchObject({
+      name: 'TimeoutError',
+    });
+    expect(chunkCalls).toHaveLength(attempts);
+  });
+
+  it('refreshes the token once on 401 but does not loop on repeated 401', async () => {
+    // The first token is consumed by session start.
+    const recovered = outageHarness([401, 'ok'], ['START', 'OLD', 'NEW']);
+    await recovered.sender.start(meetingId, 'dev1');
+    await expect(recovered.sender.send(new Uint8Array([1]), 10)).resolves.toBe(0);
+    expect(recovered.chunkCalls.map((call) => call.auth)).toEqual(['Bearer OLD', 'Bearer NEW']);
+
+    const denied = outageHarness([401, 401, 'ok']);
+    await denied.sender.start(meetingId, 'dev1');
+    await expect(denied.sender.send(new Uint8Array([1]), 10)).rejects.toMatchObject({
+      status: 401,
+    });
+    expect(denied.chunkCalls).toHaveLength(2);
   });
 });
 

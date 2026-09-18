@@ -5,6 +5,8 @@ import {
   GATEWAY_LIVE_STREAM_OPEN_MAX_WAIT_MS,
   GatewayLiveStream,
   normalizeGatewayLiveContextTerms,
+  REALTIME_CIRCUIT_COOLDOWN_LADDER_MS,
+  REALTIME_MAX_PENDING_FRAME_COUNT,
   type GatewayLiveDeliverySummary,
 } from './gateway-live-stream';
 
@@ -625,6 +627,56 @@ describe('GatewayLiveStream', () => {
     stream.close();
   });
 
+  // #138: realtime frames are 100ms, so the default 32-frame window held only
+  // ~3.2s. A 5s outage evicted speech that Speechmatics never received.
+  it('keeps a multi-second realtime outage in the replay window when sized by duration', async () => {
+    vi.useFakeTimers();
+    vi.spyOn(Math, 'random').mockReturnValue(0.5);
+    const sockets: FakeSocket[] = [];
+    const onDeliveryStatus = vi.fn();
+    const stream = new GatewayLiveStream({
+      cfg: { baseUrl: 'https://testai.acik.com' },
+      sessionId: 'SES-1',
+      getJwt: async () => 'JWT',
+      onEvent: vi.fn(),
+      onError: vi.fn(),
+      onDeliveryStatus,
+      maxPendingFrames: REALTIME_MAX_PENDING_FRAME_COUNT,
+      socketFactory: () => {
+        const socket = new FakeSocket();
+        sockets.push(socket);
+        return socket;
+      },
+    });
+
+    const started = stream.start();
+    await vi.advanceTimersByTimeAsync(0);
+    sockets[0].open();
+    sockets[0].message(JSON.stringify({ type: 'ready' }));
+    await started;
+
+    // 5 seconds of 100ms realtime frames with no acknowledgement.
+    const frame = new Uint8Array(3_200);
+    for (let index = 0; index < 50; index += 1) {
+      stream.sendRealtimeFrame(frame, 1_000 + index * 100);
+    }
+
+    // Acknowledgement watchdog (6s) plus the first jittered reconnect delay.
+    await vi.advanceTimersByTimeAsync(7_250);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(sockets).toHaveLength(2);
+    sockets[1].open();
+    sockets[1].message(JSON.stringify({ type: 'ready' }));
+    await vi.advanceTimersByTimeAsync(0);
+
+    const replayed = sockets[1].sent.filter((entry) => entry instanceof ArrayBuffer).map(frameSeq);
+    expect(replayed).toEqual(Array.from({ length: 50 }, (_, index) => index));
+    expect(onDeliveryStatus).not.toHaveBeenCalledWith(
+      expect.objectContaining({ cause: 'buffer-overflow' }),
+    );
+    stream.close();
+  });
+
   // Codex post-impl finding: tearing the socket down on every overflow is a
   // livelock. While speech continues the window can be full on EVERY frame, so
   // each fresh socket would die before it could collect an acknowledgement —
@@ -765,6 +817,49 @@ describe('GatewayLiveStream', () => {
     // One `recovering` for the episode, then one `degraded` carrying the wait.
     expect(statuses.map((s) => s.kind)).toEqual(['recovering', 'degraded']);
     expect(statuses[1].retryInMs).toBe(30_000);
+    stream.close();
+  });
+
+  // #138: on the realtime lane the replay window (~60s) is the transcript, so
+  // the first cooldown must probe long before the window starts evicting.
+  it('uses the caller cooldown ladder when the circuit opens', async () => {
+    vi.useFakeTimers();
+    vi.spyOn(Math, 'random').mockReturnValue(0.5);
+    const sockets: FakeSocket[] = [];
+    const statuses: Array<{ kind: string; retryInMs?: number }> = [];
+    const stream = new GatewayLiveStream({
+      cfg: { baseUrl: 'https://testai.acik.com' },
+      sessionId: 'SES-1',
+      getJwt: async () => 'JWT',
+      onEvent: vi.fn(),
+      onError: vi.fn(),
+      onDeliveryStatus: (status) => statuses.push(status),
+      circuitCooldownLadderMs: REALTIME_CIRCUIT_COOLDOWN_LADDER_MS,
+      socketFactory: () => {
+        const socket = new FakeSocket();
+        sockets.push(socket);
+        return socket;
+      },
+    });
+
+    const started = stream.start();
+    await vi.advanceTimersByTimeAsync(0);
+    sockets[0].open();
+    sockets[0].message(JSON.stringify({ type: 'ready' }));
+    await started;
+    stream.sendAfterRestAccepted(new Uint8Array([0, 0]), 0, 1);
+
+    for (let recovery = 1; recovery <= 3; recovery += 1) {
+      await vi.advanceTimersByTimeAsync(9_000);
+      await vi.advanceTimersByTimeAsync(0);
+      sockets[recovery].open();
+      sockets[recovery].message(JSON.stringify({ type: 'ready' }));
+      await vi.advanceTimersByTimeAsync(0);
+    }
+    await vi.advanceTimersByTimeAsync(9_000);
+
+    expect(statuses.map((s) => s.kind)).toEqual(['recovering', 'degraded']);
+    expect(statuses[1].retryInMs).toBe(5_000);
     stream.close();
   });
 

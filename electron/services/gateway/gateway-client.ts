@@ -266,6 +266,20 @@ export class GatewaySessionFinishRejectedError extends Error {
   }
 }
 
+export class GatewayChunkRejectedError extends Error {
+  readonly status: number;
+  readonly code: string | null;
+  readonly retryable: boolean | null;
+
+  constructor(details: GatewayHttpErrorDetails, status: number, seq: number) {
+    super(`${details.message} (seq=${seq})`);
+    this.name = 'GatewayChunkRejectedError';
+    this.status = status;
+    this.code = details.code;
+    this.retryable = details.retryable;
+  }
+}
+
 function requiredGatewayIdentifier(value: unknown, label: string): string {
   if (typeof value !== 'string' || !/^[A-Za-z0-9._:-]{1,128}$/.test(value)) {
     throw new Error(`${label} is invalid`);
@@ -518,7 +532,11 @@ export async function sendChunk(
         async (res) => {
           responseObserved = true;
           if (!res.ok) {
-            throw new Error(`${await httpErrorMessage(res, 'sendChunk')} (seq=${chunk.seq})`);
+            throw new GatewayChunkRejectedError(
+              await httpErrorDetails(res, 'sendChunk'),
+              res.status,
+              chunk.seq,
+            );
           }
         },
         Math.max(1, deadline - performance.now()),

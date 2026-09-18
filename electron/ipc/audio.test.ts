@@ -166,6 +166,8 @@ vi.mock('../services/gateway/transcript-event-subscription', () => ({
 
 vi.mock('../services/gateway/gateway-live-stream', () => ({
   GATEWAY_LIVE_SAMPLE_RATE_HZ: 16_000,
+  REALTIME_MAX_PENDING_FRAME_COUNT: 600,
+  REALTIME_CIRCUIT_COOLDOWN_LADDER_MS: [5_000, 15_000, 30_000, 60_000, 120_000, 300_000],
   normalizeGatewayLiveContextTerms: (value: unknown) =>
     Array.isArray(value) ? value.map(String) : [],
   GatewayLiveStream: class MockGatewayLiveStream {
@@ -923,6 +925,13 @@ describe('audio IPC recorder consent gate', () => {
       'speechmatics',
       'realtime',
       [],
+    );
+    // #138: realtime frames are 100ms, so the replay window is sized by duration.
+    expect(mocks.gatewayLiveStreamCtor).toHaveBeenCalledWith(
+      expect.objectContaining({
+        maxPendingFrames: 600,
+        circuitCooldownLadderMs: expect.arrayContaining([5_000]),
+      }),
     );
     const restBytes = new Uint8Array([0, 0]);
     await chunkHandler()(

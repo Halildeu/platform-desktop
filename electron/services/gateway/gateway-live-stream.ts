@@ -20,6 +20,19 @@ const STOP_TIMEOUT_TRANSPORT_MARGIN_MS = 5_000;
 const STOP_QUIET_MS = 1_250;
 const MAX_PENDING_FRAME_COUNT = 32;
 const MAX_PENDING_AUDIO_BYTES = 2 * 1024 * 1024;
+// #138: the 32-frame window was sized for 2s REST chunks (~64s). Realtime
+// frames are 100ms, where 32 frames held only ~3.2s, so a few seconds of
+// network loss evicted speech that is the only STT input for Speechmatics.
+// Realtime sizes the window by duration instead; the byte bound (~62s of
+// 16 kHz mono PCM16 plus frame headers) still caps memory.
+export const REALTIME_MAX_PENDING_FRAME_COUNT = 600;
+// #138: the default ladder starts at 30s, so after three quick failures during a
+// short outage the lane waited half the replay window before probing again. On
+// the realtime (Speechmatics) lane the backlog is the transcript itself, so the
+// probe cadence must stay well inside the ~60s window before it widens.
+export const REALTIME_CIRCUIT_COOLDOWN_LADDER_MS = [
+  5_000, 15_000, 30_000, 60_000, 120_000, 300_000,
+] as const;
 const SOCKET_BUFFER_HIGH_WATER_BYTES = 512 * 1024;
 const SOCKET_BUFFER_LOW_WATER_BYTES = 128 * 1024;
 const BACKPRESSURE_RETRY_MS = 25;
@@ -233,6 +246,10 @@ export interface GatewayLiveStreamOptions {
   onError: (error: Error) => void;
   onDeliveryStatus?: (status: GatewayLiveDeliveryStatus) => void;
   socketFactory?: GatewaySocketFactory;
+  /** Replay window in frames; defaults to 32 (sized for 2s REST chunks). */
+  maxPendingFrames?: number;
+  /** Circuit cooldowns after immediate retries; defaults to 30s..300s. */
+  circuitCooldownLadderMs?: readonly number[];
 }
 
 export function normalizeGatewayLiveContextTerms(value: unknown): string[] {
@@ -433,9 +450,12 @@ function immediateRecoveryDelay(attempt: number): number {
   return jitter(IMMEDIATE_RECOVERY_DELAYS_MS[index]);
 }
 
-function cooldownDelay(level: number): number {
-  const index = Math.min(Math.max(level, 0), CIRCUIT_COOLDOWN_LADDER_MS.length - 1);
-  return jitter(CIRCUIT_COOLDOWN_LADDER_MS[index]);
+function cooldownDelay(
+  level: number,
+  ladder: readonly number[] = CIRCUIT_COOLDOWN_LADDER_MS,
+): number {
+  const index = Math.min(Math.max(level, 0), ladder.length - 1);
+  return jitter(ladder[index]);
 }
 
 /**
@@ -894,7 +914,7 @@ export class GatewayLiveStream {
     // Insertion order is ascending sequence, so the first key is the oldest.
     while (
       this.pendingFrames.size > 0 &&
-      (this.pendingFrames.size >= MAX_PENDING_FRAME_COUNT ||
+      (this.pendingFrames.size >= (this.options.maxPendingFrames ?? MAX_PENDING_FRAME_COUNT) ||
         this.pendingAudioBytes + byteLength > MAX_PENDING_AUDIO_BYTES)
     ) {
       const oldest = this.pendingFrames.keys().next();
@@ -1235,8 +1255,9 @@ export class GatewayLiveStream {
    * minutes; a recovered one resumes on the next frame after the cooldown.
    */
   private openCircuit(cause: GatewayLiveDeliveryCause, episodeId: number): void {
-    this.cooldownLevel = Math.min(this.cooldownLevel + 1, CIRCUIT_COOLDOWN_LADDER_MS.length);
-    const waitMs = cooldownDelay(this.cooldownLevel - 1);
+    const ladder = this.options.circuitCooldownLadderMs ?? CIRCUIT_COOLDOWN_LADDER_MS;
+    this.cooldownLevel = Math.min(this.cooldownLevel + 1, ladder.length);
+    const waitMs = cooldownDelay(this.cooldownLevel - 1, ladder);
     this.delivery = {
       kind: 'degraded',
       cause,
