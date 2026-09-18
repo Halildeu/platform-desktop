@@ -950,6 +950,10 @@ function App() {
         ? canonicalRunBeforeRecordingRef.current
         : null;
     void loadCanonicalMeetingResult(meetingIntelligence.meetingId, {
+      // gitops#3434: right after Bitir the result is produced by the durable
+      // transcript.ready pipeline. Poll for it directly instead of firing the
+      // legacy /analyze call, which meeting-service always rejects with 422.
+      pollUntilReady: meetingIntelligenceStatusRef.current === 'waiting',
       previousAnalysisRunId: recordingBaseline?.analysisRunId ?? null,
       generatedNotBeforeMs: recordingBaseline?.recordingStartedAtMs ?? null,
     });
@@ -2254,7 +2258,6 @@ function App() {
               <SummaryPanel
                 intelligence={meetingIntelligence}
                 transcript={transcriptSession}
-                autoSubmitMeetingAi={meetingIntelligence.status === 'waiting'}
                 canonicalResultStatus={canonicalResultStatus}
                 canonicalResultError={canonicalResultError}
                 canonicalResultAutoRetrying={canonicalResultRetryReason !== 'disabled'}

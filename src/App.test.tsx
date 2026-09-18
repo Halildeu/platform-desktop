@@ -2298,12 +2298,12 @@ describe('App canonical Meeting Intelligence read', () => {
     });
     fireEvent.click(screen.getByRole('button', { name: 'Bitir' }));
 
-    await waitFor(() => {
-      expect(window.electronAPI?.meeting.analyze).toHaveBeenCalledTimes(1);
-    });
     expect(
       await screen.findByText('Yeni kayıt için kalıcı toplantı özeti.', {}, { timeout: 3_000 }),
     ).toBeInTheDocument();
+    // gitops#3434: Bitir no longer fires the legacy /analyze (always 422 in
+    // durable mode); the result comes from polling the durable pipeline.
+    expect(window.electronAPI?.meeting.analyze).not.toHaveBeenCalled();
     expect(window.electronAPI?.meeting.getIntelligenceResult).toHaveBeenCalledTimes(3);
     expect(screen.queryByText('Kalıcı toplantı özeti yüklendi.')).not.toBeInTheDocument();
   });
