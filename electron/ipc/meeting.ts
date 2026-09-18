@@ -24,12 +24,30 @@ import {
   type MeetingContract,
   type MeetingIntelligenceReadOutcome,
   type RecentMeetingsPage,
+  type RecentMeetingsQuery,
 } from '../services/meeting/meeting-client.js';
 import { getValidAccessToken } from './auth.js';
 import {
   parseTranscriptRequest,
   readCanonicalTranscript,
 } from '../services/meeting/canonical-transcript.js';
+
+function parseRecentMeetingsQuery(value: unknown): RecentMeetingsQuery {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('meeting list query is invalid');
+  }
+  const { page, title } = value as Record<string, unknown>;
+  if (page !== undefined && (!Number.isSafeInteger(page) || (page as number) < 0)) {
+    throw new Error('meeting list page is invalid');
+  }
+  if (title !== undefined && typeof title !== 'string') {
+    throw new Error('meeting list title is invalid');
+  }
+  return {
+    ...(page === undefined ? {} : { page: page as number }),
+    ...(title === undefined ? {} : { title }),
+  };
+}
 
 // Faz 24 İ3 — live-analysis SSE subscribers, keyed by meetingId. One
 // subscriber per meeting; a second start for the same meeting is idempotent
@@ -290,9 +308,16 @@ export function registerMeetingIpc(): void {
       return createMeetingContract(loadMeetingConfig(), await getValidAccessToken(), args);
     },
   );
-  ipcMain.handle('meeting:list-recent', async (): Promise<RecentMeetingsPage> => {
-    return listRecentMeetings(loadMeetingConfig(), await getValidAccessToken());
-  });
+  ipcMain.handle(
+    'meeting:list-recent',
+    async (_e, payload?: unknown): Promise<RecentMeetingsPage> => {
+      if (payload === undefined) {
+        return listRecentMeetings(loadMeetingConfig(), await getValidAccessToken());
+      }
+      const query = parseRecentMeetingsQuery(payload);
+      return listRecentMeetings(loadMeetingConfig(), await getValidAccessToken(), undefined, query);
+    },
+  );
   ipcMain.handle(
     'meeting:analyze',
     async (_e, payload: unknown): Promise<MeetingAiAnalyzeResponse> => {

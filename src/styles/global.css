@@ -661,6 +661,36 @@ button:disabled {
   outline: none;
 }
 
+.meeting-result-picker-search {
+  display: flex;
+  gap: 6px;
+  margin-top: 12px;
+  min-width: 0;
+}
+
+.meeting-result-picker-search input {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 34px;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  background: #ffffff;
+  color: #17202a;
+  font: inherit;
+  padding: 0 10px;
+}
+
+.meeting-result-picker-search input:focus {
+  border-color: #0f766e;
+  box-shadow: 0 0 0 3px rgba(15, 118, 110, 0.12);
+  outline: none;
+}
+
+.meeting-result-picker-more {
+  margin-top: 8px;
+  width: 100%;
+}
+
 .meeting-targets {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

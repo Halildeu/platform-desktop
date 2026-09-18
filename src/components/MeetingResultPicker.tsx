@@ -1,3 +1,5 @@
+import { useEffect, useState } from 'react';
+
 import type { RecentMeetingSummary } from '../../electron/services/meeting/meeting-client';
 
 export type RecentMeetingsStatus = 'idle' | 'loading' | 'ready' | 'error';
@@ -12,6 +14,11 @@ interface MeetingResultPickerProps {
   selectionLocked: boolean;
   onSelect: (meetingId: string) => void;
   onRefresh: () => void;
+  /** Next page from meeting-service; absent = no paging (older callers). */
+  onLoadMore?: () => void;
+  /** Active title filter, echoed back so the field shows what the list means. */
+  titleQuery?: string;
+  onSearch?: (title: string) => void;
 }
 
 function shortMeetingId(meetingId: string | null): string {
@@ -43,7 +50,15 @@ export function MeetingResultPicker({
   selectionLocked,
   onSelect,
   onRefresh,
+  onLoadMore,
+  titleQuery = '',
+  onSearch,
 }: MeetingResultPickerProps) {
+  const [searchDraft, setSearchDraft] = useState(titleQuery);
+  useEffect(() => {
+    setSearchDraft(titleQuery);
+  }, [titleQuery]);
+  const remaining = Math.max(0, totalElements - meetings.length);
   const selectedIsListed = meetings.some((meeting) => meeting.id === selectedMeetingId);
   const targetsDiffer =
     Boolean(selectedMeetingId) &&
@@ -57,7 +72,7 @@ export function MeetingResultPicker({
           <h2 id="meeting-result-picker-title">Toplantı listesi</h2>
           <p>
             {status === 'ready'
-              ? `${meetings.length} gösteriliyor${
+              ? `${titleQuery ? `“${titleQuery}” için ` : ''}${meetings.length} gösteriliyor${
                   totalElements > meetings.length ? ` · toplam ${totalElements}` : ''
                 }`
               : 'Kalıcı sonuçlar'}
@@ -78,6 +93,44 @@ export function MeetingResultPicker({
         <p className="meeting-result-picker-error" role="alert">
           {error ?? 'Toplantılar alınamadı.'}
         </p>
+      ) : null}
+
+      {onSearch ? (
+        <form
+          className="meeting-result-picker-search"
+          role="search"
+          onSubmit={(event) => {
+            event.preventDefault();
+            onSearch(searchDraft);
+          }}
+        >
+          <input
+            type="search"
+            aria-label="Toplantı başlığında ara"
+            placeholder="Başlıkta ara"
+            maxLength={100}
+            value={searchDraft}
+            onChange={(event) => setSearchDraft(event.target.value)}
+            disabled={selectionLocked}
+          />
+          <button
+            className="secondary-action compact-action"
+            type="submit"
+            disabled={selectionLocked || status === 'loading'}
+          >
+            Ara
+          </button>
+          {titleQuery ? (
+            <button
+              className="secondary-action compact-action"
+              type="button"
+              onClick={() => onSearch('')}
+              disabled={selectionLocked || status === 'loading'}
+            >
+              Temizle
+            </button>
+          ) : null}
+        </form>
       ) : null}
 
       <label className="meeting-result-picker-field">
@@ -111,6 +164,17 @@ export function MeetingResultPicker({
           ))}
         </select>
       </label>
+
+      {onLoadMore && status !== 'error' && remaining > 0 ? (
+        <button
+          className="secondary-action compact-action meeting-result-picker-more"
+          type="button"
+          onClick={onLoadMore}
+          disabled={selectionLocked || status === 'loading'}
+        >
+          {status === 'loading' ? 'Yükleniyor...' : `Daha fazla yükle (${remaining} daha)`}
+        </button>
+      ) : null}
 
       {selectedMeetingId ? (
         <details className="meeting-target-details">

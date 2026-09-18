@@ -22,6 +22,60 @@ const MEETING = {
 afterEach(cleanup);
 
 describe('MeetingResultPicker', () => {
+  it('offers the rest of the list and a title search beyond the first page', () => {
+    const onLoadMore = vi.fn();
+    const onSearch = vi.fn();
+    render(
+      <MeetingResultPicker
+        meetings={[MEETING]}
+        status="ready"
+        error={null}
+        totalElements={287}
+        selectedMeetingId={null}
+        recordingMeetingId={null}
+        selectionLocked={false}
+        onSelect={vi.fn()}
+        onRefresh={vi.fn()}
+        onLoadMore={onLoadMore}
+        onSearch={onSearch}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Daha fazla yükle (286 daha)' }));
+    expect(onLoadMore).toHaveBeenCalledTimes(1);
+
+    fireEvent.change(screen.getByRole('searchbox', { name: 'Toplantı başlığında ara' }), {
+      target: { value: 'test2persembe' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Ara' }));
+    expect(onSearch).toHaveBeenCalledWith('test2persembe');
+  });
+
+  it('shows the active filter and clears it', () => {
+    const onSearch = vi.fn();
+    render(
+      <MeetingResultPicker
+        meetings={[MEETING]}
+        status="ready"
+        error={null}
+        totalElements={1}
+        selectedMeetingId={null}
+        recordingMeetingId={null}
+        selectionLocked={false}
+        onSelect={vi.fn()}
+        onRefresh={vi.fn()}
+        onLoadMore={vi.fn()}
+        titleQuery="Kalıcı"
+        onSearch={onSearch}
+      />,
+    );
+
+    expect(screen.getByText('“Kalıcı” için 1 gösteriliyor')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Daha fazla yükle/ })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Temizle' }));
+    expect(onSearch).toHaveBeenCalledWith('');
+  });
+
   it('renders bounded meeting metadata and keeps viewer and recorder targets explicit', () => {
     const onSelect = vi.fn();
     render(

@@ -96,6 +96,22 @@ describe('meeting result IPC boundary', () => {
       'JWT',
     );
   });
+
+  it('forwards a validated page and title query, and rejects malformed input', async () => {
+    const handler = mocks.handlers.get('meeting:list-recent');
+
+    await handler?.({}, { page: 2, title: 'test2persembe' });
+    expect(mocks.listRecentMeetings).toHaveBeenLastCalledWith(
+      { baseUrl: 'https://testai.acik.com' },
+      'JWT',
+      undefined,
+      { page: 2, title: 'test2persembe' },
+    );
+    await expect(handler?.({}, { page: -1 })).rejects.toThrow('meeting list page is invalid');
+    await expect(handler?.({}, { page: 1.5 })).rejects.toThrow('meeting list page is invalid');
+    await expect(handler?.({}, { title: 7 })).rejects.toThrow('meeting list title is invalid');
+    await expect(handler?.({}, 'x')).rejects.toThrow('meeting list query is invalid');
+  });
 });
 
 // ── Faz 24 Görevler dilim-3 (gitops#3486): action-create / assignee-search ──

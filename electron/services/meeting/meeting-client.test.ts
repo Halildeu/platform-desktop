@@ -138,6 +138,36 @@ describe('meeting-client', () => {
     );
   });
 
+  it('reaches later pages and searches titles (list stopped at the newest 20)', () => {
+    const cfg = loadMeetingConfig({ MEETING_BASE_URL: 'https://testai.acik.com' });
+    expect(recentMeetingsUrl(cfg, 20, { page: 3 })).toBe(
+      'https://testai.acik.com/api/v1/admin/meetings?page=3&size=20',
+    );
+    expect(recentMeetingsUrl(cfg, 20, { title: '  test2 perşembe & ?x ' })).toBe(
+      'https://testai.acik.com/api/v1/admin/meetings?page=0&size=20&title=test2%20per%C5%9Fembe%20%26%20%3Fx',
+    );
+    expect(recentMeetingsUrl(cfg, 20, { page: -4, title: '   ' })).toBe(
+      'https://testai.acik.com/api/v1/admin/meetings?page=0&size=20',
+    );
+    expect(() => recentMeetingsUrl(cfg, 20, { title: 'x'.repeat(101) })).toThrow(
+      'meeting title search is too long',
+    );
+  });
+
+  it('accepts the requested page and rejects a mismatched one', () => {
+    const fixture = {
+      content: [],
+      page: 2,
+      size: 20,
+      totalElements: 287,
+      totalPages: 15,
+    };
+    expect(parseRecentMeetingsPage(fixture, 2)).toMatchObject({ page: 2, totalElements: 287 });
+    expect(() => parseRecentMeetingsPage(fixture)).toThrow(
+      'meeting list response pagination metadata is invalid',
+    );
+  });
+
   it('lists allowlisted recent meeting metadata with bearer auth and no-store', async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,

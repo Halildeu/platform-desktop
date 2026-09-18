@@ -644,6 +644,10 @@ function App() {
   const [recentMeetingsStatus, setRecentMeetingsStatus] = useState<RecentMeetingsStatus>('idle');
   const [recentMeetingsError, setRecentMeetingsError] = useState<string | null>(null);
   const [recentMeetingsTotal, setRecentMeetingsTotal] = useState(0);
+  const [recentMeetingsTitleQuery, setRecentMeetingsTitleQuery] = useState('');
+  // The list used to fetch page 0 only: meetings past the newest 20 were unreachable.
+  const recentMeetingsPageRef = useRef(0);
+  const recentMeetingsTitleRef = useRef('');
   const [canonicalResultStatus, setCanonicalResultStatus] =
     useState<CanonicalResultLoadStatus>('idle');
   const [canonicalResultError, setCanonicalResultError] = useState<string | null>(null);
@@ -864,17 +868,38 @@ function App() {
   );
 
   const loadRecentMeetings = useCallback(
-    async (preserveMeeting: RecentMeetingSummary | null = null): Promise<void> => {
+    async (
+      preserveMeeting: RecentMeetingSummary | null = null,
+      options: { append?: boolean } = {},
+    ): Promise<void> => {
       const readSequence = recentMeetingsReadSequenceRef.current + 1;
       recentMeetingsReadSequenceRef.current = readSequence;
       setRecentMeetingsStatus('loading');
       setRecentMeetingsError(null);
+      const targetPage = options.append ? recentMeetingsPageRef.current + 1 : 0;
+      const title = recentMeetingsTitleRef.current;
       try {
-        const page = await window.electronAPI?.meeting.listRecent();
+        const page =
+          targetPage === 0 && title === ''
+            ? await window.electronAPI?.meeting.listRecent()
+            : await window.electronAPI?.meeting.listRecent({
+                page: targetPage,
+                ...(title === '' ? {} : { title }),
+              });
         if (!page) {
           throw new Error('Electron meeting list bridge yanıt vermedi');
         }
         if (recentMeetingsReadSequenceRef.current !== readSequence) {
+          return;
+        }
+        recentMeetingsPageRef.current = targetPage;
+        if (options.append) {
+          setRecentMeetings((current) => {
+            const known = new Set(current.map((meeting) => meeting.id));
+            return [...current, ...page.meetings.filter((meeting) => !known.has(meeting.id))];
+          });
+          setRecentMeetingsTotal(page.totalElements);
+          setRecentMeetingsStatus('ready');
           return;
         }
         const meetings =
@@ -2148,6 +2173,14 @@ function App() {
                 }
                 onSelect={handleMeetingResultSelect}
                 onRefresh={() => void loadRecentMeetings()}
+                onLoadMore={() => void loadRecentMeetings(null, { append: true })}
+                titleQuery={recentMeetingsTitleQuery}
+                onSearch={(title) => {
+                  const normalized = title.trim();
+                  recentMeetingsTitleRef.current = normalized;
+                  setRecentMeetingsTitleQuery(normalized);
+                  void loadRecentMeetings();
+                }}
               />
             ) : null}
             {loggedIn ? (
