@@ -130,6 +130,9 @@ function setUserAgent(userAgent: string): void {
 
 function installElectronApiMock(): void {
   window.electronAPI = {
+    export: {
+      savePdf: vi.fn(),
+    },
     app: {
       getVersion: vi.fn(),
       getAutoLaunch: vi.fn(),

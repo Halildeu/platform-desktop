@@ -152,6 +152,8 @@ export interface ExportBundle {
   markdownFileName: string;
   csvFileName: string;
   integrationJsonFileName: string;
+  pdfHtml: string;
+  pdfFileName: string;
 }
 
 const STATUS_LABELS: Record<IntelligenceStatus, string> = {
@@ -326,6 +328,8 @@ export function buildIntelligenceExport(
     markdownFileName: `meeting-intelligence-${safeMeetingId}-${stamp}.md`,
     csvFileName: `meeting-intelligence-actions-${safeMeetingId}-${stamp}.csv`,
     integrationJsonFileName: `meeting-output-integration-${safeMeetingId}-${stamp}.json`,
+    pdfHtml: buildPdfHtml(state),
+    pdfFileName: `meeting-intelligence-${safeMeetingId}-${stamp}.pdf`,
   };
 }
 
@@ -628,8 +632,13 @@ function buildCsv(result: MeetingIntelligenceResult): string {
       item.citations.map(formatCitationTime).join('; '),
     ]),
   ];
-  return `${rows.map((row) => row.map(csvCell).join(',')).join('\n')}\n`;
+  // #5: Excel opened the file as ANSI (no BOM) and, on a Turkish Windows whose
+  // list separator is ';', put every row into column A. UTF-8 BOM + ';' opens
+  // correctly with a double-click there; CRLF is the line ending Excel writes.
+  return `${CSV_UTF8_BOM}${rows.map((row) => row.map(csvCell).join(';')).join('\r\n')}\r\n`;
 }
+
+const CSV_UTF8_BOM = '﻿';
 
 function buildIntegrationJson(
   state: MeetingIntelligenceState,
@@ -974,10 +983,76 @@ function citationSuffix(citations: IntelligenceCitation[]): string {
 }
 
 function csvCell(value: string): string {
-  if (!/[",\n\r]/.test(value)) {
+  if (!/[";\n\r]/.test(value)) {
     return value;
   }
   return `"${value.replace(/"/g, '""')}"`;
+}
+
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function citationLabels(citations: IntelligenceCitation[]): string {
+  return citations.length === 0 ? 'kaynak yok' : citations.map(formatCitationTime).join(', ');
+}
+
+function buildPdfHtml(state: MeetingIntelligenceState): string {
+  const result = state.result;
+  if (!result) {
+    throw new Error('Meeting intelligence output is not ready');
+  }
+  const cell = (value: string | null | undefined): string => `<td>${escapeHtml(value ?? '')}</td>`;
+  const decisionRows = result.decisions
+    .map(
+      (decision) =>
+        `<tr>${cell(decision.title)}${cell(decision.owner)}${cell(
+          decisionStatusLabel(decision.status),
+        )}${cell(citationLabels(decision.citations))}</tr>`,
+    )
+    .join('');
+  const actionRows = result.actionItems
+    .map(
+      (item) =>
+        `<tr>${cell(item.title)}${cell(item.assignee)}${cell(item.dueDate)}${cell(
+          actionStatusLabel(item.status),
+        )}${cell(citationLabels(item.citations))}</tr>`,
+    )
+    .join('');
+  const summary = result.summaryMarkdown.trim() || 'Özet yok.';
+  return [
+    '<!doctype html><html lang="tr"><head><meta charset="utf-8">',
+    '<meta http-equiv="Content-Security-Policy" content="default-src \'none\'; style-src \'unsafe-inline\'">',
+    '<title>Meeting Intelligence</title><style>',
+    'body{font-family:"Segoe UI",Arial,sans-serif;font-size:11pt;color:#111;margin:0}',
+    'h1{font-size:18pt;margin:0 0 6pt}h2{font-size:13pt;margin:16pt 0 6pt}',
+    '.meta{color:#555;font-size:9pt;margin:0 0 2pt}',
+    'p.summary{white-space:pre-wrap;line-height:1.45}',
+    'table{width:100%;border-collapse:collapse;font-size:10pt}',
+    'th,td{border:1px solid #bbb;padding:4pt 6pt;text-align:left;vertical-align:top}',
+    'th{background:#eef2f1}.empty{color:#666;font-style:italic}',
+    '</style></head><body>',
+    '<h1>Meeting Intelligence</h1>',
+    `<p class="meta">Toplantı: ${escapeHtml(state.meetingId ?? '-')}</p>`,
+    `<p class="meta">Üretim: ${escapeHtml(new Date(result.generatedAtMs).toISOString())}</p>`,
+    result.providerLabel ? `<p class="meta">Üretici: ${escapeHtml(result.providerLabel)}</p>` : '',
+    '<h2>Özet</h2>',
+    `<p class="summary">${escapeHtml(summary)}</p>`,
+    '<h2>Kararlar</h2>',
+    decisionRows
+      ? `<table><thead><tr><th>Karar</th><th>Sahip</th><th>Durum</th><th>Kaynak</th></tr></thead><tbody>${decisionRows}</tbody></table>`
+      : '<p class="empty">Karar yok.</p>',
+    '<h2>Aksiyonlar</h2>',
+    actionRows
+      ? `<table><thead><tr><th>Aksiyon</th><th>Sahip</th><th>Tarih</th><th>Durum</th><th>Kaynak</th></tr></thead><tbody>${actionRows}</tbody></table>`
+      : '<p class="empty">Aksiyon yok.</p>',
+    '</body></html>',
+  ].join('');
 }
 
 function safeFilePart(value: string): string {

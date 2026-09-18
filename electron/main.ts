@@ -30,6 +30,7 @@ import { fileURLToPath } from 'node:url';
 
 import { registerAudioIpc } from './ipc/audio.js';
 import { registerAuthIpc } from './ipc/auth.js';
+import { registerExportIpc } from './ipc/export.js';
 import { registerMeetingIpc, stopAllLiveAnalysisSubscribers } from './ipc/meeting.js';
 import { isAutoLaunchEnabled, setAutoLaunchEnabled } from './services/auto-launch.js';
 import { initAutoUpdate } from './services/auto-update.js';
@@ -247,6 +248,7 @@ void app.whenReady().then(() => {
   registerAuthIpc(); // #1 auth:login / auth:status / auth:logout
   registerMeetingIpc(); // Faz 24 meeting-service contract create
   registerAudioIpc(); // #2 audio:start / audio:chunk / audio:finish
+  registerExportIpc(); // #5 export:save-pdf
   createMainWindow();
   initAutoUpdate(); // #11 — no-op outside a packaged build
 
