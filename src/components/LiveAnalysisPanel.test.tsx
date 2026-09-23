@@ -208,6 +208,49 @@ describe('<LiveAnalysisPanel /> görev atama', () => {
     expect(screen.getByRole('button', { name: 'Görev oluştur' })).toBeInTheDocument();
   });
 
+  // gitops#3587: a lookup that fails and a lookup that matches nobody used to
+  // render the same empty form, which is how the reported regression stayed
+  // undiagnosed.
+  it('separates a failed assignee lookup from an empty one', async () => {
+    const api = makeStubApi();
+    const tasksApi: LiveTasksApi = {
+      createAction: vi.fn(),
+      searchAssignees: vi.fn().mockRejectedValue(new Error('searchAssignees failed: 403')),
+    };
+    render(<LiveAnalysisPanel meetingId={MEETING_A} api={api} tasksApi={tasksApi} />);
+    fireActionFrame(api);
+    await waitFor(() => expect(screen.getByText('Raporu Zeynep hazırlayacak')).toBeInTheDocument());
+
+    await userEvent.click(screen.getByRole('button', { name: 'Göreve ata' }));
+    await userEvent.type(screen.getByLabelText('Atanacak kişiyi ara'), 'sevil');
+    await userEvent.click(screen.getByRole('button', { name: 'Ara' }));
+
+    await waitFor(() =>
+      expect(screen.getByText(/Kişi araması yapılamadı: .*403/)).toBeInTheDocument(),
+    );
+    expect(screen.queryByText(/kişi bulunamadı/i)).not.toBeInTheDocument();
+    // The action stays assignable without an owner.
+    expect(screen.getByRole('button', { name: 'Görev oluştur' })).toBeInTheDocument();
+  });
+
+  it('says so when the directory matches nobody', async () => {
+    const api = makeStubApi();
+    const tasksApi: LiveTasksApi = {
+      createAction: vi.fn(),
+      searchAssignees: vi.fn().mockResolvedValue([]),
+    };
+    render(<LiveAnalysisPanel meetingId={MEETING_A} api={api} tasksApi={tasksApi} />);
+    fireActionFrame(api);
+    await waitFor(() => expect(screen.getByText('Raporu Zeynep hazırlayacak')).toBeInTheDocument());
+
+    await userEvent.click(screen.getByRole('button', { name: 'Göreve ata' }));
+    await userEvent.type(screen.getByLabelText('Atanacak kişiyi ara'), 'sevil');
+    await userEvent.click(screen.getByRole('button', { name: 'Ara' }));
+
+    await waitFor(() => expect(screen.getByText(/kişi bulunamadı/i)).toBeInTheDocument());
+    expect(screen.queryByText(/Kişi araması yapılamadı/)).not.toBeInTheDocument();
+  });
+
   it('hides the assign affordance when no tasks API bridge exists', async () => {
     const api = makeStubApi();
     render(<LiveAnalysisPanel meetingId={MEETING_A} api={api} />);
