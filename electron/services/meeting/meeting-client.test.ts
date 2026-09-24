@@ -911,33 +911,43 @@ describe('assignee directory lookup', () => {
     vi.unstubAllGlobals();
   });
 
-  it('returns readable options when the directory answers with numeric ids', async () => {
+  const CANDIDATES_URL = `https://testai.acik.com/api/v1/admin/meetings/${MEETING_ID}/assignee-candidates/search`;
+
+  // gitops#3834: the admin user grid (GET /api/v1/users, USER_READ) 403s for every
+  // non-admin; the picker asks the meeting-scoped, least-privilege endpoint instead.
+  it('asks the meeting-scoped picker with the text in a POST body', async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
       status: 200,
       json: async () => ({
-        content: [{ id: 42, name: 'Sevil Karakaş', email: 'sevil@acik.com' }],
+        items: [{ userId: 42, name: 'Sevil Karakaş', email: 'sevil@acik.com' }],
       }),
       headers: new Headers({ 'content-type': 'application/json' }),
     });
     vi.stubGlobal('fetch', fetchMock);
 
     await expect(
-      searchAssignees({ baseUrl: 'https://testai.acik.com' }, 'JWT', 'sevil'),
+      searchAssignees({ baseUrl: 'https://testai.acik.com' }, 'JWT', MEETING_ID, 'sevil'),
     ).resolves.toEqual([{ userId: 42, label: 'Sevil Karakaş (sevil@acik.com)' }]);
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe(CANDIDATES_URL);
+    expect(init.method).toBe('POST');
+    expect(new Headers(init.headers).get('Authorization')).toBe('Bearer JWT');
+    expect(JSON.parse(String(init.body))).toEqual({ query: 'sevil', limit: 10 });
+    expect(url).not.toContain('sevil');
   });
 
   it('keeps a genuine no-match as an empty list', async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
       status: 200,
-      json: async () => ({ content: [] }),
+      json: async () => ({ items: [] }),
       headers: new Headers({ 'content-type': 'application/json' }),
     });
     vi.stubGlobal('fetch', fetchMock);
 
     await expect(
-      searchAssignees({ baseUrl: 'https://testai.acik.com' }, 'JWT', 'yokboyle'),
+      searchAssignees({ baseUrl: 'https://testai.acik.com' }, 'JWT', MEETING_ID, 'yokboyle'),
     ).resolves.toEqual([]);
   });
 
@@ -946,14 +956,14 @@ describe('assignee directory lookup', () => {
       ok: true,
       status: 200,
       json: async () => ({
-        content: [{ id: 'kc-subject-uuid', name: 'Sevil Karakaş' }],
+        items: [{ userId: 'kc-subject-uuid', name: 'Sevil Karakaş' }],
       }),
       headers: new Headers({ 'content-type': 'application/json' }),
     });
     vi.stubGlobal('fetch', fetchMock);
 
     await expect(
-      searchAssignees({ baseUrl: 'https://testai.acik.com' }, 'JWT', 'sevil'),
+      searchAssignees({ baseUrl: 'https://testai.acik.com' }, 'JWT', MEETING_ID, 'sevil'),
     ).rejects.toThrow('1 kayıt döndü ancak beklenen alanlar (sayısal id) okunamadı');
   });
 
@@ -968,7 +978,17 @@ describe('assignee directory lookup', () => {
     vi.stubGlobal('fetch', fetchMock);
 
     await expect(
-      searchAssignees({ baseUrl: 'https://testai.acik.com' }, 'JWT', 'sevil'),
+      searchAssignees({ baseUrl: 'https://testai.acik.com' }, 'JWT', MEETING_ID, 'sevil'),
     ).rejects.toThrow(/403/);
+  });
+
+  it('refuses a non-canonical meeting id before any request', async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(
+      searchAssignees({ baseUrl: 'https://testai.acik.com' }, 'JWT', '../users', 'sevil'),
+    ).rejects.toThrow();
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });

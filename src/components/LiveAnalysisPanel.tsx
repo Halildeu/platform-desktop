@@ -40,7 +40,10 @@ export interface LiveTasksApi {
     assigneeUserId?: number | null;
     dueAt?: string | null;
   }): Promise<{ id: string }>;
-  searchAssignees(payload: { query: string }): Promise<Array<{ userId: number; label: string }>>;
+  searchAssignees(payload: {
+    meetingId: string;
+    query: string;
+  }): Promise<Array<{ userId: number; label: string }>>;
 }
 
 export interface LiveAnalysisPanelProps {
@@ -107,6 +110,28 @@ function renderList(items: unknown[] | undefined, label: string): JSX.Element | 
   );
 }
 
+/**
+ * Halil incelemesi (PR #145, P2): the person gets a plain reason, not the
+ * transport message ("searchAssignees failed: 403"). The HTTP status is the
+ * only reliable part of that message across the IPC boundary.
+ */
+function assigneeSearchFailureText(error: unknown): string {
+  const raw = error instanceof Error ? error.message : String(error);
+  const status = /\b(400|403|404|503)\b/.exec(raw)?.[1];
+  switch (status) {
+    case '400':
+      return 'aramak için en az 2 harf yazın';
+    case '403':
+      return 'bu toplantıda kişi aramaya yetkiniz yok';
+    case '404':
+      return 'toplantı bulunamadı';
+    case '503':
+      return 'kişi dizinine şu an ulaşılamıyor, birazdan tekrar deneyin';
+    default:
+      return 'bağlantı ya da sunucu hatası';
+  }
+}
+
 type AssigneeSearchState =
   | { kind: 'idle' }
   | { kind: 'searching' }
@@ -151,7 +176,7 @@ function ActionItemRow({
     setSearchState({ kind: 'searching' });
     setOptions([]);
     api
-      .searchAssignees({ query: query.trim() })
+      .searchAssignees({ meetingId, query: query.trim() })
       .then((rows) => {
         if (sequence !== searchSequenceRef.current) return;
         setOptions(rows);
@@ -160,10 +185,7 @@ function ActionItemRow({
       .catch((error: unknown) => {
         if (sequence !== searchSequenceRef.current) return;
         setOptions([]);
-        setSearchState({
-          kind: 'error',
-          message: error instanceof Error ? error.message : String(error),
-        });
+        setSearchState({ kind: 'error', message: assigneeSearchFailureText(error) });
       });
   };
 
