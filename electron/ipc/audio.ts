@@ -241,6 +241,39 @@ function emitTranscriptEvent(send: RendererSend | null, event: TranscriptGateway
   send('audio:transcript-event', event);
 }
 
+/**
+ * Kaynak zamanlaması yokken satırın zamanı: bağlantı çapası + motorun geçen
+ * süresi.
+ *
+ * Eski `receivedAt - elapsed` formülü sıralamayı ters çeviriyordu. `elapsed_ms`
+ * bağlantı boyunca büyür; kesinti sonrası tamponlanan ses tek seferde geri
+ * gönderildiğinde olaylar aynı ana yığılır, yani `receivedAt` neredeyse sabit
+ * kalır. Büyüyen sayıyı sabitten çıkarınca geç söylenen cümle daha erken
+ * damgalanır ve ekranda kelimeler ters sırada belirir (gitops#40, 24 Eylül
+ * attended: 11-12-13 sonra 10-9-8-7).
+ *
+ * Çapa her taşıma kuşağının ilk olayında bir kez kurulur; sonraki olaylar aynı
+ * çapaya eklendiği için sıralama motorun işleme sırasını, o da konuşma sırasını
+ * izler.
+ */
+function engineAnchoredStartedAtMs(
+  anchors: Map<number, number>,
+  transportEpoch: number,
+  receivedAtMs: number,
+  elapsedMs: number | null,
+): number {
+  if (elapsedMs === null) {
+    return receivedAtMs;
+  }
+  const existing = anchors.get(transportEpoch);
+  if (existing !== undefined) {
+    return existing + elapsedMs;
+  }
+  const anchor = receivedAtMs - elapsedMs;
+  anchors.set(transportEpoch, anchor);
+  return anchor + elapsedMs;
+}
+
 function emitGatewayLiveTranscriptEvent(
   send: RendererSend | null,
   sessionId: string,
@@ -248,6 +281,7 @@ function emitGatewayLiveTranscriptEvent(
   sourceEpochMs: number | null,
   sourceTimingReliable: boolean,
   transportEpoch: number,
+  engineEpochAnchors: Map<number, number>,
   event: GatewayLiveServerEvent,
 ): void {
   if (event.type !== 'partial' && event.type !== 'final') {
@@ -305,7 +339,8 @@ function emitGatewayLiveTranscriptEvent(
     chunkSeq: event.seq,
     chunkStartedAtMs: partialTail
       ? receivedAtMs
-      : (sourceStartedAtMs ?? (elapsedMs === null ? receivedAtMs : receivedAtMs - elapsedMs)),
+      : (sourceStartedAtMs ??
+        engineAnchoredStartedAtMs(engineEpochAnchors, transportEpoch, receivedAtMs, elapsedMs)),
     transportEpoch,
     windowSeq: partialTail ? null : event.seq,
     windowStartedAtMs: sourceStartedAtMs,
@@ -1079,6 +1114,8 @@ export function registerAudioIpc(): void {
         const send = rendererSend(event);
         const runtimeConfig = loadRecorderRuntimeConfig();
         let liveStream: GatewayLiveStream | null = null;
+        // Taşıma kuşağı başına bir çapa; kayıt bitince closure ile birlikte düşer.
+        const engineEpochAnchors = new Map<number, number>();
         if (
           runtimeConfig.gatewayLiveStreamEnabled === true &&
           (startIntent.sttProvider === 'internal' || normalizedTranscriptionMode === 'realtime')
@@ -1096,6 +1133,7 @@ export function registerAudioIpc(): void {
                 liveStream?.getSourceStartedAtMs() ?? null,
                 liveStream?.hasReliableSourceTiming() === true,
                 liveStream?.getTransportEpoch() ?? -1,
+                engineEpochAnchors,
                 liveEvent,
               ),
             onError: (streamError) => emitTranscriptError(send, sessionId, streamError),

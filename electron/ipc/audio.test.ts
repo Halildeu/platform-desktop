@@ -758,6 +758,57 @@ describe('audio IPC recorder consent gate', () => {
     expect(mocks.senderSend).toHaveBeenCalledWith(bytes, 1781820000000);
   });
 
+  // gitops#40: kesinti sonrası tamponlanan ses tek seferde geri gönderilince
+  // olaylar aynı ana yığılır. Zaman damgası "şimdi - geçen süre" ile
+  // hesaplanırsa geç söylenen cümle daha erken damgalanır ve canlı ekranda
+  // kelimeler ters sırada görünür.
+  it('keeps replayed transcript lines in speech order when source timing is unavailable', async () => {
+    mocks.loadRecorderRuntimeConfig.mockReturnValue({
+      meetingId,
+      deviceId,
+      ready: true,
+      reason: null,
+      liveSttStreamUrl: null,
+      liveSttStreamReason: null,
+      gatewayLiveStreamEnabled: true,
+    });
+    mocks.gatewayLiveStreamSourceTimingReliable.mockReturnValue(false);
+    const rendererSend = vi.fn();
+    await acceptConsent();
+    await startHandler()({ sender: { id: 9, send: rendererSend } }, meetingId, deviceId);
+
+    const callbacks = mocks.gatewayLiveStreamCtor.mock.calls[0][0] as {
+      onEvent: (event: unknown) => void;
+    };
+
+    // Geri gönderim: üç final aynı ana yığılıyor, motor süresi artıyor.
+    const burstNow = 1781820100000;
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(burstNow);
+    for (const [seq, elapsedMs, text] of [
+      [7, 20_000, 'yedinci cümle'],
+      [8, 24_000, 'sekizinci cümle'],
+      [9, 28_000, 'dokuzuncu cümle'],
+    ] as Array<[number, number, string]>) {
+      callbacks.onEvent({
+        type: 'final',
+        seq,
+        text,
+        elapsed_ms: elapsedMs,
+        reason: 'speech_final',
+      });
+    }
+    nowSpy.mockRestore();
+    mocks.gatewayLiveStreamSourceTimingReliable.mockReturnValue(true);
+
+    const ordered = rendererSend.mock.calls
+      .filter(([channel]) => channel === 'audio:transcript-event')
+      .map(([, payload]) => payload as { text: string; chunkStartedAtMs: number })
+      .sort((left, right) => left.chunkStartedAtMs - right.chunkStartedAtMs)
+      .map((payload) => payload.text);
+
+    expect(ordered).toEqual(['yedinci cümle', 'sekizinci cümle', 'dokuzuncu cümle']);
+  });
+
   it('opens the authenticated gateway live transport before capture and shares REST sequence ownership', async () => {
     mocks.loadRecorderRuntimeConfig.mockReturnValue({
       meetingId,
