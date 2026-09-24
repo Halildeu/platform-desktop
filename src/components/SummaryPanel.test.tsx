@@ -277,6 +277,73 @@ describe('SummaryPanel', () => {
     expect(onRetry).toHaveBeenCalledTimes(1);
   });
 
+  // gitops#3532: "Bitir"den sonra sonuc birkac dakika sürüyor ve ekranda yalniz
+  // "Yükleniyor" yaziyordu. Kullanici ne beklendigini ve ne kadar surdugunu
+  // gormeli; bekleme ariza gibi gorunmemeli.
+  it('shows the finalization stages and elapsed time while the canonical result is pending', () => {
+    const meetingId = '22222222-2222-4222-8222-222222222222';
+    const finishedAtMs = Date.now() - 90_000;
+    const transcript = finishTranscriptSession(
+      startTranscriptSession(initialTranscriptSession(), {
+        sessionId: 'SES-1',
+        meetingId,
+        deviceId: 'desktop-1',
+        hasLoopback: false,
+        startedAtMs: finishedAtMs - 120_000,
+      }),
+      finishedAtMs,
+    );
+
+    render(
+      <SummaryPanel
+        intelligence={{ ...initialMeetingIntelligence(), meetingId }}
+        transcript={transcript}
+        canonicalResultStatus="not_ready"
+      />,
+    );
+
+    const wait = screen.getByLabelText('Sonuç hazırlama aşamaları');
+    expect(within(wait).getByText('Kayıt tamamlandı')).toBeInTheDocument();
+    const active = within(wait).getByText('Metin kesinleştiriliyor');
+    expect(active).toHaveAttribute('aria-current', 'step');
+    expect(within(wait).getByText('Sonuç hazırlanıyor')).toBeInTheDocument();
+    // 90 saniye gecti; kalan tahmin 6 dakikalik pencereden hesaplanir.
+    expect(within(wait).getByText(/Bitir'den bu yana 1 dk 30 sn/)).toBeInTheDocument();
+    expect(within(wait).getByText(/tahmini kalan 4 dk 30 sn/)).toBeInTheDocument();
+    expect(
+      within(wait).getByText('Beklemeniz gerekmiyor; sonuç hazır olduğunda bu ekrana gelecek.'),
+    ).toBeInTheDocument();
+  });
+
+  it('moves to the analysis stage and drops the estimate once the wait window passes', () => {
+    const meetingId = '22222222-2222-4222-8222-222222222222';
+    const finishedAtMs = Date.now() - 7 * 60_000;
+    const transcript = finishTranscriptSession(
+      startTranscriptSession(initialTranscriptSession(), {
+        sessionId: 'SES-1',
+        meetingId,
+        deviceId: 'desktop-1',
+        hasLoopback: false,
+        startedAtMs: finishedAtMs - 120_000,
+      }),
+      finishedAtMs,
+    );
+
+    render(
+      <SummaryPanel
+        intelligence={{ ...initialMeetingIntelligence(), meetingId }}
+        transcript={transcript}
+        canonicalResultStatus="not_ready"
+      />,
+    );
+
+    const wait = screen.getByLabelText('Sonuç hazırlama aşamaları');
+    expect(within(wait).getByText('Sonuç hazırlanıyor')).toHaveAttribute('aria-current', 'step');
+    expect(within(wait).getByText('Özet, kararlar ve aksiyonlar üretiliyor.')).toBeInTheDocument();
+    // Pencere asildiginda kalan sure tahmini gosterilmez: uydurma sayi verilmez.
+    expect(within(wait).queryByText(/tahmini kalan/)).not.toBeInTheDocument();
+  });
+
   it('keeps transient canonical read errors visible and retryable', async () => {
     const onRetry = vi.fn();
     render(

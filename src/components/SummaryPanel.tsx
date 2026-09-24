@@ -621,6 +621,21 @@ export function SummaryPanel({
       : null;
   const visibleIntelligence = intelligence;
   const result = visibleIntelligence.status === 'ready' ? visibleIntelligence.result : null;
+  // Bekleme aşaması saniye saniye ilerlediği için beklerken hafif bir saat
+  // tutuyoruz; sonuç geldiğinde veya beklemediğimizde zamanlayıcı durur.
+  const waitingForCanonical = canonicalResultStatus === 'not_ready';
+  const [waitClockMs, setWaitClockMs] = useState<number>(() => Date.now());
+  useEffect(() => {
+    if (!waitingForCanonical) {
+      return;
+    }
+    setWaitClockMs(Date.now());
+    const timer = setInterval(() => setWaitClockMs(Date.now()), 1_000);
+    return () => clearInterval(timer);
+  }, [waitingForCanonical]);
+  const waitStage = waitingForCanonical
+    ? canonicalWaitStage(boundTranscript?.finishedAtMs ?? null, waitClockMs)
+    : null;
   const canonicalSource = useCanonicalSource(intelligence.meetingId, result);
   const resultKey = result
     ? [
@@ -1064,7 +1079,39 @@ export function SummaryPanel({
       ) : null}
       {canonicalResultStatus === 'not_ready' ? (
         <div className="canonical-result-pending" role="status">
-          <p>Kalıcı sonuç henüz hazır değil. Önceki snapshot varsa ekranda tutulur.</p>
+          {waitStage ? (
+            <div className="canonical-wait" aria-label="Sonuç hazırlama aşamaları">
+              <ol className="canonical-wait__steps">
+                {CANONICAL_WAIT_STEPS.map((step, index) => (
+                  <li
+                    key={step}
+                    className={
+                      index < waitStage.index
+                        ? 'canonical-wait__step is-done'
+                        : index === waitStage.index
+                          ? 'canonical-wait__step is-active'
+                          : 'canonical-wait__step'
+                    }
+                    aria-current={index === waitStage.index ? 'step' : undefined}
+                  >
+                    {step}
+                  </li>
+                ))}
+              </ol>
+              <p className="canonical-wait__detail">{waitStage.detail}</p>
+              <p className="canonical-wait__timing">
+                {`Bitir'den bu yana ${formatWaitDuration(waitStage.elapsedMs)}`}
+                {waitStage.remainingEstimateMs !== null
+                  ? ` · tahmini kalan ${formatWaitDuration(waitStage.remainingEstimateMs)}`
+                  : ''}
+              </p>
+              <p className="canonical-wait__reassurance">
+                Beklemeniz gerekmiyor; sonuç hazır olduğunda bu ekrana gelecek.
+              </p>
+            </div>
+          ) : (
+            <p>Kalıcı sonuç henüz hazır değil. Önceki snapshot varsa ekranda tutulur.</p>
+          )}
           {canonicalResultAutoRetrying ? (
             <p>Arka planda düşük sıklıkta ve kontrollü olarak yeniden okunacak.</p>
           ) : null}
@@ -1829,6 +1876,64 @@ const initialTranscriptSessionFallback: TranscriptSessionState = {
   error: null,
   segments: [],
 };
+
+// ── Kayıt bitişi sonrası bekleme aşamaları (gitops#3532) ────────────────────
+//
+// Kullanıcı "Bitir"e bastıktan sonra sonucun gelmesi birkaç dakika sürüyor ve
+// ekranda yalnız "Yükleniyor" yazıyordu; ne olduğu anlaşılmadığı için bekleme
+// arıza gibi görünüyordu. Sunucu tarafındaki sabit bekleme süresi ürün kararına
+// bağlı (gitops#3532); istemci o kararı beklemeden ne olduğunu anlatabilir.
+//
+// Süre bir TAHMİNDİR, sözleşme değildir: sonuç erken gelirse ekran zaten sonuca
+// geçer, geç gelirse aşama "Sonuç hazırlanıyor"da kalır ve kalan süre gösterilmez.
+const FINALIZATION_MIN_WAIT_MS = 6 * 60_000;
+
+interface CanonicalWaitStage {
+  index: number;
+  label: string;
+  detail: string;
+  elapsedMs: number;
+  remainingEstimateMs: number | null;
+}
+
+const CANONICAL_WAIT_STEPS = [
+  'Kayıt tamamlandı',
+  'Metin kesinleştiriliyor',
+  'Sonuç hazırlanıyor',
+] as const;
+
+function canonicalWaitStage(finishedAtMs: number | null, nowMs: number): CanonicalWaitStage | null {
+  if (typeof finishedAtMs !== 'number' || !Number.isFinite(finishedAtMs)) {
+    return null;
+  }
+  const elapsedMs = Math.max(0, nowMs - finishedAtMs);
+  if (elapsedMs < FINALIZATION_MIN_WAIT_MS) {
+    return {
+      index: 1,
+      label: CANONICAL_WAIT_STEPS[1],
+      detail: 'Geç gelen transkript parçaları bekleniyor; bu sürede kaydınız güvende.',
+      elapsedMs,
+      remainingEstimateMs: FINALIZATION_MIN_WAIT_MS - elapsedMs,
+    };
+  }
+  return {
+    index: 2,
+    label: CANONICAL_WAIT_STEPS[2],
+    detail: 'Özet, kararlar ve aksiyonlar üretiliyor.',
+    elapsedMs,
+    remainingEstimateMs: null,
+  };
+}
+
+function formatWaitDuration(ms: number): string {
+  const totalSeconds = Math.max(0, Math.round(ms / 1000));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  if (minutes === 0) {
+    return `${seconds} sn`;
+  }
+  return `${minutes} dk ${String(seconds).padStart(2, '0')} sn`;
+}
 
 function canonicalResultStatusLabel(
   canonicalStatus: CanonicalResultLoadStatus,
