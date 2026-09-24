@@ -1695,6 +1695,64 @@ describe('TranscriptPanel', () => {
   // 24 Eylül attended koşusu: 54 satırın yalnız bir kısmı motor zamanlaması
   // taşıyordu, payda 13,7 sn ölçüldü ve ekran 241 kelime/dk gösterdi. Şişmiş
   // oran yanlış uyarı vermez ama gerçek kapsam düşüklüğünü gizler.
+  // Halil incelemesi (PR #146): iki konusmaci ayni saniyede konustugunda o
+  // saniye paydada iki kez sayilmamali; aralik birlesimi bunu tekillestirir.
+  it('counts overlapping speakers once in the speech span', () => {
+    const startedAtMs = 1781820000000;
+    let session = startTranscriptSession(initialTranscriptSession(), {
+      sessionId: 'SES-1',
+      meetingId: '22222222-2222-4222-8222-222222222222',
+      deviceId: 'desktop-1',
+      hasLoopback: false,
+      startedAtMs,
+    });
+    // Iki konusmaci 30 saniyelik pencerede tamamen ortusuyor: 0-30 ve 10-25.
+    // Birlesim 30 sn; toplam sure sayilsaydi 45 sn olurdu.
+    session = upsertTranscriptSegment(session, {
+      id: 'seg-a',
+      speakerLabel: 'Konuşmacı 1',
+      startedAtMs,
+      endedAtMs: startedAtMs + 30_000,
+      timingBasis: 'source',
+      status: 'final',
+      text: 'bir iki üç dört beş altı yedi sekiz dokuz on onbir onikinci onüç ondört onbeş',
+      source: 'gateway-events',
+      receivedAtMs: startedAtMs + 30_500,
+    });
+    session = upsertTranscriptSegment(session, {
+      id: 'seg-b',
+      speakerLabel: 'Konuşmacı 2',
+      startedAtMs: startedAtMs + 10_000,
+      endedAtMs: startedAtMs + 25_000,
+      timingBasis: 'source',
+      status: 'final',
+      text: 'onaltı onyedi onsekiz ondokuz yirmi yirmibir yirmiiki yirmiüç yirmidört yirmibeş yirmialtı yirmiyedi yirmisekiz yirmidokuz otuz',
+      source: 'gateway-events',
+      receivedAtMs: startedAtMs + 25_500,
+    });
+
+    render(
+      <TranscriptPanel
+        session={session}
+        stream={{
+          directConfigured: true,
+          directReady: true,
+          directActive: true,
+          audioRms: 0.02,
+          audioActive: true,
+          lastAudioAtMs: startedAtMs + 31_000,
+          disabledReason: null,
+        }}
+      />,
+    );
+
+    // 30 kelime / 30 sn = 60 kelime/dk. Ortusen sure iki kez sayilsaydi
+    // (45 sn) oran 40 kelime/dk cikar ve esigin altina dusup uyari verirdi.
+    const flowHealth = screen.getByLabelText('Transkript akış kalitesi');
+    expect(within(flowHealth).getByText('60 kelime/dk')).toBeInTheDocument();
+    expect(within(flowHealth).queryByText('Metin kapsamı düşük')).not.toBeInTheDocument();
+  });
+
   it('reports an unmeasurable rate instead of an inflated one when most lines lack timing', () => {
     const startedAtMs = 1781820000000;
     let session = startTranscriptSession(initialTranscriptSession(), {
