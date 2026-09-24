@@ -623,7 +623,11 @@ export function SummaryPanel({
   const result = visibleIntelligence.status === 'ready' ? visibleIntelligence.result : null;
   // Bekleme aşaması saniye saniye ilerlediği için beklerken hafif bir saat
   // tutuyoruz; sonuç geldiğinde veya beklemediğimizde zamanlayıcı durur.
-  const waitingForCanonical = canonicalResultStatus === 'not_ready';
+  // Bitir'den sonra durum okuma denemeleri arasında 'loading' ile 'not_ready'
+  // arasında gidip geliyor. Kullanıcı açısından ikisi de beklemedir; aşamaları
+  // yalnız birine bağlamak ekranı yine "Yükleniyor"da bırakıyordu.
+  const waitingForCanonical =
+    canonicalResultStatus === 'not_ready' || canonicalResultStatus === 'loading';
   const [waitClockMs, setWaitClockMs] = useState<number>(() => Date.now());
   useEffect(() => {
     if (!waitingForCanonical) {
@@ -1077,7 +1081,7 @@ export function SummaryPanel({
           ) : null}
         </div>
       ) : null}
-      {canonicalResultStatus === 'not_ready' ? (
+      {waitStage || canonicalResultStatus === 'not_ready' ? (
         <div className="canonical-result-pending" role="status">
           {waitStage ? (
             <div className="canonical-wait" aria-label="Sonuç hazırlama aşamaları">

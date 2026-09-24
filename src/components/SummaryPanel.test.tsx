@@ -315,6 +315,38 @@ describe('SummaryPanel', () => {
     ).toBeInTheDocument();
   });
 
+  // Bitir'den hemen sonra durum 'loading' oluyor; asamalar orada da gorunmeli,
+  // yoksa ekran yine yalniz "Yükleniyor" der (24 Eylul attended gozlemi).
+  it('shows the stages while the first canonical read is still in flight', () => {
+    const meetingId = '22222222-2222-4222-8222-222222222222';
+    const finishedAtMs = Date.now() - 30_000;
+    const transcript = finishTranscriptSession(
+      startTranscriptSession(initialTranscriptSession(), {
+        sessionId: 'SES-1',
+        meetingId,
+        deviceId: 'desktop-1',
+        hasLoopback: false,
+        startedAtMs: finishedAtMs - 120_000,
+      }),
+      finishedAtMs,
+    );
+
+    render(
+      <SummaryPanel
+        intelligence={{ ...initialMeetingIntelligence(), meetingId }}
+        transcript={transcript}
+        canonicalResultStatus="loading"
+      />,
+    );
+
+    const wait = screen.getByLabelText('Sonuç hazırlama aşamaları');
+    expect(within(wait).getByText('Metin kesinleştiriliyor')).toHaveAttribute(
+      'aria-current',
+      'step',
+    );
+    expect(within(wait).getByText(/Bitir'den bu yana 30 sn/)).toBeInTheDocument();
+  });
+
   it('moves to the analysis stage and drops the estimate once the wait window passes', () => {
     const meetingId = '22222222-2222-4222-8222-222222222222';
     const finishedAtMs = Date.now() - 7 * 60_000;
