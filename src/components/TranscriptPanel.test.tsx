@@ -1692,6 +1692,63 @@ describe('TranscriptPanel', () => {
     expect(within(flowHealth).getByText('90 kelime/dk')).toBeInTheDocument();
   });
 
+  // 24 Eylül attended koşusu: 54 satırın yalnız bir kısmı motor zamanlaması
+  // taşıyordu, payda 13,7 sn ölçüldü ve ekran 241 kelime/dk gösterdi. Şişmiş
+  // oran yanlış uyarı vermez ama gerçek kapsam düşüklüğünü gizler.
+  it('reports an unmeasurable rate instead of an inflated one when most lines lack timing', () => {
+    const startedAtMs = 1781820000000;
+    let session = startTranscriptSession(initialTranscriptSession(), {
+      sessionId: 'SES-1',
+      meetingId: '22222222-2222-4222-8222-222222222222',
+      deviceId: 'desktop-1',
+      hasLoopback: false,
+      startedAtMs,
+    });
+    // Tek satır zamanlı, dokuz satır zamansız → zamanlı pay %10.
+    session = upsertTranscriptSegment(session, {
+      id: 'seg-timed',
+      speakerLabel: 'Konuşmacı',
+      startedAtMs,
+      endedAtMs: startedAtMs + 5_000,
+      timingBasis: 'source',
+      status: 'final',
+      text: 'bir iki üç dört beş',
+      source: 'gateway-events',
+      receivedAtMs: startedAtMs + 5_500,
+    });
+    for (let i = 0; i < 9; i += 1) {
+      session = upsertTranscriptSegment(session, {
+        id: `seg-untimed-${i}`,
+        speakerLabel: 'Konuşmacı',
+        startedAtMs: startedAtMs + 10_000 + i * 5_000,
+        status: 'final',
+        text: 'altı yedi sekiz dokuz on',
+        source: 'gateway-events',
+        receivedAtMs: startedAtMs + 10_500 + i * 5_000,
+      });
+    }
+
+    render(
+      <TranscriptPanel
+        session={session}
+        stream={{
+          directConfigured: true,
+          directReady: true,
+          directActive: true,
+          audioRms: 0.02,
+          audioActive: true,
+          lastAudioAtMs: startedAtMs + 60_000,
+          disabledReason: null,
+        }}
+      />,
+    );
+
+    const flowHealth = screen.getByLabelText('Transkript akış kalitesi');
+    expect(within(flowHealth).getAllByText('Ölçülemiyor').length).toBeGreaterThan(0);
+    expect(within(flowHealth).queryByText('Metin kapsamı düşük')).not.toBeInTheDocument();
+    expect(within(flowHealth).queryByText(/kelime\/dk/)).not.toBeInTheDocument();
+  });
+
   it('still flags low coverage when speech time itself produced few words', () => {
     const startedAtMs = 1781820000000;
     let session = startTranscriptSession(initialTranscriptSession(), {

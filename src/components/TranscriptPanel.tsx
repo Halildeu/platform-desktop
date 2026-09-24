@@ -548,6 +548,7 @@ interface TranscriptFlowHealth {
   spanMs: number | null;
   /** Oranların paydası olan konuşma süresi; ölçülemiyorsa null. */
   speechSpanMs: number | null;
+  rateBasis: SpeechSpan['kind'];
   segmentsPerMinute: number | null;
   wordsPerMinute: number | null;
   directCount: number;
@@ -778,10 +779,31 @@ function transcriptObservationSpanMs(
  * saat işler ve sessizlik "kelime üretilmiyor" gibi görünür. Sessizlik kapsamın
  * ölçüsü değil; ölçü, konuşulan sürede kaç kelime çıktığıdır. Örtüşen aralıklar
  * birleştirilir, böylece aynı saniye iki konuşmacıdan iki kez sayılmaz.
+ *
+ * Satırların yalnız bir kısmı zamanlanmışsa payda eksik kalır ve oran şişer: 24
+ * Eylül attended koşusunda 54 satırın kapsadığı süre 13,7 sn ölçüldü ve ekran
+ * 241 kelime/dk gösterdi. Bu yanlış uyarı üretmez ama gerçek bir kapsam
+ * düşüklüğünü gizler. Bu yüzden ölçüm ancak final satırların çoğu zamanlıysa
+ * kabul edilir; değilse gösterge "ölçülemiyor" der, uydurma bir sayı vermez.
  */
-function transcriptSpeechSpanMs(session: TranscriptSessionState): number | null {
+const SPEECH_SPAN_MIN_TIMED_SHARE = 0.6;
+
+type SpeechSpan =
+  /** Zamanlama hiç yok: eski kayıt penceresi davranışı geçerli. */
+  | { kind: 'absent' }
+  /** Zamanlama kısmi: oran güvenilir değil, sayı gösterilmez. */
+  | { kind: 'unmeasurable' }
+  | { kind: 'measured'; ms: number };
+
+function transcriptSpeechSpan(session: TranscriptSessionState): SpeechSpan {
   const intervals: Array<[number, number]> = [];
+  let finalCount = 0;
+  let timedFinalCount = 0;
   for (const segment of session.segments) {
+    const isFinal = segment.status === 'final' || segment.status === 'revised';
+    if (isFinal) {
+      finalCount += 1;
+    }
     if (segment.timingBasis !== 'source') {
       continue;
     }
@@ -796,10 +818,16 @@ function transcriptSpeechSpanMs(session: TranscriptSessionState): number | null 
     ) {
       continue;
     }
+    if (isFinal) {
+      timedFinalCount += 1;
+    }
     intervals.push([start, end]);
   }
   if (intervals.length === 0) {
-    return null;
+    return { kind: 'absent' };
+  }
+  if (finalCount > 0 && timedFinalCount / finalCount < SPEECH_SPAN_MIN_TIMED_SHARE) {
+    return { kind: 'unmeasurable' };
   }
   intervals.sort((a, b) => a[0] - b[0]);
   let total = 0;
@@ -814,7 +842,7 @@ function transcriptSpeechSpanMs(session: TranscriptSessionState): number | null 
     currentEnd = end;
   }
   total += currentEnd - currentStart;
-  return total;
+  return { kind: 'measured', ms: total };
 }
 
 function transcriptSegmentsPerMinute(segmentCount: number, spanMs: number | null): number | null {
@@ -860,10 +888,13 @@ function transcriptFlowHealth(
   const sourceCounts = transcriptSourceCounts(session);
   const words = transcriptWordTotal(session);
   const spanMs = transcriptObservationSpanMs(session, stream, lastTranscriptAtMs);
-  // Oranların paydası: ölçülebiliyorsa konuşulan süre, ölçülemiyorsa (kaynak
-  // zamanlaması olmayan hatlar) eski kayıt penceresi.
-  const speechSpanMs = transcriptSpeechSpanMs(session);
-  const rateSpanMs = speechSpanMs ?? spanMs;
+  // Oranların paydası: ölçülebiliyorsa konuşulan süre; hiç zamanlama yoksa eski
+  // kayıt penceresi; zamanlama kısmi ise oran gösterilmez (şişmiş sayı, gerçek
+  // kapsam düşüklüğünü gizler).
+  const speechSpan = transcriptSpeechSpan(session);
+  const speechSpanMs = speechSpan.kind === 'measured' ? speechSpan.ms : null;
+  const rateSpanMs =
+    speechSpan.kind === 'measured' ? speechSpan.ms : speechSpan.kind === 'absent' ? spanMs : null;
   const segmentsPerMinute = transcriptSegmentsPerMinute(session.segments.length, rateSpanMs);
   const wordsPerMinute = transcriptWordsPerMinute(words, rateSpanMs);
   const lagMs = streamLagMs(stream, lastTranscriptAtMs, recordingActive);
@@ -892,6 +923,7 @@ function transcriptFlowHealth(
       words,
       spanMs,
       speechSpanMs,
+      rateBasis: speechSpan.kind,
       segmentsPerMinute,
       wordsPerMinute,
       directCount: sourceCounts.direct,
@@ -914,6 +946,7 @@ function transcriptFlowHealth(
       words,
       spanMs,
       speechSpanMs,
+      rateBasis: speechSpan.kind,
       segmentsPerMinute,
       wordsPerMinute,
       directCount: sourceCounts.direct,
@@ -934,6 +967,7 @@ function transcriptFlowHealth(
       words,
       spanMs,
       speechSpanMs,
+      rateBasis: speechSpan.kind,
       segmentsPerMinute,
       wordsPerMinute,
       directCount: sourceCounts.direct,
@@ -952,6 +986,7 @@ function transcriptFlowHealth(
       words,
       spanMs,
       speechSpanMs,
+      rateBasis: speechSpan.kind,
       segmentsPerMinute,
       wordsPerMinute,
       directCount: sourceCounts.direct,
@@ -962,9 +997,11 @@ function transcriptFlowHealth(
   // Kapsam hükmü yeterli konuşma biriktikten sonra verilir: konuşulan süre
   // ölçülebiliyorsa onun üzerinden, ölçülemiyorsa eski kayıt penceresinden.
   const coverageWindowReady =
-    speechSpanMs !== null
-      ? speechSpanMs >= TRANSCRIPT_SPEECH_WINDOW_MIN_MS
-      : spanMs !== null && spanMs >= TRANSCRIPT_LOW_WORD_RATE_WARN_MS;
+    speechSpan.kind === 'measured'
+      ? speechSpan.ms >= TRANSCRIPT_SPEECH_WINDOW_MIN_MS
+      : speechSpan.kind === 'absent' &&
+        spanMs !== null &&
+        spanMs >= TRANSCRIPT_LOW_WORD_RATE_WARN_MS;
 
   if (
     coverageWindowActive &&
@@ -983,6 +1020,7 @@ function transcriptFlowHealth(
       words,
       spanMs,
       speechSpanMs,
+      rateBasis: speechSpan.kind,
       segmentsPerMinute,
       wordsPerMinute,
       directCount: sourceCounts.direct,
@@ -992,9 +1030,9 @@ function transcriptFlowHealth(
 
   // Satır yoğunluğu da aynı paydayı kullanır: sessizlik seyreklik sayılmaz.
   const densityWindowReady =
-    speechSpanMs !== null
-      ? speechSpanMs >= TRANSCRIPT_SPEECH_WINDOW_MIN_MS
-      : spanMs !== null && spanMs >= TRANSCRIPT_LOW_DENSITY_WARN_MS;
+    speechSpan.kind === 'measured'
+      ? speechSpan.ms >= TRANSCRIPT_SPEECH_WINDOW_MIN_MS
+      : speechSpan.kind === 'absent' && spanMs !== null && spanMs >= TRANSCRIPT_LOW_DENSITY_WARN_MS;
 
   if (
     stream?.audioActive &&
@@ -1013,6 +1051,7 @@ function transcriptFlowHealth(
       words,
       spanMs,
       speechSpanMs,
+      rateBasis: speechSpan.kind,
       segmentsPerMinute,
       wordsPerMinute,
       directCount: sourceCounts.direct,
@@ -1030,6 +1069,7 @@ function transcriptFlowHealth(
       words,
       spanMs,
       speechSpanMs,
+      rateBasis: speechSpan.kind,
       segmentsPerMinute,
       wordsPerMinute,
       directCount: sourceCounts.direct,
@@ -1052,6 +1092,7 @@ function transcriptFlowHealth(
     words,
     spanMs,
     speechSpanMs,
+    rateBasis: speechSpan.kind,
     segmentsPerMinute,
     wordsPerMinute,
     directCount: sourceCounts.direct,
@@ -1191,7 +1232,7 @@ function buildTranscriptDiagnostics(
     `flow.nextAction=${health.nextAction}`,
     `flow.segmentDensityPerMinute=${formatDiagnosticNumber(health.segmentsPerMinute, 2)}`,
     `flow.wordsPerMinute=${formatDiagnosticNumber(health.wordsPerMinute, 2)}`,
-    `flow.rateBasis=${health.speechSpanMs !== null ? 'speech' : 'recording-window'}`,
+    `flow.rateBasis=${health.rateBasis === 'absent' ? 'recording-window' : health.rateBasis}`,
     `flow.speechSpanMs=${health.speechSpanMs ?? '-'}`,
     `segments.total=${session.segments.length}`,
     `segments.draft=${statusCounts.draft}`,
@@ -1487,7 +1528,11 @@ export function TranscriptPanel({
         </div>
         <div>
           <span>Yoğunluk</span>
-          <strong>{formatTranscriptDensity(flowHealth.segmentsPerMinute)}</strong>
+          <strong>
+            {flowHealth.rateBasis === 'unmeasurable'
+              ? 'Ölçülemiyor'
+              : formatTranscriptDensity(flowHealth.segmentsPerMinute)}
+          </strong>
         </div>
         <div>
           <span>Kelime</span>
@@ -1495,7 +1540,11 @@ export function TranscriptPanel({
         </div>
         <div>
           <span>Kelime/dk</span>
-          <strong>{formatTranscriptWordRate(flowHealth.wordsPerMinute)}</strong>
+          <strong>
+            {flowHealth.rateBasis === 'unmeasurable'
+              ? 'Ölçülemiyor'
+              : formatTranscriptWordRate(flowHealth.wordsPerMinute)}
+          </strong>
         </div>
         <div>
           <span>Kaynak</span>
