@@ -1259,5 +1259,13 @@ export async function searchAssignees(
     const label = name && email ? `${name} (${email})` : name || email || String(userId);
     options.push({ userId, label });
   }
+  // gitops#3587: "directory returned nobody" and "directory returned rows this
+  // client cannot read" are different failures. Collapsing both into an empty
+  // list is what made the reported regression undiagnosable from the UI.
+  if (rows.length > 0 && options.length === 0) {
+    throw new Error(
+      `searchAssignees: ${rows.length} kayıt döndü ancak beklenen alanlar (sayısal id) okunamadı`,
+    );
+  }
   return options;
 }

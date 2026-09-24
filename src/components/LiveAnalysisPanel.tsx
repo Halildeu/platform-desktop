@@ -24,7 +24,7 @@
  *     is diagnosable in-app without console spelunking.
  */
 
-import { useState, type FC, type JSX } from 'react';
+import { useRef, useState, type FC, type JSX } from 'react';
 
 import {
   useLiveAnalysis,
@@ -107,6 +107,12 @@ function renderList(items: unknown[] | undefined, label: string): JSX.Element | 
   );
 }
 
+type AssigneeSearchState =
+  | { kind: 'idle' }
+  | { kind: 'searching' }
+  | { kind: 'empty' }
+  | { kind: 'error'; message: string };
+
 type AssignPhase =
   | { kind: 'idle' }
   | { kind: 'form' }
@@ -128,13 +134,37 @@ function ActionItemRow({
   const [options, setOptions] = useState<Array<{ userId: number; label: string }>>([]);
   const [selected, setSelected] = useState<{ userId: number; label: string } | null>(null);
   const [dueDate, setDueDate] = useState('');
+  const [searchState, setSearchState] = useState<AssigneeSearchState>({ kind: 'idle' });
+  // Halil incelemesi (PR #145, M): art arda iki aramada yavaş olan ilk yanıt
+  // sonra dönüp yeni sonucun üstüne yazabiliyordu. Yalnız son isteğin yanıtı
+  // kabul edilir; eskiler sessizce düşer.
+  const searchSequenceRef = useRef(0);
 
+  // gitops#3587: a failed lookup used to be swallowed into an empty list, so a
+  // permission error and "nobody matches" looked identical on screen. Keep the
+  // two apart: the user needs to know whether to try another name or to report
+  // an authorization problem.
   const search = (): void => {
     if (!api || !query.trim()) return;
+    searchSequenceRef.current += 1;
+    const sequence = searchSequenceRef.current;
+    setSearchState({ kind: 'searching' });
+    setOptions([]);
     api
       .searchAssignees({ query: query.trim() })
-      .then((rows) => setOptions(rows))
-      .catch(() => setOptions([]));
+      .then((rows) => {
+        if (sequence !== searchSequenceRef.current) return;
+        setOptions(rows);
+        setSearchState(rows.length > 0 ? { kind: 'idle' } : { kind: 'empty' });
+      })
+      .catch((error: unknown) => {
+        if (sequence !== searchSequenceRef.current) return;
+        setOptions([]);
+        setSearchState({
+          kind: 'error',
+          message: error instanceof Error ? error.message : String(error),
+        });
+      });
   };
 
   const createTask = (): void => {
@@ -200,6 +230,21 @@ function ActionItemRow({
               Ara
             </button>
           </div>
+          {searchState.kind === 'searching' ? (
+            <p className="live-analysis-panel__assign-hint" role="status">
+              Kişi aranıyor…
+            </p>
+          ) : null}
+          {searchState.kind === 'empty' ? (
+            <p className="live-analysis-panel__assign-hint" role="status">
+              Bu aramaya uyan kişi bulunamadı. Adı farklı yazmayı veya e-posta ile aramayı deneyin.
+            </p>
+          ) : null}
+          {searchState.kind === 'error' ? (
+            <p className="live-analysis-panel__assign-error" role="alert">
+              Kişi araması yapılamadı: {searchState.message}. Görevi atamasız oluşturabilirsiniz.
+            </p>
+          ) : null}
           {options.length > 0 && !selected ? (
             <ul className="live-analysis-panel__assign-options">
               {options.map((o) => (

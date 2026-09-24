@@ -13,6 +13,7 @@ import {
   parseRecentMeetingsPage,
   recentMeetingsUrl,
   recordingLifecycleUrl,
+  searchAssignees,
   readMeetingIntelligenceResult,
   syncRecordingLifecycle,
 } from './meeting-client';
@@ -899,5 +900,75 @@ describe('meeting-client', () => {
     expect(() => parseMeetingIntelligenceCanonicalResponse(invalid, MEETING_ID)).toThrow(
       'is not grounded evidence',
     );
+  });
+});
+
+// gitops#3587: the reported symptom was "assignee search returns nothing" with
+// no way to tell an authorization failure or a contract drift from a genuine
+// no-match, because every case produced the same empty list.
+describe('assignee directory lookup', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('returns readable options when the directory answers with numeric ids', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        content: [{ id: 42, name: 'Sevil Karakaş', email: 'sevil@acik.com' }],
+      }),
+      headers: new Headers({ 'content-type': 'application/json' }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(
+      searchAssignees({ baseUrl: 'https://testai.acik.com' }, 'JWT', 'sevil'),
+    ).resolves.toEqual([{ userId: 42, label: 'Sevil Karakaş (sevil@acik.com)' }]);
+  });
+
+  it('keeps a genuine no-match as an empty list', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ content: [] }),
+      headers: new Headers({ 'content-type': 'application/json' }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(
+      searchAssignees({ baseUrl: 'https://testai.acik.com' }, 'JWT', 'yokboyle'),
+    ).resolves.toEqual([]);
+  });
+
+  it('fails loudly when the directory answers with rows this client cannot read', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        content: [{ id: 'kc-subject-uuid', name: 'Sevil Karakaş' }],
+      }),
+      headers: new Headers({ 'content-type': 'application/json' }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(
+      searchAssignees({ baseUrl: 'https://testai.acik.com' }, 'JWT', 'sevil'),
+    ).rejects.toThrow('1 kayıt döndü ancak beklenen alanlar (sayısal id) okunamadı');
+  });
+
+  it('surfaces an authorization failure instead of an empty list', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 403,
+      text: async () => '{"code":"FORBIDDEN"}',
+      json: async () => ({ code: 'FORBIDDEN' }),
+      headers: new Headers({ 'content-type': 'application/json' }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(
+      searchAssignees({ baseUrl: 'https://testai.acik.com' }, 'JWT', 'sevil'),
+    ).rejects.toThrow(/403/);
   });
 });
