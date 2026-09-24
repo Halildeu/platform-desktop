@@ -233,6 +233,47 @@ describe('<LiveAnalysisPanel /> görev atama', () => {
     expect(screen.getByRole('button', { name: 'Görev oluştur' })).toBeInTheDocument();
   });
 
+  // Halil incelemesi (PR #145, M): yavas kalan ilk yanit sonra donup yeni
+  // aramanin sonucunun ustune yazmamali.
+  it('ignores a stale lookup response that arrives after a newer one', async () => {
+    const api = makeStubApi();
+    let resolveFirst: ((rows: Array<{ userId: number; label: string }>) => void) | null = null;
+    const searchAssignees = vi
+      .fn()
+      .mockImplementationOnce(
+        () =>
+          new Promise<Array<{ userId: number; label: string }>>((resolve) => {
+            resolveFirst = resolve;
+          }),
+      )
+      .mockResolvedValueOnce([{ userId: 2, label: 'Burak Demir (burak@acik.com)' }]);
+    const tasksApi: LiveTasksApi = { createAction: vi.fn(), searchAssignees };
+    render(<LiveAnalysisPanel meetingId={MEETING_A} api={api} tasksApi={tasksApi} />);
+    fireActionFrame(api);
+    await waitFor(() => expect(screen.getByText('Raporu Zeynep hazırlayacak')).toBeInTheDocument());
+
+    await userEvent.click(screen.getByRole('button', { name: 'Göreve ata' }));
+    const input = screen.getByLabelText('Atanacak kişiyi ara');
+
+    await userEvent.type(input, 'ayse');
+    await userEvent.click(screen.getByRole('button', { name: 'Ara' }));
+
+    await userEvent.clear(input);
+    await userEvent.type(input, 'burak');
+    await userEvent.click(screen.getByRole('button', { name: 'Ara' }));
+    await waitFor(() =>
+      expect(screen.getByText('Burak Demir (burak@acik.com)')).toBeInTheDocument(),
+    );
+
+    // Birinci arama simdi doniyor: sonucu yok sayilmali.
+    await act(async () => {
+      resolveFirst?.([{ userId: 1, label: 'Ayşe Yılmaz (ayse@acik.com)' }]);
+    });
+
+    expect(screen.queryByText('Ayşe Yılmaz (ayse@acik.com)')).not.toBeInTheDocument();
+    expect(screen.getByText('Burak Demir (burak@acik.com)')).toBeInTheDocument();
+  });
+
   it('says so when the directory matches nobody', async () => {
     const api = makeStubApi();
     const tasksApi: LiveTasksApi = {

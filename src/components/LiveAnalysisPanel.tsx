@@ -24,7 +24,7 @@
  *     is diagnosable in-app without console spelunking.
  */
 
-import { useState, type FC, type JSX } from 'react';
+import { useRef, useState, type FC, type JSX } from 'react';
 
 import {
   useLiveAnalysis,
@@ -135,6 +135,10 @@ function ActionItemRow({
   const [selected, setSelected] = useState<{ userId: number; label: string } | null>(null);
   const [dueDate, setDueDate] = useState('');
   const [searchState, setSearchState] = useState<AssigneeSearchState>({ kind: 'idle' });
+  // Halil incelemesi (PR #145, M): art arda iki aramada yavaş olan ilk yanıt
+  // sonra dönüp yeni sonucun üstüne yazabiliyordu. Yalnız son isteğin yanıtı
+  // kabul edilir; eskiler sessizce düşer.
+  const searchSequenceRef = useRef(0);
 
   // gitops#3587: a failed lookup used to be swallowed into an empty list, so a
   // permission error and "nobody matches" looked identical on screen. Keep the
@@ -142,15 +146,19 @@ function ActionItemRow({
   // an authorization problem.
   const search = (): void => {
     if (!api || !query.trim()) return;
+    searchSequenceRef.current += 1;
+    const sequence = searchSequenceRef.current;
     setSearchState({ kind: 'searching' });
     setOptions([]);
     api
       .searchAssignees({ query: query.trim() })
       .then((rows) => {
+        if (sequence !== searchSequenceRef.current) return;
         setOptions(rows);
         setSearchState(rows.length > 0 ? { kind: 'idle' } : { kind: 'empty' });
       })
       .catch((error: unknown) => {
+        if (sequence !== searchSequenceRef.current) return;
         setOptions([]);
         setSearchState({
           kind: 'error',
