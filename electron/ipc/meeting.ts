@@ -285,7 +285,7 @@ function parseActionCreateArgs(value: unknown): CreateMeetingActionArgs {
   };
 }
 
-function parseAssigneeSearchArgs(value: unknown): string {
+function parseAssigneeSearchArgs(value: unknown): { meetingId: string; query: string } {
   if (!value || typeof value !== 'object') {
     throw new Error('assignee search payload must be an object');
   }
@@ -293,7 +293,11 @@ function parseAssigneeSearchArgs(value: unknown): string {
   if (typeof record.query !== 'string' || !record.query.trim()) {
     throw new Error('query is required');
   }
-  return record.query.trim().slice(0, 128);
+  // gitops#3834: the picker is meeting-scoped — the meeting decides who may search.
+  return {
+    meetingId: requiredCanonicalMeetingId(record.meetingId, 'meetingId'),
+    query: record.query.trim().slice(0, 64),
+  };
 }
 
 export function registerMeetingIpc(): void {
@@ -354,8 +358,8 @@ export function registerMeetingIpc(): void {
   ipcMain.handle(
     'meeting:assignee-search',
     async (_e, payload: unknown): Promise<AssigneeOption[]> => {
-      const query = parseAssigneeSearchArgs(payload);
-      return searchAssignees(loadMeetingConfig(), await getValidAccessToken(), query);
+      const { meetingId, query } = parseAssigneeSearchArgs(payload);
+      return searchAssignees(loadMeetingConfig(), await getValidAccessToken(), meetingId, query);
     },
   );
 

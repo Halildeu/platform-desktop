@@ -162,18 +162,22 @@ describe('meeting action IPC boundary', () => {
     );
   });
 
-  it('requires a non-empty assignee search query', async () => {
+  it('requires a meeting id and a non-empty assignee search query (gitops#3834)', async () => {
     const handler = mocks.handlers.get('meeting:assignee-search');
+    const meetingId = '44444444-4444-4444-8444-444444444444';
 
-    await expect(handler?.({}, { query: '   ' })).rejects.toThrow('query is required');
+    await expect(handler?.({}, { meetingId, query: '   ' })).rejects.toThrow('query is required');
+    await expect(handler?.({}, { query: 'zeynep' })).rejects.toThrow();
+    await expect(handler?.({}, { meetingId: 'not-a-uuid', query: 'zeynep' })).rejects.toThrow();
     expect(mocks.searchAssignees).not.toHaveBeenCalled();
 
-    await expect(handler?.({}, { query: ' zeynep ' })).resolves.toEqual([
+    await expect(handler?.({}, { meetingId, query: ' zeynep ' })).resolves.toEqual([
       { userId: 30, label: 'Ali Veli' },
     ]);
     expect(mocks.searchAssignees).toHaveBeenCalledWith(
       { baseUrl: 'https://testai.acik.com' },
       'JWT',
+      meetingId,
       'zeynep',
     );
   });

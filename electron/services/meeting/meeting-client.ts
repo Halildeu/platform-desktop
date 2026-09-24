@@ -1120,7 +1120,8 @@ export async function readMeetingIntelligenceResult(
 // than a surfaced failure.
 
 const ACTION_ATTEMPT_TIMEOUT_MS = 6_000;
-const ASSIGNEE_SEARCH_MAX_QUERY = 128;
+// gitops#3834: the meeting-scoped picker accepts 2..64 characters.
+const ASSIGNEE_SEARCH_MAX_QUERY = 64;
 
 export interface MeetingActionRecord {
   id: string;
@@ -1154,9 +1155,13 @@ export function meetingActionsUrl(cfg: MeetingClientConfig, meetingId: string): 
   return `${meetingsUrl(cfg)}/${meetingId}/actions`;
 }
 
-export function assigneeSearchUrl(cfg: MeetingClientConfig, query: string): string {
-  const params = new URLSearchParams({ search: query, pageSize: '10' });
-  return `${cfg.baseUrl}/api/v1/users?${params.toString()}`;
+/**
+ * gitops#3834: the "Göreve ata" picker asks the meeting-scoped, least-privilege
+ * endpoint (gated like creating an action). The admin user grid
+ * (`GET /api/v1/users`, USER_READ) answered 403 to every non-admin.
+ */
+export function assigneeCandidateSearchUrl(cfg: MeetingClientConfig, meetingId: string): string {
+  return `${cfg.baseUrl}/api/v1/admin/meetings/${encodeURIComponent(meetingId)}/assignee-candidates/search`;
 }
 
 function parseMeetingActionRecord(value: unknown): MeetingActionRecord {
@@ -1212,14 +1217,21 @@ export async function createMeetingAction(
 export async function searchAssignees(
   cfg: MeetingClientConfig,
   jwt: string,
+  meetingId: string,
   query: string,
 ): Promise<AssigneeOption[]> {
+  const canonicalMeetingId = requiredCanonicalUuid(meetingId, 'assignee search meetingId');
   const bounded = boundedString(query, 'assignee search query', ASSIGNEE_SEARCH_MAX_QUERY);
   const payload: unknown = await withDesktopFetchDeadline(
-    assigneeSearchUrl(cfg, bounded),
+    assigneeCandidateSearchUrl(cfg, canonicalMeetingId),
     {
-      method: 'GET',
-      headers: { Authorization: `Bearer ${jwt}` },
+      // POST keeps the typed name out of the URL and every access log on the way.
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${jwt}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ query: bounded, limit: 10 }),
     },
     ACTION_ATTEMPT_TIMEOUT_MS,
     'searchAssignees',
@@ -1230,31 +1242,21 @@ export async function searchAssignees(
       return (await response.json()) as unknown;
     },
   );
-  const rows: unknown[] = Array.isArray(payload)
-    ? payload
-    : payload &&
-        typeof payload === 'object' &&
-        Array.isArray((payload as { items?: unknown[] }).items)
+  const rows: unknown[] =
+    payload &&
+    typeof payload === 'object' &&
+    Array.isArray((payload as { items?: unknown[] }).items)
       ? (payload as { items: unknown[] }).items
-      : payload &&
-          typeof payload === 'object' &&
-          Array.isArray((payload as { content?: unknown[] }).content)
-        ? (payload as { content: unknown[] }).content
-        : [];
+      : [];
   const options: AssigneeOption[] = [];
   for (const raw of rows) {
     if (!raw || typeof raw !== 'object') continue;
     const row = raw as Record<string, unknown>;
-    // gitops#3507: the directory exposes only the numeric id; the backend
+    // gitops#3507: the picker exposes only the numeric id; the backend
     // resolves id → KC subject at create time.
-    if (typeof row.id !== 'number') continue;
-    const userId = row.id;
-    const name =
-      typeof row.name === 'string' && row.name.trim()
-        ? row.name.trim()
-        : typeof row.displayName === 'string'
-          ? row.displayName.trim()
-          : '';
+    if (typeof row.userId !== 'number') continue;
+    const userId = row.userId;
+    const name = typeof row.name === 'string' ? row.name.trim() : '';
     const email = typeof row.email === 'string' ? row.email.trim() : '';
     const label = name && email ? `${name} (${email})` : name || email || String(userId);
     options.push({ userId, label });

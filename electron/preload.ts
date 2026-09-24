@@ -265,6 +265,7 @@ const electronAPI = {
       version: number;
     }> => ipcRenderer.invoke('meeting:action-create', payload),
     searchAssignees: (payload: {
+      meetingId: string;
       query: string;
     }): Promise<Array<{ userId: number; label: string }>> =>
       ipcRenderer.invoke('meeting:assignee-search', payload),

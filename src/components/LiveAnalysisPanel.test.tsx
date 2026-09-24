@@ -180,7 +180,7 @@ describe('<LiveAnalysisPanel /> görev atama', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Görev oluştur' }));
 
     await waitFor(() => expect(screen.getByText(/Görev oluşturuldu/)).toBeInTheDocument());
-    expect(searchAssignees).toHaveBeenCalledWith({ query: 'zeynep' });
+    expect(searchAssignees).toHaveBeenCalledWith({ meetingId: MEETING_A, query: 'zeynep' });
     expect(createAction).toHaveBeenCalledWith({
       meetingId: MEETING_A,
       description: 'Raporu Zeynep hazırlayacak',
@@ -225,9 +225,13 @@ describe('<LiveAnalysisPanel /> görev atama', () => {
     await userEvent.type(screen.getByLabelText('Atanacak kişiyi ara'), 'sevil');
     await userEvent.click(screen.getByRole('button', { name: 'Ara' }));
 
+    // Halil incelemesi (PR #145, P2): the person sees what happened, not "searchAssignees failed: 403".
     await waitFor(() =>
-      expect(screen.getByText(/Kişi araması yapılamadı: .*403/)).toBeInTheDocument(),
+      expect(screen.getByRole('alert')).toHaveTextContent(
+        'Kişi araması yapılamadı: bu toplantıda kişi aramaya yetkiniz yok. Görevi atamasız oluşturabilirsiniz.',
+      ),
     );
+    expect(screen.queryByText(/searchAssignees failed/)).not.toBeInTheDocument();
     expect(screen.queryByText(/kişi bulunamadı/i)).not.toBeInTheDocument();
     // The action stays assignable without an owner.
     expect(screen.getByRole('button', { name: 'Görev oluştur' })).toBeInTheDocument();
