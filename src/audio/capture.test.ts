@@ -198,6 +198,7 @@ function installElectronApiMock(): void {
       onTranscriptEvent: vi.fn(() => vi.fn()),
       onTranscriptError: vi.fn(() => vi.fn()),
       onTranscriptRecovered: vi.fn(() => () => {}),
+      onLiveLag: vi.fn(() => () => {}),
     },
   };
 }
@@ -392,9 +393,12 @@ describe('startRecording', () => {
       data: new Float32Array(48_000),
     } as MessageEvent<Float32Array>);
 
+    // 1 sn'lik ses 10 sn'lik konuşma penceresini doldurmaz; oran henüz yok.
     expect(onAudioActivity).toHaveBeenCalledWith({
       rms: 0,
       capturedAtMs: expect.any(Number),
+      speechRatio: null,
+      speechRms: null,
     });
     expect(ws?.sent).toHaveLength(10);
     for (const frame of ws?.sent ?? []) {

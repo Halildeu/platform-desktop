@@ -821,6 +821,127 @@ describe('GatewayLiveStream', () => {
     stream.close();
   });
 
+  // The old badge compared the last audio frame with the last text, so silence
+  // and room noise read as lag. The lane now reports what can actually be late.
+  it('reports delivery backlog and engine lag, not silence', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000_000);
+    const sockets: FakeSocket[] = [];
+    const snapshots: Array<{
+      deliveryBacklogMs: number;
+      engineLagMs: number | null;
+      lastEngineEventAgeMs: number | null;
+    }> = [];
+    const stream = new GatewayLiveStream({
+      cfg: { baseUrl: 'https://testai.acik.com' },
+      sessionId: 'SES-1',
+      getJwt: async () => 'JWT',
+      onEvent: vi.fn(),
+      onError: vi.fn(),
+      onLagSnapshot: (snapshot) => snapshots.push(snapshot),
+      socketFactory: () => {
+        const socket = new FakeSocket();
+        sockets.push(socket);
+        return socket;
+      },
+    });
+    const started = stream.start();
+    await vi.advanceTimersByTimeAsync(0);
+    sockets[0].open();
+    sockets[0].message(JSON.stringify({ type: 'ready' }));
+    await started;
+
+    // Silence with a healthy link: frames are acknowledged, nothing is late.
+    stream.sendRealtimeFrame(new Uint8Array(3_200), 1_000_000);
+    sockets[0].message(JSON.stringify({ type: 'audio_ack', chunk_seq: 0 }));
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(snapshots.at(-1)).toEqual({
+      deliveryBacklogMs: 0,
+      engineLagMs: null,
+      lastEngineEventAgeMs: null,
+    });
+
+    // The engine reports it has transcribed up to 3s of the 9s it received.
+    sockets[0].message(
+      JSON.stringify({
+        type: 'partial',
+        seq: 0,
+        confirmed: '',
+        tentative: 'merhaba',
+        elapsed_ms: 3_000,
+        audio_sent_ms: 9_000,
+      }),
+    );
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(snapshots.at(-1)).toEqual({
+      deliveryBacklogMs: 0,
+      engineLagMs: 6_000,
+      lastEngineEventAgeMs: 1_000,
+    });
+
+    // A stale engine reading expires instead of sticking on screen, while the
+    // time since the last text keeps growing: that pair is what tells a stalled
+    // engine from silence once the speech signal is added (#144).
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(snapshots.at(-1)?.engineLagMs).toBeNull();
+    expect(snapshots.at(-1)?.lastEngineEventAgeMs).toBe(11_000);
+
+    // A frame the gateway does not acknowledge ages as delivery backlog.
+    stream.sendRealtimeFrame(new Uint8Array(3_200), 1_012_000);
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(snapshots.at(-1)?.deliveryBacklogMs).toBe(3_000);
+    sockets[0].message(JSON.stringify({ type: 'audio_ack', chunk_seq: 1 }));
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(snapshots.at(-1)?.deliveryBacklogMs).toBe(0);
+
+    stream.close();
+    const reported = snapshots.length;
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(snapshots).toHaveLength(reported);
+  });
+
+  // #144: the stall rule needs "when did the engine last produce text", and a
+  // partial counts even without timing fields.
+  it('tracks the age of the last engine text, partials included', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(2_000_000);
+    const sockets: FakeSocket[] = [];
+    const snapshots: Array<{ lastEngineEventAgeMs: number | null }> = [];
+    const stream = new GatewayLiveStream({
+      cfg: { baseUrl: 'https://testai.acik.com' },
+      sessionId: 'SES-1',
+      getJwt: async () => 'JWT',
+      onEvent: vi.fn(),
+      onError: vi.fn(),
+      onLagSnapshot: (snapshot) => snapshots.push(snapshot),
+      socketFactory: () => {
+        const socket = new FakeSocket();
+        sockets.push(socket);
+        return socket;
+      },
+    });
+    const started = stream.start();
+    await vi.advanceTimersByTimeAsync(0);
+    sockets[0].open();
+    sockets[0].message(JSON.stringify({ type: 'ready' }));
+    await started;
+
+    // Acks alone are not engine output.
+    stream.sendRealtimeFrame(new Uint8Array(3_200), 2_000_000);
+    sockets[0].message(JSON.stringify({ type: 'audio_ack', chunk_seq: 0 }));
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(snapshots.at(-1)?.lastEngineEventAgeMs).toBeNull();
+
+    // A partial without timing fields still proves the engine is producing words.
+    sockets[0].message(
+      JSON.stringify({ type: 'partial', seq: 0, confirmed: '', tentative: 'merhaba' }),
+    );
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(snapshots.at(-1)?.lastEngineEventAgeMs).toBe(2_000);
+
+    stream.close();
+  });
+
   // #138: a whole backlog written in one burst came back partly untranscribed.
   it('replays a reconnect backlog in order at the paced rate', async () => {
     vi.useFakeTimers();

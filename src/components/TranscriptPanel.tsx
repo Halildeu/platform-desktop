@@ -21,6 +21,7 @@ import { advanceTypewriter, typewriterBudget } from '../transcript/typewriter';
 import type { LiveSttPreflightState } from '../audio/live-stt-preflight';
 import type { LiveSttStreamStatusEvent } from '../audio/live-stt-stream';
 import type { AudioCapturePreflightState } from '../audio/capture';
+import { isSpeechActive } from '../audio/speech-activity';
 
 const TRANSCRIPT_LAG_WARN_MS = 5_000;
 const TRANSCRIPT_DENSITY_READY_MIN_MS = 10_000;
@@ -67,6 +68,21 @@ export interface TranscriptPanelProps {
     audioRms?: number | null;
     audioActive?: boolean;
     lastAudioAtMs?: number | null;
+    /**
+     * Measured live-lane lag (gateway live mode). When present it replaces the
+     * "last audio frame minus last text" estimate, which read silence and room
+     * noise as lag: deliveryBacklogMs is the age of the oldest unacknowledged
+     * frame, engineLagMs how far the STT engine is behind the audio it received.
+     */
+    liveLag?: {
+      deliveryBacklogMs: number;
+      engineLagMs: number | null;
+      lastEngineEventAgeMs?: number | null;
+    } | null;
+    /** Son 10 sn'de eşiğin üstündeki 100 ms pencere oranı (speech-activity.ts). */
+    speechActivityRatio?: number | null;
+    /** Aynı pencerenin RMS dağılımı (%10 / ortanca / %90); yalnız tanı için. */
+    speechActivityRms?: { p10: number; p50: number; p90: number } | null;
     disabledReason: string | null;
     preflight?: LiveSttPreflightState;
     capturePreflight?: AudioCapturePreflightState;
@@ -154,11 +170,65 @@ function streamLoadingStageLabel(stage: string | undefined): string {
   return 'model';
 }
 
+function measuredLagMs(stream: TranscriptPanelProps['stream']): number | null {
+  const lag = stream?.liveLag;
+  if (!lag) {
+    return null;
+  }
+  const delivery = Number.isFinite(lag.deliveryBacklogMs) ? Math.max(0, lag.deliveryBacklogMs) : 0;
+  const engine =
+    typeof lag.engineLagMs === 'number' && Number.isFinite(lag.engineLagMs)
+      ? Math.max(0, lag.engineLagMs)
+      : 0;
+  return Math.max(delivery, engine);
+}
+
+/** Son motor olayından bu yana en az bu kadar geçmeli (partial da sayılır). */
+const TEXT_STALL_MIN_MS = 10_000;
+/** "Teslim birikimi düşük": ağ kesintisi ayrı uyarıyla zaten gösteriliyor. */
+const TEXT_STALL_MAX_BACKLOG_MS = 2_000;
+
+/**
+ * Konuşma sürerken motorun metin üretmeyi bırakması (platform-desktop#144).
+ *
+ * Ölçülen gecikme bu durumu göremez: motor sustuğunda gecikme değeri bilinmez
+ * (null) olur, teslim de sağlıklıysa ekran "<1 sn" der. Sessizlikte de aynı
+ * görüntü oluştuğu için ikisini ayıran tek şey konuşma sinyalidir. Aşağıdakilerin
+ * hepsi doğruysa süre döner, değilse null:
+ *   - motor gecikmesi bilinmiyor,
+ *   - teslim birikimi düşük (kesinti ayrı uyarıyla gösteriliyor),
+ *   - son 10 sn'nin en az %40'ında ses var (pencere doluysa),
+ *   - son metin olayı 10 sn'den eski.
+ */
+function textStallMs(
+  stream: TranscriptPanelProps['stream'],
+  recordingActive: boolean,
+): number | null {
+  const lag = stream?.liveLag;
+  if (!recordingActive || !lag || lag.engineLagMs !== null) {
+    return null;
+  }
+  if (!(lag.deliveryBacklogMs <= TEXT_STALL_MAX_BACKLOG_MS)) {
+    return null;
+  }
+  if (!isSpeechActive(stream?.speechActivityRatio ?? null)) {
+    return null;
+  }
+  const ageMs = lag.lastEngineEventAgeMs;
+  if (typeof ageMs !== 'number' || !Number.isFinite(ageMs) || ageMs < TEXT_STALL_MIN_MS) {
+    return null;
+  }
+  return ageMs;
+}
+
 function streamLagMs(
   stream: TranscriptPanelProps['stream'],
   lastTranscriptAtMs: number | null,
   recordingActive: boolean,
 ): number | null {
+  if (recordingActive && stream?.liveLag) {
+    return measuredLagMs(stream);
+  }
   if (
     !recordingActive ||
     !stream?.audioActive ||
@@ -185,6 +255,23 @@ function transcriptLagLabel(
   lastTranscriptAtMs: number | null,
   recordingActive: boolean,
 ): string {
+  if (recordingActive && stream?.liveLag) {
+    const stalledMs = textStallMs(stream, recordingActive);
+    if (stalledMs !== null) {
+      return `Metin gelmiyor · ${formatDuration(stalledMs)}`;
+    }
+    const measured = measuredLagMs(stream) ?? 0;
+    if (measured >= TRANSCRIPT_LAG_WARN_MS) {
+      return `Gecikiyor · ${formatDuration(measured)}`;
+    }
+    if (
+      stream.audioActive &&
+      (typeof lastTranscriptAtMs !== 'number' || !Number.isFinite(lastTranscriptAtMs))
+    ) {
+      return 'İlk metin bekleniyor';
+    }
+    return formatDuration(measured);
+  }
   if (
     !recordingActive ||
     !stream?.directConfigured ||
@@ -210,6 +297,9 @@ function transcriptLagClass(
   lastTranscriptAtMs: number | null,
   recordingActive: boolean,
 ): string {
+  if (textStallMs(stream, recordingActive) !== null) {
+    return 'stream-lag-warning';
+  }
   const lagMs = streamLagMs(stream, lastTranscriptAtMs, recordingActive);
   return lagMs !== null && lagMs >= TRANSCRIPT_LAG_WARN_MS ? 'stream-lag-warning' : '';
 }
@@ -532,6 +622,7 @@ type TranscriptFlowRisk =
   | 'connection_error'
   | 'no_text'
   | 'lagging'
+  | 'text_stalled'
   | 'low_word_coverage'
   | 'low_segment_density'
   | 'waiting_audio';
@@ -884,6 +975,24 @@ function transcriptFlowHealth(
     };
   }
 
+  const stalledMs = textStallMs(stream, recordingActive);
+  if (stalledMs !== null) {
+    return {
+      label: 'Metin gelmiyor',
+      detail: `Konuşma sürüyor ama ${formatDuration(stalledMs)} boyunca metin gelmedi; ses iletimi sağlıklı, STT tarafı yanıt vermiyor olabilir.`,
+      nextAction:
+        'Tanıyı kopyalayın; konuşma oranı ve son motor olayının yaşı tanı çıktısında yer alır.',
+      level: 'warn',
+      risk: 'text_stalled',
+      words,
+      spanMs,
+      segmentsPerMinute,
+      wordsPerMinute,
+      directCount: sourceCounts.direct,
+      gatewayCount: sourceCounts.gateway,
+    };
+  }
+
   if (lagMs !== null && lagMs >= TRANSCRIPT_LAG_WARN_MS) {
     return {
       label: 'Metin gecikiyor',
@@ -1113,6 +1222,11 @@ function buildTranscriptDiagnostics(
     `lastAudioAt=${formatDiagnosticTimestamp(stream?.lastAudioAtMs)}`,
     `lastTranscriptAt=${formatDiagnosticTimestamp(lastTranscriptAtMs)}`,
     `lagMs=${lagMs ?? '-'}`,
+    `speechActivityRatio=${formatDiagnosticNumber(stream?.speechActivityRatio ?? null, 2)}`,
+    `speechActivityRms.p10=${formatDiagnosticNumber(stream?.speechActivityRms?.p10 ?? null, 4)}`,
+    `speechActivityRms.p50=${formatDiagnosticNumber(stream?.speechActivityRms?.p50 ?? null, 4)}`,
+    `speechActivityRms.p90=${formatDiagnosticNumber(stream?.speechActivityRms?.p90 ?? null, 4)}`,
+    `lastEngineEventAgeMs=${stream?.liveLag?.lastEngineEventAgeMs ?? '-'}`,
     `flow.health=${health.label}`,
     `flow.risk=${health.risk}`,
     `flow.nextAction=${health.nextAction}`,

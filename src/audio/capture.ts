@@ -20,6 +20,7 @@ import {
 } from './live-stt-stream';
 import { encodeChunk, floatToPcm16, pcm16ToBytes, resampleLinear } from './pcm-encode';
 import { FrameBuffer } from './frame-buffer';
+import { SpeechActivityMeter, type SpeechActivityRmsPercentiles } from './speech-activity';
 
 const TARGET_RATE = 16000;
 const CHUNK_MS = 2000;
@@ -162,7 +163,17 @@ export interface StartRecordingOptions {
   liveSttContextTerms?: readonly string[];
   onLiveStreamReady?: () => void;
   onLiveStreamStatus?: (event: LiveSttStreamStatusEvent) => void;
-  onAudioActivity?: (activity: { rms: number; capturedAtMs: number }) => void;
+  onAudioActivity?: (activity: {
+    rms: number;
+    capturedAtMs: number;
+    /**
+     * Son 10 sn'deki 100 ms pencerelerin eşiğin üstündeki oranı; pencere
+     * dolmadıysa null (speech-activity.ts). Motordan bağımsız konuşma sinyali.
+     */
+    speechRatio: number | null;
+    /** Aynı pencerenin RMS dağılımı; eşiği ölçümle ayarlamak için tanıya yazılır. */
+    speechRms: SpeechActivityRmsPercentiles | null;
+  }) => void;
   onLiveTranscriptEvent?: (event: LiveSttTranscriptEvent) => void;
   onLiveTranscriptError?: (err: Error) => void;
 }
@@ -479,6 +490,10 @@ export async function startRecording(
   let uploadTail: Promise<void> = Promise.resolve();
   let errorHandler: ((err: Error) => void) | null = null;
   let lastAudioActivityEventAtMs = 0;
+  // Konuşma etkinliği her parçadan ölçülür (yalnız 500 ms'de bir olay gönderilen
+  // parçadan değil); aksi halde oran kalibrasyondaki 100 ms pencereyle aynı şeyi
+  // ölçmez.
+  const speechActivity = new SpeechActivityMeter(audioContext.sampleRate);
   let captureResourcesRelease: Promise<void> | null = null;
 
   const releaseCaptureResources = (): Promise<void> => {
@@ -544,12 +559,19 @@ export async function startRecording(
       return;
     }
     const capturedAtMs = Date.now();
+    speechActivity.push(ev.data);
     if (
       options.onAudioActivity &&
       capturedAtMs - lastAudioActivityEventAtMs >= AUDIO_ACTIVITY_EVENT_MS
     ) {
       lastAudioActivityEventAtMs = capturedAtMs;
-      options.onAudioActivity({ rms: rms(ev.data), capturedAtMs });
+      const activity = speechActivity.snapshot();
+      options.onAudioActivity({
+        rms: rms(ev.data),
+        capturedAtMs,
+        speechRatio: activity.ratio,
+        speechRms: activity.rms,
+      });
     }
     if (liveStream || (captureId && options.transcriptionMode === 'realtime')) {
       const liveFrame = resampleLinear(ev.data, audioContext.sampleRate, TARGET_RATE);

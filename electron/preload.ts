@@ -196,6 +196,29 @@ const electronAPI = {
       ipcRenderer.on('audio:transcript-error', listener);
       return () => ipcRenderer.removeListener('audio:transcript-error', listener);
     },
+    /** Delivery/engine lag of the live lane, once a second while recording. */
+    onLiveLag: (
+      callback: (event: {
+        sessionId: string;
+        deliveryBacklogMs: number;
+        engineLagMs: number | null;
+        lastEngineEventAgeMs: number | null;
+      }) => void,
+    ): (() => void) => {
+      const listener = (
+        _event: IpcRendererEvent,
+        payload: {
+          sessionId: string;
+          deliveryBacklogMs: number;
+          engineLagMs: number | null;
+          lastEngineEventAgeMs: number | null;
+        },
+      ): void => {
+        callback(payload);
+      };
+      ipcRenderer.on('audio:live-lag', listener);
+      return () => ipcRenderer.removeListener('audio:live-lag', listener);
+    },
     onTranscriptRecovered: (callback: (event: { sessionId: string }) => void): (() => void) => {
       const listener = (_event: IpcRendererEvent, payload: { sessionId: string }): void => {
         callback(payload);

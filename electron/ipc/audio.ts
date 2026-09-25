@@ -1100,6 +1100,7 @@ export function registerAudioIpc(): void {
               ),
             onError: (streamError) => emitTranscriptError(send, sessionId, streamError),
             onDeliveryStatus: (status) => emitLiveDeliveryStatus(send, sessionId, status),
+            onLagSnapshot: (snapshot) => send?.('audio:live-lag', { sessionId, ...snapshot }),
             ...(normalizedTranscriptionMode === 'realtime'
               ? {
                   maxPendingFrames: REALTIME_MAX_PENDING_FRAME_COUNT,

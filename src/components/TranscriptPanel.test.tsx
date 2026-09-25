@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import '@testing-library/jest-dom/vitest';
 
@@ -1542,6 +1542,214 @@ describe('TranscriptPanel', () => {
         'Tanıyı kopyalayın; direct STT backlog, ağ gecikmesi ve model kuyruğu metrikleriyle karşılaştırın.',
       ),
     ).toBeInTheDocument();
+  });
+
+  // Attended 17-18 Sep: "Metin gecikiyor" grew to 36-46 s while nobody spoke,
+  // including in a noisy room (RMS 0.003-0.007). With measured live lag the
+  // badge no longer depends on speech, noise or silence.
+  it.each([
+    {
+      label: 'silence/noise on a healthy lane',
+      liveLag: { deliveryBacklogMs: 0, engineLagMs: null },
+      warns: null,
+    },
+    {
+      label: 'engine keeping up',
+      liveLag: { deliveryBacklogMs: 200, engineLagMs: 800 },
+      warns: null,
+    },
+    {
+      label: 'network backlog',
+      liveLag: { deliveryBacklogMs: 7_000, engineLagMs: null },
+      warns: '7 sn',
+    },
+    {
+      label: 'engine behind',
+      liveLag: { deliveryBacklogMs: 0, engineLagMs: 9_000 },
+      warns: '9 sn',
+    },
+  ])('uses measured live lag: $label', ({ liveLag, warns }) => {
+    const recording = startTranscriptSession(initialTranscriptSession(), {
+      sessionId: 'SES-1',
+      meetingId: '22222222-2222-4222-8222-222222222222',
+      deviceId: 'desktop-1',
+      hasLoopback: false,
+      startedAtMs: 1781820000123,
+    });
+    const withTranscript = upsertTranscriptSegment(recording, {
+      id: 'seg-1',
+      speakerLabel: 'Konuşmacı',
+      startedAtMs: 1781820001000,
+      status: 'draft',
+      text: 'İlk canlı metin geldi',
+      source: 'direct-stream',
+      receivedAtMs: 1781820002000,
+    });
+
+    render(
+      <TranscriptPanel
+        session={withTranscript}
+        stream={{
+          directConfigured: true,
+          directReady: true,
+          directActive: true,
+          audioRms: 0.007,
+          audioActive: true,
+          // 46 s after the last text: the old estimate would warn here.
+          lastAudioAtMs: 1781820048000,
+          liveLag,
+          disabledReason: null,
+        }}
+      />,
+    );
+
+    if (warns) {
+      expect(screen.getByText(`Gecikiyor · ${warns}`)).toHaveClass('stream-lag-warning');
+      const flowHealth = screen.getByLabelText('Transkript akış kalitesi');
+      expect(within(flowHealth).getByText('Metin gecikiyor')).toBeInTheDocument();
+    } else {
+      expect(screen.queryByText(/Metin gecikiyor/)).not.toBeInTheDocument();
+      expect(screen.queryByText(/Gecikiyor ·/)).not.toBeInTheDocument();
+    }
+  });
+
+  // platform-desktop#144, Halil incelemesi: ölçülen gecikme, konuşma sürerken
+  // motorun susmasını göremiyordu (gecikme bilinmez → "<1 sn"). Konuşma sinyali
+  // ile ayrılır. Oranlar 24 Eylül kalibrasyonundan: sessiz %1, arka plan %4,
+  // konuşma %87. "İlk 10 sn" pencere dolmadığı için oranın null olması demektir.
+  it.each([
+    { label: 'silence (1%)', speechActivityRatio: 0.01, ageMs: 30_000, stalls: false },
+    { label: 'background speech (4%)', speechActivityRatio: 0.04, ageMs: 30_000, stalls: false },
+    {
+      label: 'speech (87%) with text older than 10 s',
+      speechActivityRatio: 0.87,
+      ageMs: 14_000,
+      stalls: true,
+    },
+    {
+      label: 'speech (87%) with a fresh partial',
+      speechActivityRatio: 0.87,
+      ageMs: 3_000,
+      stalls: false,
+    },
+    {
+      label: 'first 10 s, window not full',
+      speechActivityRatio: null,
+      ageMs: 30_000,
+      stalls: false,
+    },
+  ])(
+    'flags a text stall only while someone is speaking: $label',
+    ({ speechActivityRatio, ageMs, stalls }) => {
+      const recording = startTranscriptSession(initialTranscriptSession(), {
+        sessionId: 'SES-1',
+        meetingId: '22222222-2222-4222-8222-222222222222',
+        deviceId: 'desktop-1',
+        hasLoopback: false,
+        startedAtMs: 1781820000123,
+      });
+      const withTranscript = upsertTranscriptSegment(recording, {
+        id: 'seg-1',
+        speakerLabel: 'Konuşmacı',
+        startedAtMs: 1781820001000,
+        status: 'final',
+        text: 'Son metin geldi',
+        source: 'gateway-events',
+        receivedAtMs: 1781820002000,
+      });
+
+      render(
+        <TranscriptPanel
+          session={withTranscript}
+          stream={{
+            directConfigured: true,
+            directReady: true,
+            directActive: true,
+            audioRms: 0.007,
+            audioActive: true,
+            lastAudioAtMs: 1781820040000,
+            liveLag: { deliveryBacklogMs: 0, engineLagMs: null, lastEngineEventAgeMs: ageMs },
+            speechActivityRatio,
+            disabledReason: null,
+          }}
+        />,
+      );
+
+      const flowHealth = screen.getByLabelText('Transkript akış kalitesi');
+      if (stalls) {
+        expect(screen.getByText('Metin gelmiyor · 14 sn')).toHaveClass('stream-lag-warning');
+        expect(within(flowHealth).getByText('Metin gelmiyor')).toBeInTheDocument();
+      } else {
+        expect(screen.queryByText(/Metin gelmiyor/)).not.toBeInTheDocument();
+        expect(screen.getByText('<1 sn')).toBeInTheDocument();
+      }
+    },
+  );
+
+  it('does not report a text stall while the network backlog is already shown', () => {
+    const recording = startTranscriptSession(initialTranscriptSession(), {
+      sessionId: 'SES-1',
+      meetingId: '22222222-2222-4222-8222-222222222222',
+      deviceId: 'desktop-1',
+      hasLoopback: false,
+      startedAtMs: 1781820000123,
+    });
+
+    render(
+      <TranscriptPanel
+        session={recording}
+        stream={{
+          directConfigured: true,
+          directReady: true,
+          directActive: true,
+          audioRms: 0.02,
+          audioActive: true,
+          lastAudioAtMs: 1781820040000,
+          liveLag: { deliveryBacklogMs: 7_000, engineLagMs: null, lastEngineEventAgeMs: 20_000 },
+          speechActivityRatio: 0.87,
+          disabledReason: null,
+        }}
+      />,
+    );
+
+    // Kesinti zaten "Gecikiyor" olarak görünüyor; ikinci bir uyarı eklenmez.
+    expect(screen.queryByText(/Metin gelmiyor/)).not.toBeInTheDocument();
+    expect(screen.getByText('Gecikiyor · 7 sn')).toBeInTheDocument();
+  });
+
+  it('writes the speech ratio and engine event age to the diagnostics', async () => {
+    const recording = startTranscriptSession(initialTranscriptSession(), {
+      sessionId: 'SES-1',
+      meetingId: '22222222-2222-4222-8222-222222222222',
+      deviceId: 'desktop-1',
+      hasLoopback: false,
+      startedAtMs: 1781820000123,
+    });
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
+
+    render(
+      <TranscriptPanel
+        session={recording}
+        stream={{
+          directConfigured: true,
+          directReady: true,
+          directActive: true,
+          audioRms: 0.02,
+          audioActive: true,
+          lastAudioAtMs: 1781820040000,
+          liveLag: { deliveryBacklogMs: 0, engineLagMs: null, lastEngineEventAgeMs: 12_345 },
+          speechActivityRatio: 0.87,
+          disabledReason: null,
+        }}
+      />,
+    );
+
+    await userEvent.click(screen.getByRole('button', { name: 'Tanı kopyala' }));
+    await waitFor(() => expect(writeText).toHaveBeenCalled());
+    const diagnostics = writeText.mock.calls[0][0] as string;
+    expect(diagnostics).toContain('speechActivityRatio=0.87');
+    expect(diagnostics).toContain('lastEngineEventAgeMs=12345');
   });
 
   it('flags low word coverage when audio is active but transcript text is sparse', () => {

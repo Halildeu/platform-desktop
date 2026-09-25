@@ -244,6 +244,7 @@ function installElectronApiMock(recorderConfig: {
       onTranscriptRecovered: vi.fn((_callback: (event: { sessionId: string }) => void) => {
         return vi.fn();
       }),
+      onLiveLag: vi.fn(() => vi.fn()),
     },
   };
 }
@@ -1380,7 +1381,12 @@ describe('App recorder readiness', () => {
     expect(screen.getByText('Bağlı, ses bekleniyor')).toBeInTheDocument();
 
     act(() => {
-      options?.onAudioActivity?.({ rms: 0.02, capturedAtMs: 1781820000000 });
+      options?.onAudioActivity?.({
+        rms: 0.02,
+        capturedAtMs: 1781820000000,
+        speechRatio: null,
+        speechRms: null,
+      });
     });
     expect(screen.getByText('Ses alınıyor, kelime bekleniyor')).toBeInTheDocument();
     expect(screen.getByText('Alınıyor · RMS 0.020')).toBeInTheDocument();
