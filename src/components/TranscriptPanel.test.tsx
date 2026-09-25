@@ -1692,9 +1692,6 @@ describe('TranscriptPanel', () => {
     expect(within(flowHealth).getByText('90 kelime/dk')).toBeInTheDocument();
   });
 
-  // 24 Eylül attended koşusu: 54 satırın yalnız bir kısmı motor zamanlaması
-  // taşıyordu, payda 13,7 sn ölçüldü ve ekran 241 kelime/dk gösterdi. Şişmiş
-  // oran yanlış uyarı vermez ama gerçek kapsam düşüklüğünü gizler.
   // Halil incelemesi (PR #146): iki konusmaci ayni saniyede konustugunda o
   // saniye paydada iki kez sayilmamali; aralik birlesimi bunu tekillestirir.
   it('counts overlapping speakers once in the speech span', () => {
@@ -1753,6 +1750,9 @@ describe('TranscriptPanel', () => {
     expect(within(flowHealth).queryByText('Metin kapsamı düşük')).not.toBeInTheDocument();
   });
 
+  // 24 Eylül attended koşusu: 54 satırın yalnız bir kısmı motor zamanlaması
+  // taşıyordu, payda 13,7 sn ölçüldü ve ekran 241 kelime/dk gösterdi. Şişmiş
+  // oran yanlış uyarı vermez ama gerçek kapsam düşüklüğünü gizler.
   it('reports an unmeasurable rate instead of an inflated one when most lines lack timing', () => {
     const startedAtMs = 1781820000000;
     let session = startTranscriptSession(initialTranscriptSession(), {
