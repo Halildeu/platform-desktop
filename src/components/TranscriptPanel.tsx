@@ -28,6 +28,8 @@ const TRANSCRIPT_LOW_DENSITY_WARN_MS = 15_000;
 const TRANSCRIPT_LOW_DENSITY_SEGMENTS_PER_MINUTE = 1;
 const TRANSCRIPT_LOW_WORD_RATE_WARN_MS = 20_000;
 const TRANSCRIPT_LOW_WORDS_PER_MINUTE = 35;
+/** Konuşma süresi bundan kısaysa kapsam hakkında hüküm verilmez. */
+const TRANSCRIPT_SPEECH_WINDOW_MIN_MS = 20_000;
 const TRANSCRIPT_TURN_GAP_MS = 30_000;
 const TRANSCRIPT_TURN_MAX_SPAN_MS = 120_000;
 const TRANSCRIPT_TURN_MAX_SEGMENTS = 40;
@@ -544,6 +546,9 @@ interface TranscriptFlowHealth {
   risk: TranscriptFlowRisk;
   words: number;
   spanMs: number | null;
+  /** Oranların paydası olan konuşma süresi; ölçülemiyorsa null. */
+  speechSpanMs: number | null;
+  rateBasis: SpeechSpan['kind'];
   segmentsPerMinute: number | null;
   wordsPerMinute: number | null;
   directCount: number;
@@ -767,6 +772,79 @@ function transcriptObservationSpanMs(
   return endMs - session.startedAtMs;
 }
 
+/**
+ * Konuşulan süre: motorun zamanladığı segment aralıklarının birleşimi.
+ *
+ * Kapsam göstergesinin paydası kayıt penceresi olamaz — kimse konuşmazken de
+ * saat işler ve sessizlik "kelime üretilmiyor" gibi görünür. Sessizlik kapsamın
+ * ölçüsü değil; ölçü, konuşulan sürede kaç kelime çıktığıdır. Örtüşen aralıklar
+ * birleştirilir, böylece aynı saniye iki konuşmacıdan iki kez sayılmaz.
+ *
+ * Satırların yalnız bir kısmı zamanlanmışsa payda eksik kalır ve oran şişer: 24
+ * Eylül attended koşusunda 54 satırın kapsadığı süre 13,7 sn ölçüldü ve ekran
+ * 241 kelime/dk gösterdi. Bu yanlış uyarı üretmez ama gerçek bir kapsam
+ * düşüklüğünü gizler. Bu yüzden ölçüm ancak final satırların çoğu zamanlıysa
+ * kabul edilir; değilse gösterge "ölçülemiyor" der, uydurma bir sayı vermez.
+ */
+const SPEECH_SPAN_MIN_TIMED_SHARE = 0.6;
+
+type SpeechSpan =
+  /** Zamanlama hiç yok: eski kayıt penceresi davranışı geçerli. */
+  | { kind: 'absent' }
+  /** Zamanlama kısmi: oran güvenilir değil, sayı gösterilmez. */
+  | { kind: 'unmeasurable' }
+  | { kind: 'measured'; ms: number };
+
+function transcriptSpeechSpan(session: TranscriptSessionState): SpeechSpan {
+  const intervals: Array<[number, number]> = [];
+  let finalCount = 0;
+  let timedFinalCount = 0;
+  for (const segment of session.segments) {
+    const isFinal = segment.status === 'final' || segment.status === 'revised';
+    if (isFinal) {
+      finalCount += 1;
+    }
+    if (segment.timingBasis !== 'source') {
+      continue;
+    }
+    const start = segment.startedAtMs;
+    const end = segment.endedAtMs;
+    if (
+      typeof start !== 'number' ||
+      !Number.isFinite(start) ||
+      typeof end !== 'number' ||
+      !Number.isFinite(end) ||
+      end <= start
+    ) {
+      continue;
+    }
+    if (isFinal) {
+      timedFinalCount += 1;
+    }
+    intervals.push([start, end]);
+  }
+  if (intervals.length === 0) {
+    return { kind: 'absent' };
+  }
+  if (finalCount > 0 && timedFinalCount / finalCount < SPEECH_SPAN_MIN_TIMED_SHARE) {
+    return { kind: 'unmeasurable' };
+  }
+  intervals.sort((a, b) => a[0] - b[0]);
+  let total = 0;
+  let [currentStart, currentEnd] = intervals[0];
+  for (const [start, end] of intervals.slice(1)) {
+    if (start <= currentEnd) {
+      currentEnd = Math.max(currentEnd, end);
+      continue;
+    }
+    total += currentEnd - currentStart;
+    currentStart = start;
+    currentEnd = end;
+  }
+  total += currentEnd - currentStart;
+  return { kind: 'measured', ms: total };
+}
+
 function transcriptSegmentsPerMinute(segmentCount: number, spanMs: number | null): number | null {
   if (spanMs === null || spanMs < TRANSCRIPT_DENSITY_READY_MIN_MS) {
     return null;
@@ -810,8 +888,15 @@ function transcriptFlowHealth(
   const sourceCounts = transcriptSourceCounts(session);
   const words = transcriptWordTotal(session);
   const spanMs = transcriptObservationSpanMs(session, stream, lastTranscriptAtMs);
-  const segmentsPerMinute = transcriptSegmentsPerMinute(session.segments.length, spanMs);
-  const wordsPerMinute = transcriptWordsPerMinute(words, spanMs);
+  // Oranların paydası: ölçülebiliyorsa konuşulan süre; hiç zamanlama yoksa eski
+  // kayıt penceresi; zamanlama kısmi ise oran gösterilmez (şişmiş sayı, gerçek
+  // kapsam düşüklüğünü gizler).
+  const speechSpan = transcriptSpeechSpan(session);
+  const speechSpanMs = speechSpan.kind === 'measured' ? speechSpan.ms : null;
+  const rateSpanMs =
+    speechSpan.kind === 'measured' ? speechSpan.ms : speechSpan.kind === 'absent' ? spanMs : null;
+  const segmentsPerMinute = transcriptSegmentsPerMinute(session.segments.length, rateSpanMs);
+  const wordsPerMinute = transcriptWordsPerMinute(words, rateSpanMs);
   const lagMs = streamLagMs(stream, lastTranscriptAtMs, recordingActive);
   const coverageWindowActive = Boolean(
     recordingActive &&
@@ -837,6 +922,8 @@ function transcriptFlowHealth(
       risk: 'none',
       words,
       spanMs,
+      speechSpanMs,
+      rateBasis: speechSpan.kind,
       segmentsPerMinute,
       wordsPerMinute,
       directCount: sourceCounts.direct,
@@ -858,6 +945,8 @@ function transcriptFlowHealth(
       risk: 'connection_error',
       words,
       spanMs,
+      speechSpanMs,
+      rateBasis: speechSpan.kind,
       segmentsPerMinute,
       wordsPerMinute,
       directCount: sourceCounts.direct,
@@ -877,6 +966,8 @@ function transcriptFlowHealth(
       risk: 'no_text',
       words,
       spanMs,
+      speechSpanMs,
+      rateBasis: speechSpan.kind,
       segmentsPerMinute,
       wordsPerMinute,
       directCount: sourceCounts.direct,
@@ -894,6 +985,8 @@ function transcriptFlowHealth(
       risk: 'lagging',
       words,
       spanMs,
+      speechSpanMs,
+      rateBasis: speechSpan.kind,
       segmentsPerMinute,
       wordsPerMinute,
       directCount: sourceCounts.direct,
@@ -901,10 +994,18 @@ function transcriptFlowHealth(
     };
   }
 
+  // Kapsam hükmü yeterli konuşma biriktikten sonra verilir: konuşulan süre
+  // ölçülebiliyorsa onun üzerinden, ölçülemiyorsa eski kayıt penceresinden.
+  const coverageWindowReady =
+    speechSpan.kind === 'measured'
+      ? speechSpan.ms >= TRANSCRIPT_SPEECH_WINDOW_MIN_MS
+      : speechSpan.kind === 'absent' &&
+        spanMs !== null &&
+        spanMs >= TRANSCRIPT_LOW_WORD_RATE_WARN_MS;
+
   if (
     coverageWindowActive &&
-    spanMs !== null &&
-    spanMs >= TRANSCRIPT_LOW_WORD_RATE_WARN_MS &&
+    coverageWindowReady &&
     wordsPerMinute !== null &&
     wordsPerMinute < TRANSCRIPT_LOW_WORDS_PER_MINUTE
   ) {
@@ -918,6 +1019,8 @@ function transcriptFlowHealth(
       risk: 'low_word_coverage',
       words,
       spanMs,
+      speechSpanMs,
+      rateBasis: speechSpan.kind,
       segmentsPerMinute,
       wordsPerMinute,
       directCount: sourceCounts.direct,
@@ -925,10 +1028,15 @@ function transcriptFlowHealth(
     };
   }
 
+  // Satır yoğunluğu da aynı paydayı kullanır: sessizlik seyreklik sayılmaz.
+  const densityWindowReady =
+    speechSpan.kind === 'measured'
+      ? speechSpan.ms >= TRANSCRIPT_SPEECH_WINDOW_MIN_MS
+      : speechSpan.kind === 'absent' && spanMs !== null && spanMs >= TRANSCRIPT_LOW_DENSITY_WARN_MS;
+
   if (
     stream?.audioActive &&
-    spanMs !== null &&
-    spanMs >= TRANSCRIPT_LOW_DENSITY_WARN_MS &&
+    densityWindowReady &&
     segmentsPerMinute !== null &&
     segmentsPerMinute < TRANSCRIPT_LOW_DENSITY_SEGMENTS_PER_MINUTE
   ) {
@@ -942,6 +1050,8 @@ function transcriptFlowHealth(
       risk: 'low_segment_density',
       words,
       spanMs,
+      speechSpanMs,
+      rateBasis: speechSpan.kind,
       segmentsPerMinute,
       wordsPerMinute,
       directCount: sourceCounts.direct,
@@ -958,6 +1068,8 @@ function transcriptFlowHealth(
       risk: 'none',
       words,
       spanMs,
+      speechSpanMs,
+      rateBasis: speechSpan.kind,
       segmentsPerMinute,
       wordsPerMinute,
       directCount: sourceCounts.direct,
@@ -979,6 +1091,8 @@ function transcriptFlowHealth(
     risk: 'waiting_audio',
     words,
     spanMs,
+    speechSpanMs,
+    rateBasis: speechSpan.kind,
     segmentsPerMinute,
     wordsPerMinute,
     directCount: sourceCounts.direct,
@@ -1118,6 +1232,8 @@ function buildTranscriptDiagnostics(
     `flow.nextAction=${health.nextAction}`,
     `flow.segmentDensityPerMinute=${formatDiagnosticNumber(health.segmentsPerMinute, 2)}`,
     `flow.wordsPerMinute=${formatDiagnosticNumber(health.wordsPerMinute, 2)}`,
+    `flow.rateBasis=${health.rateBasis === 'absent' ? 'recording-window' : health.rateBasis}`,
+    `flow.speechSpanMs=${health.speechSpanMs ?? '-'}`,
     `segments.total=${session.segments.length}`,
     `segments.draft=${statusCounts.draft}`,
     `segments.stabilizing=${statusCounts.stabilizing}`,
@@ -1412,7 +1528,11 @@ export function TranscriptPanel({
         </div>
         <div>
           <span>Yoğunluk</span>
-          <strong>{formatTranscriptDensity(flowHealth.segmentsPerMinute)}</strong>
+          <strong>
+            {flowHealth.rateBasis === 'unmeasurable'
+              ? 'Ölçülemiyor'
+              : formatTranscriptDensity(flowHealth.segmentsPerMinute)}
+          </strong>
         </div>
         <div>
           <span>Kelime</span>
@@ -1420,7 +1540,11 @@ export function TranscriptPanel({
         </div>
         <div>
           <span>Kelime/dk</span>
-          <strong>{formatTranscriptWordRate(flowHealth.wordsPerMinute)}</strong>
+          <strong>
+            {flowHealth.rateBasis === 'unmeasurable'
+              ? 'Ölçülemiyor'
+              : formatTranscriptWordRate(flowHealth.wordsPerMinute)}
+          </strong>
         </div>
         <div>
           <span>Kaynak</span>

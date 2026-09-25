@@ -1645,6 +1645,212 @@ describe('TranscriptPanel', () => {
     ).toBeInTheDocument();
   });
 
+  // Kapsam göstergesinin paydası kayıt penceresi değil konuşulan süredir:
+  // sessiz geçen dakikalar "kelime üretilmiyor" anlamına gelmez.
+  it('keeps word coverage healthy when a long silence follows dense speech', () => {
+    const startedAtMs = 1781820000000;
+    let session = startTranscriptSession(initialTranscriptSession(), {
+      sessionId: 'SES-1',
+      meetingId: '22222222-2222-4222-8222-222222222222',
+      deviceId: 'desktop-1',
+      hasLoopback: false,
+      startedAtMs,
+    });
+    // 30 saniye konuşma, 45 kelime → 90 kelime/dk.
+    for (let i = 0; i < 3; i += 1) {
+      session = upsertTranscriptSegment(session, {
+        id: `seg-${i}`,
+        speakerLabel: 'Konuşmacı',
+        startedAtMs: startedAtMs + i * 10_000,
+        endedAtMs: startedAtMs + i * 10_000 + 10_000,
+        timingBasis: 'source',
+        status: 'final',
+        text: 'bir iki üç dört beş altı yedi sekiz dokuz on onbir onikinci onüç ondört onbeş',
+        source: 'gateway-events',
+        receivedAtMs: startedAtMs + i * 10_000 + 10_500,
+      });
+    }
+
+    render(
+      <TranscriptPanel
+        session={session}
+        stream={{
+          directConfigured: true,
+          directReady: true,
+          directActive: true,
+          audioRms: 0.001,
+          audioActive: false,
+          // Konuşma bittikten 5 dakika sonra: eski formül 9 kelime/dk derdi.
+          lastAudioAtMs: startedAtMs + 330_000,
+          disabledReason: null,
+        }}
+      />,
+    );
+
+    const flowHealth = screen.getByLabelText('Transkript akış kalitesi');
+    expect(within(flowHealth).queryByText('Metin kapsamı düşük')).not.toBeInTheDocument();
+    expect(within(flowHealth).getByText('90 kelime/dk')).toBeInTheDocument();
+  });
+
+  // Halil incelemesi (PR #146): iki konusmaci ayni saniyede konustugunda o
+  // saniye paydada iki kez sayilmamali; aralik birlesimi bunu tekillestirir.
+  it('counts overlapping speakers once in the speech span', () => {
+    const startedAtMs = 1781820000000;
+    let session = startTranscriptSession(initialTranscriptSession(), {
+      sessionId: 'SES-1',
+      meetingId: '22222222-2222-4222-8222-222222222222',
+      deviceId: 'desktop-1',
+      hasLoopback: false,
+      startedAtMs,
+    });
+    // Iki konusmaci 30 saniyelik pencerede tamamen ortusuyor: 0-30 ve 10-25.
+    // Birlesim 30 sn; toplam sure sayilsaydi 45 sn olurdu.
+    session = upsertTranscriptSegment(session, {
+      id: 'seg-a',
+      speakerLabel: 'Konuşmacı 1',
+      startedAtMs,
+      endedAtMs: startedAtMs + 30_000,
+      timingBasis: 'source',
+      status: 'final',
+      text: 'bir iki üç dört beş altı yedi sekiz dokuz on onbir onikinci onüç ondört onbeş',
+      source: 'gateway-events',
+      receivedAtMs: startedAtMs + 30_500,
+    });
+    session = upsertTranscriptSegment(session, {
+      id: 'seg-b',
+      speakerLabel: 'Konuşmacı 2',
+      startedAtMs: startedAtMs + 10_000,
+      endedAtMs: startedAtMs + 25_000,
+      timingBasis: 'source',
+      status: 'final',
+      text: 'onaltı onyedi onsekiz ondokuz yirmi yirmibir yirmiiki yirmiüç yirmidört yirmibeş yirmialtı yirmiyedi yirmisekiz yirmidokuz otuz',
+      source: 'gateway-events',
+      receivedAtMs: startedAtMs + 25_500,
+    });
+
+    render(
+      <TranscriptPanel
+        session={session}
+        stream={{
+          directConfigured: true,
+          directReady: true,
+          directActive: true,
+          audioRms: 0.02,
+          audioActive: true,
+          lastAudioAtMs: startedAtMs + 31_000,
+          disabledReason: null,
+        }}
+      />,
+    );
+
+    // 30 kelime / 30 sn = 60 kelime/dk. Ortusen sure iki kez sayilsaydi
+    // (45 sn) oran 40 kelime/dk cikar ve esigin altina dusup uyari verirdi.
+    const flowHealth = screen.getByLabelText('Transkript akış kalitesi');
+    expect(within(flowHealth).getByText('60 kelime/dk')).toBeInTheDocument();
+    expect(within(flowHealth).queryByText('Metin kapsamı düşük')).not.toBeInTheDocument();
+  });
+
+  // 24 Eylül attended koşusu: 54 satırın yalnız bir kısmı motor zamanlaması
+  // taşıyordu, payda 13,7 sn ölçüldü ve ekran 241 kelime/dk gösterdi. Şişmiş
+  // oran yanlış uyarı vermez ama gerçek kapsam düşüklüğünü gizler.
+  it('reports an unmeasurable rate instead of an inflated one when most lines lack timing', () => {
+    const startedAtMs = 1781820000000;
+    let session = startTranscriptSession(initialTranscriptSession(), {
+      sessionId: 'SES-1',
+      meetingId: '22222222-2222-4222-8222-222222222222',
+      deviceId: 'desktop-1',
+      hasLoopback: false,
+      startedAtMs,
+    });
+    // Tek satır zamanlı, dokuz satır zamansız → zamanlı pay %10.
+    session = upsertTranscriptSegment(session, {
+      id: 'seg-timed',
+      speakerLabel: 'Konuşmacı',
+      startedAtMs,
+      endedAtMs: startedAtMs + 5_000,
+      timingBasis: 'source',
+      status: 'final',
+      text: 'bir iki üç dört beş',
+      source: 'gateway-events',
+      receivedAtMs: startedAtMs + 5_500,
+    });
+    for (let i = 0; i < 9; i += 1) {
+      session = upsertTranscriptSegment(session, {
+        id: `seg-untimed-${i}`,
+        speakerLabel: 'Konuşmacı',
+        startedAtMs: startedAtMs + 10_000 + i * 5_000,
+        status: 'final',
+        text: 'altı yedi sekiz dokuz on',
+        source: 'gateway-events',
+        receivedAtMs: startedAtMs + 10_500 + i * 5_000,
+      });
+    }
+
+    render(
+      <TranscriptPanel
+        session={session}
+        stream={{
+          directConfigured: true,
+          directReady: true,
+          directActive: true,
+          audioRms: 0.02,
+          audioActive: true,
+          lastAudioAtMs: startedAtMs + 60_000,
+          disabledReason: null,
+        }}
+      />,
+    );
+
+    const flowHealth = screen.getByLabelText('Transkript akış kalitesi');
+    expect(within(flowHealth).getAllByText('Ölçülemiyor').length).toBeGreaterThan(0);
+    expect(within(flowHealth).queryByText('Metin kapsamı düşük')).not.toBeInTheDocument();
+    expect(within(flowHealth).queryByText(/kelime\/dk/)).not.toBeInTheDocument();
+  });
+
+  it('still flags low coverage when speech time itself produced few words', () => {
+    const startedAtMs = 1781820000000;
+    let session = startTranscriptSession(initialTranscriptSession(), {
+      sessionId: 'SES-1',
+      meetingId: '22222222-2222-4222-8222-222222222222',
+      deviceId: 'desktop-1',
+      hasLoopback: false,
+      startedAtMs,
+    });
+    // 60 saniye konuşma, yalnız 12 kelime → 12 kelime/dk.
+    for (let i = 0; i < 3; i += 1) {
+      session = upsertTranscriptSegment(session, {
+        id: `seg-${i}`,
+        speakerLabel: 'Konuşmacı',
+        startedAtMs: startedAtMs + i * 20_000,
+        endedAtMs: startedAtMs + i * 20_000 + 20_000,
+        timingBasis: 'source',
+        status: 'final',
+        text: 'bir iki üç dört',
+        source: 'gateway-events',
+        receivedAtMs: startedAtMs + i * 20_000 + 20_500,
+      });
+    }
+
+    render(
+      <TranscriptPanel
+        session={session}
+        stream={{
+          directConfigured: true,
+          directReady: true,
+          directActive: true,
+          audioRms: 0.02,
+          audioActive: true,
+          lastAudioAtMs: startedAtMs + 61_000,
+          disabledReason: null,
+        }}
+      />,
+    );
+
+    const flowHealth = screen.getByLabelText('Transkript akış kalitesi');
+    expect(within(flowHealth).getByText('Metin kapsamı düşük')).toBeInTheDocument();
+    expect(within(flowHealth).getByText('12 kelime/dk')).toBeInTheDocument();
+  });
+
   it('does not show transcript lag while capture is silent', () => {
     const recording = startTranscriptSession(initialTranscriptSession(), {
       sessionId: 'SES-1',
