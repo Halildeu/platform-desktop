@@ -241,6 +241,50 @@ function emitTranscriptEvent(send: RendererSend | null, event: TranscriptGateway
   send('audio:transcript-event', event);
 }
 
+/**
+ * Kaynak zamanlaması güvenilir değilken (kesinti sonrası geri gönderim) satırın
+ * zamanı: motorun verdiği ses konumunun GERÇEK yakalanma anı.
+ *
+ * İlk düzeltme (gitops#40) bağlantı başına bir çapa kurup `çapa + elapsed_ms`
+ * kullanıyordu. Kısa kesintide doğruydu, ama geri gönderim gerçek zamandan hızlı
+ * (4 çerçeve / 100 ms) olduğu için birikimin d'inci saniyesindeki satır yaklaşık
+ * 0,75·d gelecek tarihli damgalanıyordu. Renderer 30 sn'den ileri damgaları geliş
+ * zamanına çektiğinden ~40 sn'yi aşan kesintide sıra yeniden bozuluyordu; birikim
+ * boşaldıktan sonra da canlı satırlar aynı kaymayla damgalanıyordu (#148 Halil
+ * incelemesi).
+ *
+ * Motorun saati (elapsed_ms, kaynak örnekleri) yalnız o bağlantıda gönderilen sesi
+ * sayar ve yeniden bağlanınca sıfırdan başlar; gateway her sokette yeni bir tanıma
+ * oturumu açar. Canlı akış her gönderdiği çerçevenin yakalanma zamanını bu saatle
+ * birlikte tutar; burada o çizelgeden okunur. Böylece satır konuşulduğu ana
+ * yerleşir: gelecek tarihli damga oluşmaz, boşluklar ve kuşaklar arası sıra
+ * korunur.
+ */
+function engineCaptureStartedAtMs(
+  captureTimeAtSample: (sample: number) => number | null,
+  sourceStartSample: number | null,
+  elapsedMs: number | null,
+  receivedAtMs: number,
+): number {
+  // Satırın başlangıcı: kaynak başlangıç örneği varsa o, yoksa motorun bitiş
+  // konumu (elapsed_ms).
+  const sample =
+    sourceStartSample !== null
+      ? sourceStartSample
+      : elapsedMs !== null
+        ? (elapsedMs / 1000) * GATEWAY_LIVE_SAMPLE_RATE_HZ
+        : null;
+  if (sample === null) {
+    return receivedAtMs;
+  }
+  const capturedAtMs = captureTimeAtSample(sample);
+  if (capturedAtMs === null) {
+    return receivedAtMs;
+  }
+  // Konuşma ancak yakalandıktan sonra metne dönüşebilir; asla gelecek tarih.
+  return Math.min(capturedAtMs, receivedAtMs);
+}
+
 function emitGatewayLiveTranscriptEvent(
   send: RendererSend | null,
   sessionId: string,
@@ -248,6 +292,7 @@ function emitGatewayLiveTranscriptEvent(
   sourceEpochMs: number | null,
   sourceTimingReliable: boolean,
   transportEpoch: number,
+  captureTimeAtSample: (sample: number) => number | null,
   event: GatewayLiveServerEvent,
 ): void {
   if (event.type !== 'partial' && event.type !== 'final') {
@@ -305,7 +350,15 @@ function emitGatewayLiveTranscriptEvent(
     chunkSeq: event.seq,
     chunkStartedAtMs: partialTail
       ? receivedAtMs
-      : (sourceStartedAtMs ?? (elapsedMs === null ? receivedAtMs : receivedAtMs - elapsedMs)),
+      : (sourceStartedAtMs ??
+        engineCaptureStartedAtMs(
+          captureTimeAtSample,
+          event.type === 'final' && typeof event.source_start_sample === 'number'
+            ? event.source_start_sample
+            : null,
+          elapsedMs,
+          receivedAtMs,
+        )),
     transportEpoch,
     windowSeq: partialTail ? null : event.seq,
     windowStartedAtMs: sourceStartedAtMs,
@@ -1096,6 +1149,7 @@ export function registerAudioIpc(): void {
                 liveStream?.getSourceStartedAtMs() ?? null,
                 liveStream?.hasReliableSourceTiming() === true,
                 liveStream?.getTransportEpoch() ?? -1,
+                (sample) => liveStream?.captureTimeAtSample(sample) ?? null,
                 liveEvent,
               ),
             onError: (streamError) => emitTranscriptError(send, sessionId, streamError),

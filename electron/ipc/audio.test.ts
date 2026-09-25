@@ -53,6 +53,7 @@ const mocks = vi.hoisted(() => {
     gatewayLiveStreamSourceStartedAtMs: vi.fn(() => 1781820000000),
     gatewayLiveStreamSourceTimingReliable: vi.fn(() => true),
     gatewayLiveStreamTransportEpoch: vi.fn(() => 3),
+    gatewayLiveStreamCaptureTimeAtSample: vi.fn((_sample: number): number | null => null),
     gatewayLiveStreamStop: vi.fn(async () => ({
       state: 'drained',
       reason: 'eof-ack',
@@ -182,6 +183,7 @@ vi.mock('../services/gateway/gateway-live-stream', () => ({
     getSourceStartedAtMs = mocks.gatewayLiveStreamSourceStartedAtMs;
     hasReliableSourceTiming = mocks.gatewayLiveStreamSourceTimingReliable;
     getTransportEpoch = mocks.gatewayLiveStreamTransportEpoch;
+    captureTimeAtSample = mocks.gatewayLiveStreamCaptureTimeAtSample;
     stop = mocks.gatewayLiveStreamStop;
     close = mocks.gatewayLiveStreamClose;
   },
@@ -756,6 +758,137 @@ describe('audio IPC recorder consent gate', () => {
     ).resolves.toEqual({ seq: 0 });
 
     expect(mocks.senderSend).toHaveBeenCalledWith(bytes, 1781820000000);
+  });
+
+  // gitops#40: kesinti sonrası tamponlanan ses tek seferde geri gönderilince
+  // olaylar aynı ana yığılır. Zaman damgası "şimdi - geçen süre" ile
+  // hesaplanırsa geç söylenen cümle daha erken damgalanır ve canlı ekranda
+  // kelimeler ters sırada görünür.
+  it('keeps replayed transcript lines in speech order when source timing is unavailable', async () => {
+    mocks.loadRecorderRuntimeConfig.mockReturnValue({
+      meetingId,
+      deviceId,
+      ready: true,
+      reason: null,
+      liveSttStreamUrl: null,
+      liveSttStreamReason: null,
+      gatewayLiveStreamEnabled: true,
+    });
+    mocks.gatewayLiveStreamSourceTimingReliable.mockReturnValue(false);
+    const rendererSend = vi.fn();
+    await acceptConsent();
+    await startHandler()({ sender: { id: 9, send: rendererSend } }, meetingId, deviceId);
+
+    const callbacks = mocks.gatewayLiveStreamCtor.mock.calls[0][0] as {
+      onEvent: (event: unknown) => void;
+    };
+
+    // Geri gönderim: üç final aynı ana yığılıyor, motor süresi artıyor. Ses,
+    // bağlantının saatine göre kesintisiz yakalanmış.
+    const burstNow = 1781820100000;
+    const speechStartedAtMs = burstNow - 60_000;
+    mocks.gatewayLiveStreamCaptureTimeAtSample.mockImplementation(
+      (sample: number) => speechStartedAtMs + sample / 16,
+    );
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(burstNow);
+    for (const [seq, elapsedMs, text] of [
+      [7, 20_000, 'yedinci cümle'],
+      [8, 24_000, 'sekizinci cümle'],
+      [9, 28_000, 'dokuzuncu cümle'],
+    ] as Array<[number, number, string]>) {
+      callbacks.onEvent({
+        type: 'final',
+        seq,
+        text,
+        elapsed_ms: elapsedMs,
+        reason: 'speech_final',
+      });
+    }
+    nowSpy.mockRestore();
+    mocks.gatewayLiveStreamSourceTimingReliable.mockReturnValue(true);
+    mocks.gatewayLiveStreamCaptureTimeAtSample.mockReset();
+    mocks.gatewayLiveStreamCaptureTimeAtSample.mockReturnValue(null);
+
+    const ordered = rendererSend.mock.calls
+      .filter(([channel]) => channel === 'audio:transcript-event')
+      .map(([, payload]) => payload as { text: string; chunkStartedAtMs: number })
+      .sort((left, right) => left.chunkStartedAtMs - right.chunkStartedAtMs)
+      .map((payload) => payload.text);
+
+    expect(ordered).toEqual(['yedinci cümle', 'sekizinci cümle', 'dokuzuncu cümle']);
+  });
+
+  // #148 Halil incelemesi: 40 sn'yi aşan kesintide çapa yöntemi yine bozuluyordu.
+  // Geri gönderim 4 kat hızlı; çapa + elapsed_ms satırları ~0,75·d gelecek
+  // tarihli damgalıyor, renderer 30 sn'den ileri damgaları geliş zamanına
+  // çektiği için sıra ters dönüyordu. Senaryo ve beklenen sıra Halil'in yerel
+  // yeniden üretimiyle aynı: 60 sn birikim 4x hızla, ardından canlı satırlar.
+  it('keeps a long replayed backlog and the live lines after it in speech order', async () => {
+    mocks.loadRecorderRuntimeConfig.mockReturnValue({
+      meetingId,
+      deviceId,
+      ready: true,
+      reason: null,
+      liveSttStreamUrl: null,
+      liveSttStreamReason: null,
+      gatewayLiveStreamEnabled: true,
+    });
+    mocks.gatewayLiveStreamSourceTimingReliable.mockReturnValue(false);
+    const T = 1781820100000;
+    // Bu bağlantıda gönderilen ses, yeniden bağlanmadan 62 sn önce başlayıp
+    // kesintisiz yakalanmış: birikim + ardından gelen canlı ses.
+    mocks.gatewayLiveStreamCaptureTimeAtSample.mockImplementation(
+      (sample: number) => T - 62_000 + sample / 16,
+    );
+    const rendererSend = vi.fn();
+    await acceptConsent();
+    await startHandler()({ sender: { id: 11, send: rendererSend } }, meetingId, deviceId);
+    const callbacks = mocks.gatewayLiveStreamCtor.mock.calls[0][0] as {
+      onEvent: (event: unknown) => void;
+    };
+
+    const lines: Array<[number, number]> = [];
+    let seq = 100;
+    for (let d = 0; d <= 60_000; d += 5_000) lines.push([seq++, d]); // 4x geri gönderim
+    for (let d = 65_000; d <= 90_000; d += 5_000) lines.push([seq++, d]); // boşaldıktan sonra canlı
+
+    const nowSpy = vi.spyOn(Date, 'now');
+    for (const [s, d] of lines) {
+      nowSpy.mockReturnValue(d <= 60_000 ? T + d / 4 : T + 15_000 + (d - 60_000));
+      callbacks.onEvent({
+        type: 'final',
+        seq: s,
+        text: `line-${s}`,
+        elapsed_ms: 2_000 + d,
+        reason: 'speech_final',
+      });
+    }
+    nowSpy.mockRestore();
+    mocks.gatewayLiveStreamSourceTimingReliable.mockReturnValue(true);
+    mocks.gatewayLiveStreamCaptureTimeAtSample.mockReset();
+    mocks.gatewayLiveStreamCaptureTimeAtSample.mockReturnValue(null);
+
+    const payloads = rendererSend.mock.calls
+      .filter(([channel]) => channel === 'audio:transcript-event')
+      .map(
+        ([, payload]) =>
+          payload as { text: string; chunkStartedAtMs: number; receivedAtMs: number },
+      );
+
+    // Hiçbir satır gelecek tarihli damgalanmaz.
+    for (const payload of payloads) {
+      expect(payload.chunkStartedAtMs).toBeLessThanOrEqual(payload.receivedAtMs);
+    }
+
+    // Renderer kuralı: 30 sn'den ileri damga geliş zamanına çekilir.
+    const order = payloads
+      .map((p) => ({
+        text: p.text,
+        at: p.chunkStartedAtMs - p.receivedAtMs > 30_000 ? p.receivedAtMs : p.chunkStartedAtMs,
+      }))
+      .sort((a, b) => a.at - b.at)
+      .map((p) => p.text);
+    expect(order).toEqual(lines.map(([s]) => `line-${s}`));
   });
 
   it('opens the authenticated gateway live transport before capture and shares REST sequence ownership', async () => {
