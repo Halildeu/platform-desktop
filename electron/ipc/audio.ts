@@ -242,36 +242,47 @@ function emitTranscriptEvent(send: RendererSend | null, event: TranscriptGateway
 }
 
 /**
- * Kaynak zamanlaması yokken satırın zamanı: bağlantı çapası + motorun geçen
- * süresi.
+ * Kaynak zamanlaması güvenilir değilken (kesinti sonrası geri gönderim) satırın
+ * zamanı: motorun verdiği ses konumunun GERÇEK yakalanma anı.
  *
- * Eski `receivedAt - elapsed` formülü sıralamayı ters çeviriyordu. `elapsed_ms`
- * bağlantı boyunca büyür; kesinti sonrası tamponlanan ses tek seferde geri
- * gönderildiğinde olaylar aynı ana yığılır, yani `receivedAt` neredeyse sabit
- * kalır. Büyüyen sayıyı sabitten çıkarınca geç söylenen cümle daha erken
- * damgalanır ve ekranda kelimeler ters sırada belirir (gitops#40, 24 Eylül
- * attended: 11-12-13 sonra 10-9-8-7).
+ * İlk düzeltme (gitops#40) bağlantı başına bir çapa kurup `çapa + elapsed_ms`
+ * kullanıyordu. Kısa kesintide doğruydu, ama geri gönderim gerçek zamandan hızlı
+ * (4 çerçeve / 100 ms) olduğu için birikimin d'inci saniyesindeki satır yaklaşık
+ * 0,75·d gelecek tarihli damgalanıyordu. Renderer 30 sn'den ileri damgaları geliş
+ * zamanına çektiğinden ~40 sn'yi aşan kesintide sıra yeniden bozuluyordu; birikim
+ * boşaldıktan sonra da canlı satırlar aynı kaymayla damgalanıyordu (#148 Halil
+ * incelemesi).
  *
- * Çapa her taşıma kuşağının ilk olayında bir kez kurulur; sonraki olaylar aynı
- * çapaya eklendiği için sıralama motorun işleme sırasını, o da konuşma sırasını
- * izler.
+ * Motorun saati (elapsed_ms, kaynak örnekleri) yalnız o bağlantıda gönderilen sesi
+ * sayar ve yeniden bağlanınca sıfırdan başlar; gateway her sokette yeni bir tanıma
+ * oturumu açar. Canlı akış her gönderdiği çerçevenin yakalanma zamanını bu saatle
+ * birlikte tutar; burada o çizelgeden okunur. Böylece satır konuşulduğu ana
+ * yerleşir: gelecek tarihli damga oluşmaz, boşluklar ve kuşaklar arası sıra
+ * korunur.
  */
-function engineAnchoredStartedAtMs(
-  anchors: Map<number, number>,
-  transportEpoch: number,
-  receivedAtMs: number,
+function engineCaptureStartedAtMs(
+  captureTimeAtSample: (sample: number) => number | null,
+  sourceStartSample: number | null,
   elapsedMs: number | null,
+  receivedAtMs: number,
 ): number {
-  if (elapsedMs === null) {
+  // Satırın başlangıcı: kaynak başlangıç örneği varsa o, yoksa motorun bitiş
+  // konumu (elapsed_ms).
+  const sample =
+    sourceStartSample !== null
+      ? sourceStartSample
+      : elapsedMs !== null
+        ? (elapsedMs / 1000) * GATEWAY_LIVE_SAMPLE_RATE_HZ
+        : null;
+  if (sample === null) {
     return receivedAtMs;
   }
-  const existing = anchors.get(transportEpoch);
-  if (existing !== undefined) {
-    return existing + elapsedMs;
+  const capturedAtMs = captureTimeAtSample(sample);
+  if (capturedAtMs === null) {
+    return receivedAtMs;
   }
-  const anchor = receivedAtMs - elapsedMs;
-  anchors.set(transportEpoch, anchor);
-  return anchor + elapsedMs;
+  // Konuşma ancak yakalandıktan sonra metne dönüşebilir; asla gelecek tarih.
+  return Math.min(capturedAtMs, receivedAtMs);
 }
 
 function emitGatewayLiveTranscriptEvent(
@@ -281,7 +292,7 @@ function emitGatewayLiveTranscriptEvent(
   sourceEpochMs: number | null,
   sourceTimingReliable: boolean,
   transportEpoch: number,
-  engineEpochAnchors: Map<number, number>,
+  captureTimeAtSample: (sample: number) => number | null,
   event: GatewayLiveServerEvent,
 ): void {
   if (event.type !== 'partial' && event.type !== 'final') {
@@ -340,7 +351,14 @@ function emitGatewayLiveTranscriptEvent(
     chunkStartedAtMs: partialTail
       ? receivedAtMs
       : (sourceStartedAtMs ??
-        engineAnchoredStartedAtMs(engineEpochAnchors, transportEpoch, receivedAtMs, elapsedMs)),
+        engineCaptureStartedAtMs(
+          captureTimeAtSample,
+          event.type === 'final' && typeof event.source_start_sample === 'number'
+            ? event.source_start_sample
+            : null,
+          elapsedMs,
+          receivedAtMs,
+        )),
     transportEpoch,
     windowSeq: partialTail ? null : event.seq,
     windowStartedAtMs: sourceStartedAtMs,
@@ -1114,8 +1132,6 @@ export function registerAudioIpc(): void {
         const send = rendererSend(event);
         const runtimeConfig = loadRecorderRuntimeConfig();
         let liveStream: GatewayLiveStream | null = null;
-        // Taşıma kuşağı başına bir çapa; kayıt bitince closure ile birlikte düşer.
-        const engineEpochAnchors = new Map<number, number>();
         if (
           runtimeConfig.gatewayLiveStreamEnabled === true &&
           (startIntent.sttProvider === 'internal' || normalizedTranscriptionMode === 'realtime')
@@ -1133,7 +1149,7 @@ export function registerAudioIpc(): void {
                 liveStream?.getSourceStartedAtMs() ?? null,
                 liveStream?.hasReliableSourceTiming() === true,
                 liveStream?.getTransportEpoch() ?? -1,
-                engineEpochAnchors,
+                (sample) => liveStream?.captureTimeAtSample(sample) ?? null,
                 liveEvent,
               ),
             onError: (streamError) => emitTranscriptError(send, sessionId, streamError),

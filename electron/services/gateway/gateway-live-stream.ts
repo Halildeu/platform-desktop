@@ -224,7 +224,24 @@ interface PendingAudioFrame {
   encoded: ArrayBuffer;
   byteLength: number;
   sentGeneration: number | null;
+  /** Capture clock of the END of the frame (as handed in by the recorder). */
+  capturedAtMs: number;
+  /** PCM16 samples in the frame, i.e. how far it advances the engine clock. */
+  sampleCount: number;
 }
+
+/**
+ * One frame as the engine saw it on a given connection: where it starts on that
+ * connection's audio clock and when it was actually spoken.
+ */
+interface SentAudioSpan {
+  startSample: number;
+  sampleCount: number;
+  captureStartMs: number;
+}
+
+/** Enough history for any engine position we can still be asked about (~30 min). */
+const MAX_SENT_AUDIO_SPANS = 18_000;
 
 type GatewaySocketFactory = (url: string, jwt: string) => GatewaySocket;
 
@@ -509,6 +526,16 @@ export class GatewayLiveStream {
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private latestSequence = -1;
   private sourceStartedAtMs: number | null = null;
+  /**
+   * The audio this connection actually carried, in send order, with capture
+   * times. The engine's clock (elapsed_ms, source samples) counts only audio
+   * sent on the current connection and restarts at 0 on reconnect — the gateway
+   * opens a fresh recognition session per socket. Replayed backlog is sent
+   * faster than real time and dropped frames leave holes, so arrival time says
+   * nothing about when a line was spoken; this timeline does (#148).
+   */
+  private sentAudio: { generation: number; spans: SentAudioSpan[]; totalSamples: number } | null =
+    null;
   private sourceTimingReliable = true;
   private ready = false;
   private stopping = false;
@@ -588,6 +615,54 @@ export class GatewayLiveStream {
     return this.socketGeneration;
   }
 
+  /**
+   * When the audio at `sample` on the current connection's engine clock was
+   * actually spoken, or null when nothing was sent on this connection yet.
+   *
+   * Positions beyond the last sent frame clamp to its end; positions inside a
+   * hole left by dropped frames map to the frame that follows the hole, which is
+   * the next audio the engine really heard.
+   */
+  captureTimeAtSample(sample: number): number | null {
+    const timeline = this.sentAudio;
+    if (!timeline || timeline.generation !== this.socketGeneration || timeline.spans.length === 0) {
+      return null;
+    }
+    const spans = timeline.spans;
+    const target = Math.max(0, sample);
+    let low = 0;
+    let high = spans.length - 1;
+    // Last span starting at or before the target.
+    while (low < high) {
+      const mid = (low + high + 1) >> 1;
+      if (spans[mid].startSample <= target) {
+        low = mid;
+      } else {
+        high = mid - 1;
+      }
+    }
+    const span = spans[low];
+    const offsetSamples = Math.min(Math.max(0, target - span.startSample), span.sampleCount);
+    return span.captureStartMs + (offsetSamples / GATEWAY_LIVE_SAMPLE_RATE_HZ) * 1000;
+  }
+
+  private recordSentAudio(generation: number, frame: PendingAudioFrame): void {
+    if (!this.sentAudio || this.sentAudio.generation !== generation) {
+      this.sentAudio = { generation, spans: [], totalSamples: 0 };
+    }
+    const timeline = this.sentAudio;
+    const durationMs = (frame.sampleCount / GATEWAY_LIVE_SAMPLE_RATE_HZ) * 1000;
+    timeline.spans.push({
+      startSample: timeline.totalSamples,
+      sampleCount: frame.sampleCount,
+      captureStartMs: frame.capturedAtMs - durationMs,
+    });
+    timeline.totalSamples += frame.sampleCount;
+    if (timeline.spans.length > MAX_SENT_AUDIO_SPANS) {
+      timeline.spans.splice(0, timeline.spans.length - MAX_SENT_AUDIO_SPANS);
+    }
+  }
+
   private sendSequencedFrame(
     pcm16: Uint8Array,
     chunkSeq: number,
@@ -615,7 +690,12 @@ export class GatewayLiveStream {
     // Always accepted into the bounded window: a full buffer evicts the oldest
     // frame rather than killing the lane. Recency wins, because a live preview
     // stuck replaying a minute-old backlog is worse than one with a gap.
-    this.enqueueFrame(chunkSeq, encoded);
+    this.enqueueFrame(
+      chunkSeq,
+      encoded,
+      capturedAtMs,
+      pcm16.byteLength / Int16Array.BYTES_PER_ELEMENT,
+    );
 
     if (!this.ready || !this.socket) {
       // New audio is exactly the signal a half-open probe waits for.
@@ -915,7 +995,12 @@ export class GatewayLiveStream {
    * the newest audio also matters for quality: a preview that replays a
    * minute-old backlog is further from the speaker than one with a gap.
    */
-  private enqueueFrame(chunkSeq: number, encoded: ArrayBuffer): void {
+  private enqueueFrame(
+    chunkSeq: number,
+    encoded: ArrayBuffer,
+    capturedAtMs: number,
+    sampleCount: number,
+  ): void {
     const byteLength = encoded.byteLength;
     let droppedCount = 0;
     let droppedBytes = 0;
@@ -945,7 +1030,13 @@ export class GatewayLiveStream {
       lastDropped = oldest.value;
     }
 
-    this.pendingFrames.set(chunkSeq, { encoded, byteLength, sentGeneration: null });
+    this.pendingFrames.set(chunkSeq, {
+      encoded,
+      byteLength,
+      sentGeneration: null,
+      capturedAtMs,
+      sampleCount,
+    });
     this.pendingAudioBytes += byteLength;
 
     if (droppedCount > 0 && firstDropped !== null && lastDropped !== null) {
@@ -1092,6 +1183,7 @@ export class GatewayLiveStream {
         return sent;
       }
       pending.sentGeneration = expectedGeneration;
+      this.recordSentAudio(expectedGeneration, pending);
       this.armAckSilenceTimer(expectedGeneration);
       sent = true;
       written += 1;

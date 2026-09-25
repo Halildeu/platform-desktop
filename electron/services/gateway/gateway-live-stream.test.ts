@@ -871,6 +871,107 @@ describe('GatewayLiveStream', () => {
     stream.close();
   });
 
+  // #148: the engine clock restarts on every connection and replayed backlog is
+  // sent faster than real time, so only the capture time of the audio the engine
+  // actually heard says when a line was spoken.
+  it('maps engine positions on a reconnected lane back to capture time', async () => {
+    vi.useFakeTimers();
+    vi.spyOn(Math, 'random').mockReturnValue(0.5);
+    const sockets: FakeSocket[] = [];
+    const stream = new GatewayLiveStream({
+      cfg: { baseUrl: 'https://testai.acik.com' },
+      sessionId: 'SES-1',
+      getJwt: async () => 'JWT',
+      onEvent: vi.fn(),
+      onError: vi.fn(),
+      maxPendingFrames: REALTIME_MAX_PENDING_FRAME_COUNT,
+      replayFramesPerTick: REALTIME_REPLAY_FRAMES_PER_TICK,
+      socketFactory: () => {
+        const socket = new FakeSocket();
+        sockets.push(socket);
+        return socket;
+      },
+    });
+    expect(stream.captureTimeAtSample(0)).toBeNull();
+
+    const started = stream.start();
+    await vi.advanceTimersByTimeAsync(0);
+    sockets[0].open();
+    sockets[0].message(JSON.stringify({ type: 'ready' }));
+    await started;
+
+    // 20 frames of 100 ms (1 600 samples each); capturedAtMs marks the frame end.
+    const frame = new Uint8Array(3_200);
+    for (let index = 0; index < 20; index += 1) {
+      stream.sendRealtimeFrame(frame, 1_000 + index * 100);
+    }
+    // First connection: its own clock starts at the first frame's start.
+    expect(stream.captureTimeAtSample(0)).toBe(900);
+
+    // The link stalls; the lane reconnects and replays the unacknowledged backlog.
+    await vi.advanceTimersByTimeAsync(7_250);
+    await vi.advanceTimersByTimeAsync(0);
+    sockets[1].open();
+    sockets[1].message(JSON.stringify({ type: 'ready' }));
+    await vi.advanceTimersByTimeAsync(0);
+    // New speech during the replay, captured well after the backlog.
+    stream.sendRealtimeFrame(frame, 5_000);
+    await vi.advanceTimersByTimeAsync(600);
+
+    // The new connection's clock restarts at 0 and maps to the replayed audio's
+    // own capture time, not to when the replay happened to be sent.
+    expect(stream.captureTimeAtSample(0)).toBe(900);
+    expect(stream.captureTimeAtSample(800)).toBe(950); // mid-frame
+    expect(stream.captureTimeAtSample(19 * 1_600)).toBe(2_800);
+    // The live frame after the backlog lands at its real capture time, across
+    // the 1.9 s capture gap between frame 19 and frame 20.
+    expect(stream.captureTimeAtSample(20 * 1_600)).toBe(4_900);
+    // Past the last sent audio clamps to its end instead of extrapolating.
+    expect(stream.captureTimeAtSample(99 * 1_600)).toBe(5_000);
+    stream.close();
+  });
+
+  it('maps across a hole left by frames dropped while offline', async () => {
+    vi.useFakeTimers();
+    vi.spyOn(Math, 'random').mockReturnValue(0.5);
+    const sockets: FakeSocket[] = [];
+    const stream = new GatewayLiveStream({
+      cfg: { baseUrl: 'https://testai.acik.com' },
+      sessionId: 'SES-1',
+      getJwt: async () => 'JWT',
+      onEvent: vi.fn(),
+      onError: vi.fn(),
+      maxPendingFrames: 5,
+      replayFramesPerTick: REALTIME_REPLAY_FRAMES_PER_TICK,
+      socketFactory: () => {
+        const socket = new FakeSocket();
+        sockets.push(socket);
+        return socket;
+      },
+    });
+    const started = stream.start();
+    await vi.advanceTimersByTimeAsync(0);
+    sockets[0].open();
+    sockets[0].message(JSON.stringify({ type: 'ready' }));
+    await started;
+
+    const frame = new Uint8Array(3_200);
+    for (let index = 0; index < 10; index += 1) {
+      stream.sendRealtimeFrame(frame, 1_000 + index * 100);
+    }
+    await vi.advanceTimersByTimeAsync(7_250);
+    await vi.advanceTimersByTimeAsync(0);
+    sockets[1].open();
+    sockets[1].message(JSON.stringify({ type: 'ready' }));
+    await vi.advanceTimersByTimeAsync(600);
+
+    // Only the newest five frames survived the bounded window. The engine's
+    // first audio on this connection is frame 5, spoken at 1 400 ms.
+    expect(stream.captureTimeAtSample(0)).toBe(1_400);
+    expect(stream.captureTimeAtSample(4 * 1_600)).toBe(1_800);
+    stream.close();
+  });
+
   it('probes immediately when the REST upload proves the network is back', async () => {
     vi.useFakeTimers();
     vi.spyOn(Math, 'random').mockReturnValue(0.5);
