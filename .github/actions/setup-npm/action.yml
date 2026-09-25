@@ -1,0 +1,36 @@
+name: Pin npm
+description: >-
+  Installs the npm version declared in package.json "packageManager" and fails
+  the job if a different version ends up on PATH. Use it after actions/setup-node
+  and before `npm ci`.
+
+  Why (platform-desktop#147): npm 10.9.x cannot run `audit fix` on this dependency
+  tree (it crashes with "Cannot read properties of null (reading 'edgesOut')" on
+  Node 22 and 24), so the lockfile is produced with npm 11.6.2. Different npm
+  majors also write different `peer` markers into package-lock.json, which made
+  lockfile diffs flip back and forth between machines. Pinning the same version
+  everywhere keeps the lockfile stable.
+
+runs:
+  using: composite
+  steps:
+    - name: Install pinned npm
+      shell: bash
+      run: |
+        set -euo pipefail
+        spec="$(node -p "require('./package.json').packageManager || ''")"
+        case "$spec" in
+          npm@*) ;;
+          *)
+            echo "::error::package.json packageManager must be npm@<version>, got '${spec}'"
+            exit 1
+            ;;
+        esac
+        version="${spec#npm@}"
+        npm install --global "npm@${version}"
+        actual="$(npm --version)"
+        if [ "$actual" != "$version" ]; then
+          echo "::error::npm ${actual} is on PATH but package.json pins ${version}"
+          exit 1
+        fi
+        echo "npm ${actual} (pinned by package.json packageManager)"
