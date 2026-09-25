@@ -202,11 +202,17 @@ const electronAPI = {
         sessionId: string;
         deliveryBacklogMs: number;
         engineLagMs: number | null;
+        lastEngineEventAgeMs: number | null;
       }) => void,
     ): (() => void) => {
       const listener = (
         _event: IpcRendererEvent,
-        payload: { sessionId: string; deliveryBacklogMs: number; engineLagMs: number | null },
+        payload: {
+          sessionId: string;
+          deliveryBacklogMs: number;
+          engineLagMs: number | null;
+          lastEngineEventAgeMs: number | null;
+        },
       ): void => {
         callback(payload);
       };

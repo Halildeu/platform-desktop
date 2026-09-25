@@ -240,6 +240,12 @@ export interface GatewayLiveLagSnapshot {
   deliveryBacklogMs: number;
   /** audio_sent_ms - elapsed_ms of a recent transcript event; null when unknown. */
   engineLagMs: number | null;
+  /**
+   * Time since the engine last produced text (partial or final); null before
+   * the first one. Paired with the speech activity signal it tells a genuine
+   * stall (someone is talking, nothing comes back) from plain silence.
+   */
+  lastEngineEventAgeMs: number | null;
 }
 
 const LAG_REPORT_INTERVAL_MS = 1_000;
@@ -549,6 +555,7 @@ export class GatewayLiveStream {
   private replayPaceTimer: ReturnType<typeof setTimeout> | null = null;
   private lagReportTimer: ReturnType<typeof setInterval> | null = null;
   private lastEngineLag: { lagMs: number; atMs: number; generation: number } | null = null;
+  private lastEngineEventAtMs: number | null = null;
   private backpressured = false;
   private ackSilenceTimer: ReturnType<typeof setTimeout> | null = null;
   private delivery: LiveDeliveryState = { kind: 'healthy' };
@@ -609,7 +616,9 @@ export class GatewayLiveStream {
       nowMs - engine.atMs <= ENGINE_LAG_FRESH_MS
         ? engine.lagMs
         : null;
-    return { deliveryBacklogMs, engineLagMs };
+    const lastEngineEventAgeMs =
+      this.lastEngineEventAtMs === null ? null : Math.max(0, nowMs - this.lastEngineEventAtMs);
+    return { deliveryBacklogMs, engineLagMs, lastEngineEventAgeMs };
   }
 
   private startLagReporting(): void {
@@ -637,6 +646,9 @@ export class GatewayLiveStream {
     if (event.type !== 'partial' && event.type !== 'final') {
       return;
     }
+    // Any text counts, with or without timing fields: the question is only
+    // whether the engine is still producing words.
+    this.lastEngineEventAtMs = Date.now();
     const sentMs = event.audio_sent_ms;
     const engineMs = event.elapsed_ms;
     if (
