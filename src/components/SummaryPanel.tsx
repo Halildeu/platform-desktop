@@ -1053,6 +1053,7 @@ export function SummaryPanel({
             canonicalResultStatus,
             visibleIntelligence.status,
             canonicalResultAutoRetrying,
+            waitStage !== null,
           )}
         </span>
       </div>
@@ -1943,9 +1944,12 @@ function canonicalResultStatusLabel(
   canonicalStatus: CanonicalResultLoadStatus,
   intelligenceStatus: MeetingIntelligenceState['status'],
   autoRetrying: boolean,
+  awaitingFinalization = false,
 ): string {
   if (canonicalStatus === 'loading') {
-    return 'Yükleniyor';
+    // Kayıt bitmiş ve sonuç bekleniyorsa altındaki aşamalarla aynı şeyi
+    // söylemeli; "Yükleniyor" ile "Metin kesinleştiriliyor" yan yana çelişiyordu.
+    return awaitingFinalization ? 'Hazırlanıyor' : 'Yükleniyor';
   }
   if (canonicalStatus === 'not_ready') {
     return 'Hazırlanıyor';

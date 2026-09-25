@@ -345,6 +345,10 @@ describe('SummaryPanel', () => {
       'step',
     );
     expect(within(wait).getByText(/Bitir'den bu yana 30 sn/)).toBeInTheDocument();
+    // Ustteki durum etiketi asamalarla celismemeli (24 Eylul attended gozlemi:
+    // "Yükleniyor" ile "Metin kesinleştiriliyor" yan yana gorunuyordu).
+    expect(screen.getByText('Hazırlanıyor')).toBeInTheDocument();
+    expect(screen.queryByText('Yükleniyor')).not.toBeInTheDocument();
   });
 
   it('moves to the analysis stage and drops the estimate once the wait window passes', () => {
