@@ -35,11 +35,26 @@ export const SPEECH_ACTIVITY_MIN_RATIO = 0.4;
 
 const FRAMES_PER_WINDOW = SPEECH_ACTIVITY_WINDOW_MS / SPEECH_ACTIVITY_FRAME_MS;
 
+export interface SpeechActivityRmsPercentiles {
+  p10: number;
+  p50: number;
+  p90: number;
+}
+
 export interface SpeechActivitySnapshot {
   /** Son 10 sn'de eşiğin üstündeki pencere oranı; pencere dolmadıysa null. */
   ratio: number | null;
   /** Oranın hesaplandığı pencere sayısı. */
   frameCount: number;
+  /**
+   * Son 10 sn'deki 100 ms pencere RMS dağılımı; pencere dolmadıysa null.
+   *
+   * Eşiği uygulamanın KENDİ sinyaline göre ölçmek için tanı çıktısına yazılır.
+   * 25 Eylül attended testi, ham mikrofonla yapılan kalibrasyonun uygulamaya
+   * taşınamadığını gösterdi: tarayıcı ses işlemesinden sonra sessizlik ~0.001
+   * seviyesine çıkıyor (eşiğin üstü), konuşma ~0.1.
+   */
+  rms: SpeechActivityRmsPercentiles | null;
 }
 
 /**
@@ -50,8 +65,8 @@ export class SpeechActivityMeter {
   private readonly samplesPerFrame: number;
   private frameSumSquares = 0;
   private frameSampleCount = 0;
-  /** Tamamlanan pencerelerin "ses var" bayrakları, en eskiden en yeniye. */
-  private readonly frames: boolean[] = [];
+  /** Tamamlanan pencerelerin RMS değerleri, en eskiden en yeniye. */
+  private readonly frames: number[] = [];
   private activeFrames = 0;
 
   constructor(sampleRate: number) {
@@ -73,9 +88,16 @@ export class SpeechActivityMeter {
 
   snapshot(): SpeechActivitySnapshot {
     if (this.frames.length < FRAMES_PER_WINDOW) {
-      return { ratio: null, frameCount: this.frames.length };
+      return { ratio: null, frameCount: this.frames.length, rms: null };
     }
-    return { ratio: this.activeFrames / this.frames.length, frameCount: this.frames.length };
+    const sorted = [...this.frames].sort((a, b) => a - b);
+    const at = (p: number): number =>
+      sorted[Math.min(sorted.length - 1, Math.floor(p * (sorted.length - 1)))];
+    return {
+      ratio: this.activeFrames / this.frames.length,
+      frameCount: this.frames.length,
+      rms: { p10: at(0.1), p50: at(0.5), p90: at(0.9) },
+    };
   }
 
   reset(): void {
@@ -87,14 +109,13 @@ export class SpeechActivityMeter {
 
   private closeFrame(): void {
     const rms = Math.sqrt(this.frameSumSquares / this.frameSampleCount);
-    const active = rms >= SPEECH_ACTIVITY_RMS_THRESHOLD;
-    this.frames.push(active);
-    if (active) {
+    this.frames.push(rms);
+    if (rms >= SPEECH_ACTIVITY_RMS_THRESHOLD) {
       this.activeFrames += 1;
     }
     if (this.frames.length > FRAMES_PER_WINDOW) {
       const dropped = this.frames.shift();
-      if (dropped) {
+      if (dropped !== undefined && dropped >= SPEECH_ACTIVITY_RMS_THRESHOLD) {
         this.activeFrames -= 1;
       }
     }

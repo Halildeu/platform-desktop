@@ -398,6 +398,7 @@ describe('startRecording', () => {
       rms: 0,
       capturedAtMs: expect.any(Number),
       speechRatio: null,
+      speechRms: null,
     });
     expect(ws?.sent).toHaveLength(10);
     for (const frame of ws?.sent ?? []) {

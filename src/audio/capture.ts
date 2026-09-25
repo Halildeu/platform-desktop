@@ -20,7 +20,7 @@ import {
 } from './live-stt-stream';
 import { encodeChunk, floatToPcm16, pcm16ToBytes, resampleLinear } from './pcm-encode';
 import { FrameBuffer } from './frame-buffer';
-import { SpeechActivityMeter } from './speech-activity';
+import { SpeechActivityMeter, type SpeechActivityRmsPercentiles } from './speech-activity';
 
 const TARGET_RATE = 16000;
 const CHUNK_MS = 2000;
@@ -171,6 +171,8 @@ export interface StartRecordingOptions {
      * dolmadıysa null (speech-activity.ts). Motordan bağımsız konuşma sinyali.
      */
     speechRatio: number | null;
+    /** Aynı pencerenin RMS dağılımı; eşiği ölçümle ayarlamak için tanıya yazılır. */
+    speechRms: SpeechActivityRmsPercentiles | null;
   }) => void;
   onLiveTranscriptEvent?: (event: LiveSttTranscriptEvent) => void;
   onLiveTranscriptError?: (err: Error) => void;
@@ -563,10 +565,12 @@ export async function startRecording(
       capturedAtMs - lastAudioActivityEventAtMs >= AUDIO_ACTIVITY_EVENT_MS
     ) {
       lastAudioActivityEventAtMs = capturedAtMs;
+      const activity = speechActivity.snapshot();
       options.onAudioActivity({
         rms: rms(ev.data),
         capturedAtMs,
-        speechRatio: speechActivity.snapshot().ratio,
+        speechRatio: activity.ratio,
+        speechRms: activity.rms,
       });
     }
     if (liveStream || (captureId && options.transcriptionMode === 'realtime')) {

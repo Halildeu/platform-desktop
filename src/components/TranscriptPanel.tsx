@@ -81,6 +81,8 @@ export interface TranscriptPanelProps {
     } | null;
     /** Son 10 sn'de eşiğin üstündeki 100 ms pencere oranı (speech-activity.ts). */
     speechActivityRatio?: number | null;
+    /** Aynı pencerenin RMS dağılımı (%10 / ortanca / %90); yalnız tanı için. */
+    speechActivityRms?: { p10: number; p50: number; p90: number } | null;
     disabledReason: string | null;
     preflight?: LiveSttPreflightState;
     capturePreflight?: AudioCapturePreflightState;
@@ -1221,6 +1223,9 @@ function buildTranscriptDiagnostics(
     `lastTranscriptAt=${formatDiagnosticTimestamp(lastTranscriptAtMs)}`,
     `lagMs=${lagMs ?? '-'}`,
     `speechActivityRatio=${formatDiagnosticNumber(stream?.speechActivityRatio ?? null, 2)}`,
+    `speechActivityRms.p10=${formatDiagnosticNumber(stream?.speechActivityRms?.p10 ?? null, 4)}`,
+    `speechActivityRms.p50=${formatDiagnosticNumber(stream?.speechActivityRms?.p50 ?? null, 4)}`,
+    `speechActivityRms.p90=${formatDiagnosticNumber(stream?.speechActivityRms?.p90 ?? null, 4)}`,
     `lastEngineEventAgeMs=${stream?.liveLag?.lastEngineEventAgeMs ?? '-'}`,
     `flow.health=${health.label}`,
     `flow.risk=${health.risk}`,

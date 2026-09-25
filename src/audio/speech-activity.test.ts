@@ -51,7 +51,7 @@ describe('SpeechActivityMeter', () => {
   it('withholds a ratio until the 10 second window is full', () => {
     const meter = new SpeechActivityMeter(SAMPLE_RATE);
     feed(meter, 99, 99);
-    expect(meter.snapshot()).toEqual({ ratio: null, frameCount: 99 });
+    expect(meter.snapshot()).toEqual({ ratio: null, frameCount: 99, rms: null });
     expect(isSpeechActive(meter.snapshot().ratio)).toBe(false);
 
     meter.push(frame(0.0065));
@@ -75,6 +75,20 @@ describe('SpeechActivityMeter', () => {
       meter.push(quantum);
     }
     expect(meter.snapshot().ratio).toBe(1);
+  });
+
+  // 25 Eylül attended testi: eşik ham mikrofonda kalibre edilmişti, uygulamada
+  // tarayıcı ses işlemesinden sonra sessizlik ~0.001'e çıktı. Dağılım tanıya
+  // yazılır ki eşik uygulamanın kendi sinyalinden ölçülebilsin.
+  it('reports the RMS distribution of the window for calibration', () => {
+    const meter = new SpeechActivityMeter(SAMPLE_RATE);
+    for (let i = 0; i < 100; i += 1) {
+      meter.push(frame((i + 1) / 1000)); // 0.001 … 0.100
+    }
+    const { rms } = meter.snapshot();
+    expect(rms?.p10).toBeCloseTo(0.01, 5);
+    expect(rms?.p50).toBeCloseTo(0.05, 5);
+    expect(rms?.p90).toBeCloseTo(0.09, 5);
   });
 
   it('keeps the decision boundary at the named constant', () => {
