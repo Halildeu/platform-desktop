@@ -11,8 +11,10 @@
   "main": "dist-electron/main.js",
   "private": true,
   "type": "module",
+  "packageManager": "npm@11.6.2",
   "engines": {
-    "node": ">=22.12.0"
+    "node": ">=22.12.0",
+    "npm": ">=11.6.2 <12"
   },
   "scripts": {
     "dev": "vite",

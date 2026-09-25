@@ -24,6 +24,8 @@ jobs:
         with:
           node-version: '22'
           cache: npm
+      - name: Pin npm (package.json packageManager)
+        uses: ./.github/actions/setup-npm
       - run: npm ci
       - name: Build unsigned macOS application directory
         env:
@@ -51,6 +53,8 @@ jobs:
         with:
           node-version: '22'
           cache: npm
+      - name: Pin npm (package.json packageManager)
+        uses: ./.github/actions/setup-npm
       - run: npm ci
       - name: Build Linux application directory
         run: |
@@ -71,6 +75,8 @@ jobs:
         with:
           node-version: '22'
           cache: npm
+      - name: Pin npm (package.json packageManager)
+        uses: ./.github/actions/setup-npm
       - run: npm ci
       - name: Build Windows application directory
         run: |

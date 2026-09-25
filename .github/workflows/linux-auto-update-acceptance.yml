@@ -57,6 +57,8 @@ jobs:
       - name: Install Cosign
         uses: sigstore/cosign-installer@d7543c93d881b35a8faa02e8e3605f69b7a1ce62 # v3.10.0
 
+      - name: Pin npm (package.json packageManager)
+        uses: ./.github/actions/setup-npm
       - name: Install runtime dependencies
         run: |
           sudo apt-get update
