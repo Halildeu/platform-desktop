@@ -6,31 +6,50 @@
  * sessizliği gerçek bir takılmadan ayırmak için kullanır; kapsam göstergesi de
  * aynı sinyali kullanacak (#146 / gitops#3837), bu yüzden mantık tek yerde durur.
  *
- * Neden anlık ses düzeyi değil de oran: 24 Eylül kalibrasyonunda (tek mikrofon,
- * 20 sn, 100 ms pencere) kesintisiz konuşma sırasında bile pencerelerin %10'u
- * 0.0002'nin altında kaldı; kelime aralarındaki boşluklar buna sebep. Tek pencereye
- * bakan bir kural konuşmanın ortasında sürekli durum değiştirir. Oran ise temiz
- * ayırdı:
+ * Neden anlık ses düzeyi değil de oran: kesintisiz konuşma sırasında bile
+ * pencerelerin %10'u kelime aralarına denk gelip sessiz ölçülüyor. Tek pencereye
+ * bakan bir kural konuşmanın ortasında sürekli durum değiştirir; oran bakmak bunu
+ * sönümler.
  *
- *   sessiz oda            %1   eşiğin üstünde
- *   arka planda konuşma   %4
- *   kullanıcı konuşuyor  %87
+ * Eşik UYGULAMANIN KENDİ SİNYALİNDEN ölçüldü (25 Eylül, attended, tanı çıktısı,
+ * 100 ms pencere RMS dağılımı):
  *
- * Sınır: ölçüm tek makinede ve gürültü bastırmalı bir mikrofonla yapıldı. Oran
- * tanı çıktısına yazılır; başka donanımdaki gerçek değerler gitops#3837'de
- * toplanır ve sabitler ölçümle güncellenir.
+ *                              %10      ortanca   %90
+ *   sessizlik                  0.0009   0.0011    0.0037
+ *   kullanıcı konuşuyor        0.0035   0.0714    0.1729
+ *   sistem sesi (görüşmedeki)  0.0039   0.1046    0.2854
+ *
+ * İlk kalibrasyon (24 Eylül) ham mikrofondan yapılmış ve 0.0008 önermişti. Uygulama
+ * ise getUserMedia varsayılanlarıyla (otomatik kazanç, gürültü bastırma) işlenmiş
+ * sesi ölçtüğü için sessizlik ~0.001'e çıkıyor; 0.0008 ile sessizlikte oran 1.00
+ * oldu ve "Metin gelmiyor" yanlış uyarısı çıktı. Ham mikrofon ölçümü uygulamaya
+ * taşınamaz.
+ *
+ * 0.01 seçimi dağılımın bilinmeyen kısmında en kötü durumda da doğru karar verir:
+ * sessizliğin %90'ı eşiğin altında olduğu için oran en fazla %10; konuşmada eşik
+ * %10'luk dilim ile ortanca arasında olduğu için oran en az %50 — ikisi de %40
+ * sınırının doğru tarafında.
+ *
+ * "Mikrofon + sistem sesi" kaydında hoparlörden çalan ses mikrofona değil doğrudan
+ * sisteme ait kanaldan girer ve tam seviyede konuşma sayılır. Bu doğrudur (görüşmede
+ * konuşan biri için metin beklenir), ama "odada uzaktan konuşan biri" durumu bu
+ * düzenekle ölçülemedi.
+ *
+ * Sınır: tek makine, tek mikrofon. Oran ve dağılım tanı çıktısına yazılır; başka
+ * donanımdaki değerler gitops#3837'de toplanır ve sabitler ölçümle güncellenir.
  */
 
 /** Ses düzeyinin ölçüldüğü pencere; kalibrasyonla aynı. */
 export const SPEECH_ACTIVITY_FRAME_MS = 100;
 /** Oranın hesaplandığı geriye dönük süre. */
 export const SPEECH_ACTIVITY_WINDOW_MS = 10_000;
-/** Bir pencerenin "ses var" sayılması için RMS eşiği (kalibrasyonla aynı değer). */
-export const SPEECH_ACTIVITY_RMS_THRESHOLD = 0.0008;
 /**
- * "Konuşma var" demek için gereken en düşük oran. Ölçülen arka plan (%4) ile
- * konuşma (%87) arasında geniş güvenlik payı bırakılarak seçildi.
+ * Bir pencerenin "ses var" sayılması için RMS eşiği. Uygulamanın işlenmiş sinyalinde
+ * sessizliğin %90'ı (0.0037) ile konuşma ortancası (0.0714) arasında; yukarıdaki
+ * tabloya bakın.
  */
+export const SPEECH_ACTIVITY_RMS_THRESHOLD = 0.01;
+/** "Konuşma var" demek için gereken en düşük oran. */
 export const SPEECH_ACTIVITY_MIN_RATIO = 0.4;
 
 const FRAMES_PER_WINDOW = SPEECH_ACTIVITY_WINDOW_MS / SPEECH_ACTIVITY_FRAME_MS;
