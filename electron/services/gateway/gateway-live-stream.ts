@@ -622,6 +622,11 @@ export class GatewayLiveStream {
    * Positions beyond the last sent frame clamp to its end; positions inside a
    * hole left by dropped frames map to the frame that follows the hole, which is
    * the next audio the engine really heard.
+   *
+   * Positions older than the retained history (the oldest spans are pruned after
+   * MAX_SENT_AUDIO_SPANS) return null instead of borrowing the first surviving
+   * span's time: the caller then falls back to arrival time, which is honest
+   * about not knowing, rather than a wrong but plausible stamp.
    */
   captureTimeAtSample(sample: number): number | null {
     const timeline = this.sentAudio;
@@ -630,6 +635,9 @@ export class GatewayLiveStream {
     }
     const spans = timeline.spans;
     const target = Math.max(0, sample);
+    if (target < spans[0].startSample) {
+      return null;
+    }
     let low = 0;
     let high = spans.length - 1;
     // Last span starting at or before the target.

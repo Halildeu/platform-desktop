@@ -972,6 +972,47 @@ describe('GatewayLiveStream', () => {
     stream.close();
   });
 
+  // Halil incelemesi (#148, M): çizelge ~30 dakikalık geçmişle sınırlı. Budanan
+  // bir konum ilk kalan çerçevenin zamanını ödünç almamalı; null dönüp geliş
+  // zamanına düşmek, yanlış ama makul görünen bir damgadan daha dürüst.
+  it('returns null for engine positions older than the retained history', async () => {
+    vi.useFakeTimers();
+    const sockets: FakeSocket[] = [];
+    const stream = new GatewayLiveStream({
+      cfg: { baseUrl: 'https://testai.acik.com' },
+      sessionId: 'SES-1',
+      getJwt: async () => 'JWT',
+      onEvent: vi.fn(),
+      onError: vi.fn(),
+      socketFactory: () => {
+        const socket = new FakeSocket();
+        sockets.push(socket);
+        return socket;
+      },
+    });
+    const started = stream.start();
+    await vi.advanceTimersByTimeAsync(0);
+    sockets[0].open();
+    sockets[0].message(JSON.stringify({ type: 'ready' }));
+    await started;
+
+    // 16-sample frames keep the test light; 10 more than the retained history.
+    const frame = new Uint8Array(32);
+    const total = 18_010;
+    for (let index = 0; index < total; index += 1) {
+      stream.sendRealtimeFrame(frame, 10_000 + index);
+      sockets[0].message(JSON.stringify({ type: 'audio_ack', chunk_seq: index }));
+    }
+
+    // The ten oldest spans were pruned: their positions are no longer known.
+    expect(stream.captureTimeAtSample(0)).toBeNull();
+    expect(stream.captureTimeAtSample(10 * 16 - 1)).toBeNull();
+    // The first retained span still maps exactly (frame 10 ends at 10 010 ms,
+    // 16 samples = 1 ms, so it starts at 10 009 ms).
+    expect(stream.captureTimeAtSample(10 * 16)).toBe(10_009);
+    stream.close();
+  });
+
   it('probes immediately when the REST upload proves the network is back', async () => {
     vi.useFakeTimers();
     vi.spyOn(Math, 'random').mockReturnValue(0.5);
