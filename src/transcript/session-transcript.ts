@@ -206,7 +206,7 @@ function canSubmitReviewSource(
   return (
     readiness.level === 'review' &&
     readiness.finalCount === 0 &&
-    !isLowWordRate(readiness) &&
+    !assessWordRate(state, readiness.wordCount, readiness.durationMs).lowWordRate &&
     hasMinimumMeetingAiSource(readiness) &&
     isSubmitLifecycle(state)
   );
@@ -218,7 +218,7 @@ function buildTranscriptQualityGate(args: {
   finalCount: number;
   wordCount: number;
   durationMs: number;
-  wordRatePerMinute: number | null;
+  lowWordRate: boolean;
   draftOnlyCanBeReviewed: boolean;
 }): TranscriptQualityGate {
   if (args.segmentCount === 0) {
@@ -240,7 +240,7 @@ function buildTranscriptQualityGate(args: {
     };
   }
 
-  if (isLowWordRateValue(args.wordRatePerMinute, args.durationMs)) {
+  if (args.lowWordRate) {
     return {
       status: 'review',
       risk: 'low_word_coverage',
@@ -821,7 +821,7 @@ export function analyzeTranscriptSourceReadiness(
       finalCount: 0,
       wordCount: 0,
       durationMs: 0,
-      wordRatePerMinute: null,
+      lowWordRate: false,
       draftOnlyCanBeReviewed: false,
     });
     return {
@@ -848,12 +848,11 @@ export function analyzeTranscriptSourceReadiness(
   const reviewedCount = segments.filter(isReviewedSegment).length;
   const wordCount = segments.reduce((total, segment) => total + countWords(segment.text), 0);
   const durationMs = transcriptSourceDurationMs(state, segments);
-  const wordRatePerMinute = calculateWordRatePerMinute(wordCount, durationMs);
+  const { wordRatePerMinute, lowWordRate } = assessWordRate(state, wordCount, durationMs);
   const finalRatio = finalCount / segments.length;
   const reviewedRatio = reviewedCount / segments.length;
   const hasMinimumSource =
     wordCount >= REPORT_READY_MIN_WORDS && durationMs >= REPORT_READY_MIN_DURATION_MS;
-  const lowWordRate = isLowWordRateValue(wordRatePerMinute, durationMs);
   const draftOnlyCanBeReviewed = finalCount === 0 && hasMinimumSource && isSubmitLifecycle(state);
   const qualityGate = buildTranscriptQualityGate({
     state,
@@ -861,7 +860,7 @@ export function analyzeTranscriptSourceReadiness(
     finalCount,
     wordCount,
     durationMs,
-    wordRatePerMinute,
+    lowWordRate,
     draftOnlyCanBeReviewed,
   });
   const warnings = [
@@ -1075,6 +1074,82 @@ function countWords(text: string): number {
   return text.trim().split(/\s+/).filter(Boolean).length;
 }
 
+/**
+ * Konuşulan süre: motorun zamanladığı segment aralıklarının birleşimi.
+ *
+ * Kapsam göstergesinin paydası kayıt penceresi olamaz — kimse konuşmazken de
+ * saat işler ve sessizlik "kelime üretilmiyor" gibi görünür. Sessizlik kapsamın
+ * ölçüsü değil; ölçü, konuşulan sürede kaç kelime çıktığıdır. Örtüşen aralıklar
+ * birleştirilir, böylece aynı saniye iki konuşmacıdan iki kez sayılmaz.
+ *
+ * Satırların yalnız bir kısmı zamanlanmışsa payda eksik kalır ve oran şişer: 24
+ * Eylül attended koşusunda 54 satırın kapsadığı süre 13,7 sn ölçüldü ve ekran
+ * 241 kelime/dk gösterdi. Bu yanlış uyarı üretmez ama gerçek bir kapsam
+ * düşüklüğünü gizler. Bu yüzden ölçüm ancak final satırların çoğu zamanlıysa
+ * kabul edilir; değilse gösterge "ölçülemiyor" der, uydurma bir sayı vermez.
+ *
+ * Tek yerde durur: canlı paneldeki kapsam göstergesi ve toplantı çıktısının
+ * kaynak hazırlık kontrolü aynı hesabı kullanır.
+ */
+export const SPEECH_SPAN_MIN_TIMED_SHARE = 0.6;
+
+export type SpeechSpan =
+  /** Zamanlama hiç yok: eski kayıt penceresi davranışı geçerli. */
+  | { kind: 'absent' }
+  /** Zamanlama kısmi: oran güvenilir değil, sayı gösterilmez. */
+  | { kind: 'unmeasurable' }
+  | { kind: 'measured'; ms: number };
+
+export function transcriptSpeechSpan(session: TranscriptSessionState): SpeechSpan {
+  const intervals: Array<[number, number]> = [];
+  let finalCount = 0;
+  let timedFinalCount = 0;
+  for (const segment of session.segments) {
+    const isFinal = segment.status === 'final' || segment.status === 'revised';
+    if (isFinal) {
+      finalCount += 1;
+    }
+    if (segment.timingBasis !== 'source') {
+      continue;
+    }
+    const start = segment.startedAtMs;
+    const end = segment.endedAtMs;
+    if (
+      typeof start !== 'number' ||
+      !Number.isFinite(start) ||
+      typeof end !== 'number' ||
+      !Number.isFinite(end) ||
+      end <= start
+    ) {
+      continue;
+    }
+    if (isFinal) {
+      timedFinalCount += 1;
+    }
+    intervals.push([start, end]);
+  }
+  if (intervals.length === 0) {
+    return { kind: 'absent' };
+  }
+  if (finalCount > 0 && timedFinalCount / finalCount < SPEECH_SPAN_MIN_TIMED_SHARE) {
+    return { kind: 'unmeasurable' };
+  }
+  intervals.sort((a, b) => a[0] - b[0]);
+  let total = 0;
+  let [currentStart, currentEnd] = intervals[0];
+  for (const [start, end] of intervals.slice(1)) {
+    if (start <= currentEnd) {
+      currentEnd = Math.max(currentEnd, end);
+      continue;
+    }
+    total += currentEnd - currentStart;
+    currentStart = start;
+    currentEnd = end;
+  }
+  total += currentEnd - currentStart;
+  return { kind: 'measured', ms: total };
+}
+
 function calculateWordRatePerMinute(wordCount: number, durationMs: number): number | null {
   if (!Number.isFinite(durationMs) || durationMs <= 0) {
     return null;
@@ -1119,8 +1194,37 @@ function transcriptRecordingSpanMs(state: TranscriptSessionState): number | null
   return state.finishedAtMs - state.startedAtMs;
 }
 
-function isLowWordRate(readiness: TranscriptSourceReadiness): boolean {
-  return isLowWordRateValue(readiness.wordRatePerMinute, readiness.durationMs);
+interface WordRateAssessment {
+  wordRatePerMinute: number | null;
+  lowWordRate: boolean;
+}
+
+/**
+ * Kelime hızı ve "kapsam düşük" kararı, canlı paneldeki göstergeyle aynı paydayla.
+ *
+ * Eski hesap kelimeleri kaydın tamamına bölüyordu; kayıt açıkken beklenen her
+ * sessiz saniye oranı düşürdü. 26 Eylül attended (toplantı d9680cf3): ~45 sn
+ * konuşma, kayıt 3 dk 27 sn açık → 68 kelime / 3,5 dk = 20 kelime/dk → "Kapsam
+ * riski" ve "Engel: kaynak kalite kontrolü gerekiyor", oysa transkript eksiksizdi.
+ *
+ * Konuşma süresi ölçülebiliyorsa oran ona göre; zamanlama hiç yoksa eski kayıt
+ * penceresi davranışı; zamanlama kısmi ise oran verilmez ve kapsam hükmü kurulmaz.
+ */
+function assessWordRate(
+  state: TranscriptSessionState,
+  wordCount: number,
+  recordingWindowMs: number,
+): WordRateAssessment {
+  const speech = transcriptSpeechSpan(state);
+  if (speech.kind === 'measured') {
+    const rate = calculateWordRatePerMinute(wordCount, speech.ms);
+    return { wordRatePerMinute: rate, lowWordRate: isLowWordRateValue(rate, speech.ms) };
+  }
+  if (speech.kind === 'unmeasurable') {
+    return { wordRatePerMinute: null, lowWordRate: false };
+  }
+  const rate = calculateWordRatePerMinute(wordCount, recordingWindowMs);
+  return { wordRatePerMinute: rate, lowWordRate: isLowWordRateValue(rate, recordingWindowMs) };
 }
 
 function isLowWordRateValue(wordRatePerMinute: number | null, durationMs: number): boolean {

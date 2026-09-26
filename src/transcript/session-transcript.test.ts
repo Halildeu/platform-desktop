@@ -696,6 +696,69 @@ describe('session transcript state', () => {
     expect(bundle.text).toContain('Konuşmacı: ilk satır');
   });
 
+  // 26 Eylül attended (toplantı d9680cf3): ~45 sn konuşma, kullanıcı canlı analizi
+  // beklerken kayıt 3 dk 27 sn açık kaldı. Kelimeler kayıt süresine bölündüğü için
+  // oran ~20 kelime/dk çıktı ve eksiksiz bir transkript "Kapsam riski" ile işaretlendi.
+  function timedSession(args: {
+    segmentCount: number;
+    segmentMs: number;
+    wordsPerSegment: number;
+    recordingMs: number;
+  }): ReturnType<typeof startTranscriptSession> {
+    const startedAtMs = 1781820000000;
+    let state = startTranscriptSession(initialTranscriptSession(), {
+      sessionId: 'SES-1',
+      meetingId: '22222222-2222-4222-8222-222222222222',
+      deviceId: 'desktop-1',
+      hasLoopback: true,
+      startedAtMs,
+    });
+    const text = Array.from({ length: args.wordsPerSegment }, (_, i) => `kelime${i}`).join(' ');
+    for (let i = 0; i < args.segmentCount; i += 1) {
+      state = upsertTranscriptSegment(state, {
+        id: `seg-${i}`,
+        speakerLabel: 'Konuşmacı',
+        startedAtMs: startedAtMs + i * args.segmentMs,
+        endedAtMs: startedAtMs + (i + 1) * args.segmentMs,
+        timingBasis: 'source',
+        status: 'final',
+        source: 'gateway-events',
+        text,
+      });
+    }
+    return finishTranscriptSession(state, startedAtMs + args.recordingMs);
+  }
+
+  it('does not flag low coverage when a complete transcript is followed by a long silence', () => {
+    // 9 × 5 sn = 45 sn konuşma, 72 kelime; kayıt 3 dk 27 sn açık.
+    const readiness = analyzeTranscriptSourceReadiness(
+      timedSession({ segmentCount: 9, segmentMs: 5_000, wordsPerSegment: 8, recordingMs: 207_000 }),
+    );
+
+    // Oran konuşma süresinden: 72 kelime / 45 sn = 96 kelime/dk.
+    expect(readiness.wordRatePerMinute).toBeCloseTo(96, 5);
+    expect(readiness.qualityGate.risk).not.toBe('low_word_coverage');
+    expect(readiness.warnings).not.toContain(
+      'Kelime üretim hızı düşük; konuşmanın önemli kısmı transcript kaynağına düşmemiş olabilir.',
+    );
+    expect(readiness.level).toBe('ready');
+    // Rapor için "yeterince uzun" kontrolü hâlâ kayıt süresine bakar.
+    expect(readiness.durationMs).toBe(207_000);
+  });
+
+  it('still flags low coverage when the speech itself produced few words', () => {
+    // 3 × 20 sn = 60 sn konuşma, yalnız 12 kelime → 12 kelime/dk.
+    const readiness = analyzeTranscriptSourceReadiness(
+      timedSession({ segmentCount: 3, segmentMs: 20_000, wordsPerSegment: 4, recordingMs: 61_000 }),
+    );
+
+    expect(readiness.wordRatePerMinute).toBeCloseTo(12, 5);
+    expect(readiness.qualityGate).toMatchObject({
+      risk: 'low_word_coverage',
+      label: 'Kapsam riski',
+    });
+  });
+
   it('builds a meeting-ai analyze source package without fabricating output', () => {
     const recording = startTranscriptSession(initialTranscriptSession(), {
       sessionId: 'SES-1',
@@ -773,15 +836,19 @@ describe('session transcript state', () => {
       ],
     });
     expect(bundle.package.source_quality.final_count).toBe(2);
-    expect(bundle.package.source_quality.word_rate_per_minute).toBeGreaterThan(20);
+    // Final satırların yalnız yarısı motor zamanlamalı: konuşma süresi güvenilir
+    // ölçülemez, bu yüzden kelime hızı verilmez ve kapsam hükmü kurulmaz (canlı
+    // paneldeki kuralla aynı). Kapı yine kapalı, ama doğru sebeple: 11 kelime,
+    // 20 kelimelik eşiğin altında. Eski davranış 11 kelimeyi 20 sn'lik kayıt
+    // penceresine bölüp "kapsam riski" diyordu.
+    expect(bundle.package.source_quality.word_rate_per_minute).toBeNull();
     expect(bundle.package.source_quality.reviewed_count).toBe(1);
     expect(bundle.package.source_quality.reviewed_ratio).toBe(0.5);
     expect(bundle.package.source_quality.quality_gate).toEqual({
       status: 'review',
-      risk: 'low_word_coverage',
-      label: 'Kapsam riski',
-      action:
-        'Mikrofon/direct STT zinciri doğrulanmadan Meeting AI veya ERP/CRM aktarımı yapılmaz.',
+      risk: 'low_word_count',
+      label: 'Kelime eşiği eksik',
+      action: 'En az 20 kelimelik transcript kaynağı beklenir.',
     });
     expect(bundle.package.source_quality.warnings).not.toContain('Transkript satırı yok.');
     expect(bundle.json).toContain('"client_direct_platform_ai": false');
