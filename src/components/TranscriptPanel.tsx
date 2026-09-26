@@ -11,7 +11,9 @@ import {
 import {
   compareTranscriptSegments,
   lifecycleLabel,
+  transcriptSpeechSpan,
   transcriptStatusLabel,
+  type SpeechSpan,
   type TranscriptSegment,
   type TranscriptSegmentStatus,
   type TranscriptSessionState,
@@ -770,79 +772,6 @@ function transcriptObservationSpanMs(
     return null;
   }
   return endMs - session.startedAtMs;
-}
-
-/**
- * Konuşulan süre: motorun zamanladığı segment aralıklarının birleşimi.
- *
- * Kapsam göstergesinin paydası kayıt penceresi olamaz — kimse konuşmazken de
- * saat işler ve sessizlik "kelime üretilmiyor" gibi görünür. Sessizlik kapsamın
- * ölçüsü değil; ölçü, konuşulan sürede kaç kelime çıktığıdır. Örtüşen aralıklar
- * birleştirilir, böylece aynı saniye iki konuşmacıdan iki kez sayılmaz.
- *
- * Satırların yalnız bir kısmı zamanlanmışsa payda eksik kalır ve oran şişer: 24
- * Eylül attended koşusunda 54 satırın kapsadığı süre 13,7 sn ölçüldü ve ekran
- * 241 kelime/dk gösterdi. Bu yanlış uyarı üretmez ama gerçek bir kapsam
- * düşüklüğünü gizler. Bu yüzden ölçüm ancak final satırların çoğu zamanlıysa
- * kabul edilir; değilse gösterge "ölçülemiyor" der, uydurma bir sayı vermez.
- */
-const SPEECH_SPAN_MIN_TIMED_SHARE = 0.6;
-
-type SpeechSpan =
-  /** Zamanlama hiç yok: eski kayıt penceresi davranışı geçerli. */
-  | { kind: 'absent' }
-  /** Zamanlama kısmi: oran güvenilir değil, sayı gösterilmez. */
-  | { kind: 'unmeasurable' }
-  | { kind: 'measured'; ms: number };
-
-function transcriptSpeechSpan(session: TranscriptSessionState): SpeechSpan {
-  const intervals: Array<[number, number]> = [];
-  let finalCount = 0;
-  let timedFinalCount = 0;
-  for (const segment of session.segments) {
-    const isFinal = segment.status === 'final' || segment.status === 'revised';
-    if (isFinal) {
-      finalCount += 1;
-    }
-    if (segment.timingBasis !== 'source') {
-      continue;
-    }
-    const start = segment.startedAtMs;
-    const end = segment.endedAtMs;
-    if (
-      typeof start !== 'number' ||
-      !Number.isFinite(start) ||
-      typeof end !== 'number' ||
-      !Number.isFinite(end) ||
-      end <= start
-    ) {
-      continue;
-    }
-    if (isFinal) {
-      timedFinalCount += 1;
-    }
-    intervals.push([start, end]);
-  }
-  if (intervals.length === 0) {
-    return { kind: 'absent' };
-  }
-  if (finalCount > 0 && timedFinalCount / finalCount < SPEECH_SPAN_MIN_TIMED_SHARE) {
-    return { kind: 'unmeasurable' };
-  }
-  intervals.sort((a, b) => a[0] - b[0]);
-  let total = 0;
-  let [currentStart, currentEnd] = intervals[0];
-  for (const [start, end] of intervals.slice(1)) {
-    if (start <= currentEnd) {
-      currentEnd = Math.max(currentEnd, end);
-      continue;
-    }
-    total += currentEnd - currentStart;
-    currentStart = start;
-    currentEnd = end;
-  }
-  total += currentEnd - currentStart;
-  return { kind: 'measured', ms: total };
 }
 
 function transcriptSegmentsPerMinute(segmentCount: number, spanMs: number | null): number | null {
