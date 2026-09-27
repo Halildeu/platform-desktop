@@ -29,7 +29,7 @@ jobs:
     runs-on: macos-14
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
 
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
@@ -100,7 +100,7 @@ jobs:
       MACOS_DMG_NOTARY_RESULT: release/macos-universal-${{ github.sha }}/macos-dmg-notary-result.json
       MACOS_PKG_NOTARY_RESULT: release/macos-universal-${{ github.sha }}/macos-pkg-notary-result.json
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
         with:
           fetch-depth: 0
 

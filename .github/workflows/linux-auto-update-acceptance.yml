@@ -42,7 +42,7 @@ jobs:
       BASELINE_METADATA_BUNDLE_SHA256: 223335aff1b1165740fdb0079a55e7f72c9cf721e5b0c5af520ac11ec0af4920
       BASELINE_SUMS_SHA256: 903098d8f079ccadf2c53429a83e69406344e693323a7619ace4af5e17c54db2
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
         with:
           persist-credentials: false
 
