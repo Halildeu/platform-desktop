@@ -155,6 +155,12 @@ export type GatewayLiveServerEvent =
       rms?: number;
       source_start_sample?: number;
       source_end_sample?: number;
+      /**
+       * Anonim konuşmacı atfı (backend direct-stt-speaker-attribution-v2).
+       * Burada yalnız nesne olduğu denetlenir; tam doğrulama metinle birlikte
+       * renderer'da yapılır, geçersizse satır atıfsız gösterilir.
+       */
+      speakerAttribution?: Record<string, unknown>;
     }
   | { type: 'audio_ack'; chunk_seq: number }
   | { type: 'eof_ack' | 'drained' }
@@ -428,6 +434,9 @@ function parseServerEvent(data: unknown): GatewayLiveServerEvent | null {
               source_start_sample: parsed.source_start_sample as number,
               source_end_sample: parsed.source_end_sample as number,
             }
+          : {}),
+        ...(isRecord(parsed.speakerAttribution)
+          ? { speakerAttribution: parsed.speakerAttribution }
           : {}),
       };
     }

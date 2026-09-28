@@ -406,6 +406,8 @@ export interface TranscriptGatewayEvent {
    */
   assemblyReason?: string | null;
   sourceEventIds?: string[];
+  /** Anonim konuşmacı atfı (v2); renderer metinle birlikte doğrular. */
+  speakerAttribution?: unknown;
 }
 
 export interface TranscriptEventsPage {

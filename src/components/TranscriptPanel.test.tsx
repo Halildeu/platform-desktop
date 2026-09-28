@@ -858,6 +858,64 @@ describe('TranscriptPanel', () => {
     );
   });
 
+  it('applies review and edit on a speaker-split piece to the whole source segment', async () => {
+    const onSegmentReviewed = vi.fn();
+    const onSegmentTextChange = vi.fn();
+    const recording = startTranscriptSession(initialTranscriptSession(), {
+      sessionId: 'SES-SPEAKER-SPLIT',
+      meetingId: '22222222-2222-4222-8222-222222222222',
+      deviceId: 'desktop-1',
+      hasLoopback: false,
+      startedAtMs: 1781820000000,
+    });
+    const session = upsertTranscriptSegment(recording, {
+      id: 'gateway:mixed',
+      speakerLabel: 'Birden çok konuşmacı',
+      startedAtMs: 1781820001000,
+      endedAtMs: 1781820003000,
+      timingBasis: 'source',
+      status: 'final',
+      text: 'Bütçeyi onaylıyorum. Teşekkürler.',
+      source: 'gateway-events',
+      speakerTurns: [
+        { label: 'Konuşmacı 1', textStart: 0, textEnd: 20, startMs: 0, endMs: 1_200 },
+        { label: 'Konuşmacı 2', textStart: 21, textEnd: 33, startMs: 1_400, endMs: 2_000 },
+      ],
+    });
+
+    render(
+      <TranscriptPanel
+        session={session}
+        onSegmentReviewed={onSegmentReviewed}
+        onSegmentTextChange={onSegmentTextChange}
+      />,
+    );
+    await switchToRowsView();
+
+    const paragraphs = document.querySelectorAll('.transcript-turn-paragraph');
+    expect(paragraphs).toHaveLength(2);
+    expect(paragraphs[1]).toHaveTextContent('Teşekkürler.');
+    await userEvent.click(
+      within(paragraphs[1] as HTMLElement).getByRole('button', { name: 'İncelendi' }),
+    );
+    expect(onSegmentReviewed).toHaveBeenCalledWith('gateway:mixed');
+
+    await userEvent.click(
+      within(paragraphs[1] as HTMLElement).getByRole('button', { name: 'Metni düzelt' }),
+    );
+    const editor = within(paragraphs[0] as HTMLElement).getByLabelText('Transkript metni');
+    expect(editor).toHaveValue('Bütçeyi onaylıyorum. Teşekkürler.');
+    await userEvent.clear(editor);
+    await userEvent.type(editor, 'Bütçeyi onaylıyoruz. Teşekkürler.');
+    await userEvent.click(
+      within(paragraphs[0] as HTMLElement).getByRole('button', { name: 'Kaydet' }),
+    );
+    expect(onSegmentTextChange).toHaveBeenCalledWith(
+      'gateway:mixed',
+      'Bütçeyi onaylıyoruz. Teşekkürler.',
+    );
+  });
+
   it('renders transcript flow health metrics for live coverage triage', () => {
     const recording = startTranscriptSession(initialTranscriptSession(), {
       sessionId: 'SES-1',

@@ -1205,3 +1205,87 @@ describe('cümle birleştirme (gateway UTTERANCE)', () => {
     expect(state.segments[0].text).toBe('kesin metin');
   });
 });
+
+describe('anonymous speaker attribution in session state', () => {
+  const recording = () =>
+    startTranscriptSession(initialTranscriptSession(), {
+      sessionId: 'SES-1',
+      meetingId: '22222222-2222-4222-8222-222222222222',
+      deviceId: 'desktop-1',
+      hasLoopback: false,
+      startedAtMs: 1781820000000,
+    });
+  const mixed: TranscriptSegment = {
+    id: 'gateway:SES-1:live:3:window:0',
+    speakerLabel: 'Birden çok konuşmacı',
+    startedAtMs: 1781820001000,
+    endedAtMs: 1781820003000,
+    timingBasis: 'source',
+    status: 'final',
+    text: 'Bütçeyi onaylıyorum. Teşekkürler.',
+    source: 'gateway-events',
+    speakerTurns: [
+      { label: 'Konuşmacı 1', textStart: 0, textEnd: 20, startMs: 0, endMs: 1_200 },
+      { label: 'Konuşmacı 2', textStart: 21, textEnd: 33, startMs: 1_400, endMs: 2_000 },
+    ],
+  };
+
+  it('starts every recording with a fresh speaker numbering table', () => {
+    const previous = { ...recording(), speakerKeys: { 'scope:S1': 'Konuşmacı 1' } };
+    expect(
+      startTranscriptSession(previous, {
+        sessionId: 'SES-2',
+        meetingId: '22222222-2222-4222-8222-222222222222',
+        deviceId: 'desktop-1',
+        hasLoopback: false,
+        startedAtMs: 1781820100000,
+      }).speakerKeys,
+    ).toEqual({});
+  });
+
+  it('keeps a resolved speaker when the same text is redelivered without attribution', () => {
+    const attributed = upsertTranscriptSegment(recording(), {
+      ...mixed,
+      speakerTurns: undefined,
+      speakerLabel: 'Konuşmacı 1',
+      speakerKey: 'scope:S1',
+    });
+    const redelivered = upsertTranscriptSegment(attributed, {
+      ...mixed,
+      speakerTurns: undefined,
+      speakerLabel: 'Konuşmacı',
+      status: 'final',
+    });
+    expect(redelivered.segments[0]).toMatchObject({
+      speakerLabel: 'Konuşmacı 1',
+      speakerKey: 'scope:S1',
+    });
+
+    const changed = upsertTranscriptSegment(attributed, {
+      ...mixed,
+      speakerTurns: undefined,
+      speakerLabel: 'Konuşmacı',
+      text: 'Bütçeyi onaylamıyorum.',
+    });
+    expect(changed.segments[0].speakerLabel).toBe('Konuşmacı');
+    expect(changed.segments[0].speakerKey).toBeUndefined();
+  });
+
+  it('drops stale speaker offsets when a reviewer edits a mixed segment', () => {
+    const state = upsertTranscriptSegment(recording(), mixed);
+    const edited = reviewTranscriptSegmentText(state, {
+      id: mixed.id,
+      text: 'Bütçeyi onaylıyoruz. Teşekkürler.',
+    });
+    expect(edited.segments[0].speakerTurns).toBeUndefined();
+    expect(edited.segments[0].speakerLabel).toBe('Birden çok konuşmacı');
+  });
+
+  it('exports each speaker turn on its own line', () => {
+    const state = upsertTranscriptSegment(recording(), mixed);
+    const bundle = buildTranscriptSourceExport(state, 1781820100000);
+    expect(bundle.text).toContain('Konuşmacı 1: Bütçeyi onaylıyorum.');
+    expect(bundle.text).toContain('Konuşmacı 2: Teşekkürler.');
+    expect(bundle.markdown).toContain('Konuşmacı 2: Teşekkürler.');
+  });
+});

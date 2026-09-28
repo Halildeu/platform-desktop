@@ -59,6 +59,7 @@ interface TestTranscriptGatewayEvent {
   textLength: number;
   status: string;
   correlationId?: string | null;
+  speakerAttribution?: unknown;
 }
 
 interface TestTranscriptGatewayError {
@@ -1340,6 +1341,65 @@ describe('App recorder readiness', () => {
     expect(await screen.findByText('Gateway canlı metni')).toBeInTheDocument();
     expect(screen.getByText('Gateway canlı')).toBeInTheDocument();
     expect(screen.getByText('Kelime akışı aktif')).toBeInTheDocument();
+  });
+
+  it('Gateway anonim konuşmacı atfını numaralı konuşmacılar olarak gösterir', async () => {
+    installElectronApiMock({
+      meetingId: '22222222-2222-4222-8222-222222222222',
+      deviceId: 'desktop-1',
+      ready: true,
+      reason: null,
+      gatewayLiveStreamEnabled: true,
+      liveSttStreamUrl: null,
+      liveSttStreamReason: null,
+    });
+    vi.mocked(startRecording).mockResolvedValue({
+      sessionId: 'SES-1',
+      transcriptSessionId: 'SES-1',
+      hasLoopback: false,
+      stop: vi.fn(),
+      onError: vi.fn(),
+      pause: vi.fn(),
+      resume: vi.fn(),
+      isPaused: vi.fn(() => false),
+    });
+
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Kaydet' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Onaylıyorum — Kaydı Başlat' }));
+    await screen.findByText('Kayıt başladı (yalnız mikrofon, oturum SES-1)');
+
+    const scope = '6f1c2b0e-8a4d-3c5b-9e7f-1a2b3c4d5e6f';
+    const mixed = 'Bütçeyi onaylıyorum. Teşekkürler.';
+    act(() => {
+      transcriptEventHandler?.({
+        eventId: 'live-SES-1-3-0',
+        sessionId: 'SES-1',
+        meetingId: '22222222-2222-4222-8222-222222222222',
+        chunkSeq: 0,
+        chunkStartedAtMs: 1781820000000,
+        windowSeq: 0,
+        text: mixed,
+        textLength: mixed.length,
+        status: 'FINAL',
+        correlationId: 'gateway-live',
+        speakerAttribution: {
+          scope,
+          turns: [
+            { speaker: 'S2', textStart: 0, textEnd: 20, startMs: 0, endMs: 1_200 },
+            { speaker: 'S1', textStart: 21, textEnd: 33, startMs: 1_400, endMs: 2_000 },
+          ],
+        },
+      });
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Satırlar' }));
+    expect(await screen.findByText('Bütçeyi onaylıyorum.')).toBeInTheDocument();
+    expect(screen.getByText('Teşekkürler.')).toBeInTheDocument();
+    expect(screen.getAllByText('Konuşmacı 1').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Konuşmacı 2').length).toBeGreaterThan(0);
+    expect(screen.queryByText(mixed)).not.toBeInTheDocument();
   });
 
   it('direct live STT partial eventleri ayni satiri kelime kelime gunceller', async () => {

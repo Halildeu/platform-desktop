@@ -61,6 +61,7 @@ import {
   upsertTranscriptSegment,
   collapseAssembledFragments,
 } from './transcript/session-transcript';
+import { DEFAULT_SPEAKER_LABEL, resolveSpeakerAttribution } from './transcript/speaker-attribution';
 
 const MEETING_ID_MISSING_MESSAGE =
   'Geçerli meetingId bulunamadı; kayıt başlatılamaz. (meetingId kaynağı henüz belirlenmedi)';
@@ -562,7 +563,7 @@ function applyLiveTranscriptEvent(
 ): ReturnType<typeof initialTranscriptSession> {
   return upsertTranscriptSegment(current, {
     id: event.id,
-    speakerLabel: 'Konuşmacı',
+    speakerLabel: DEFAULT_SPEAKER_LABEL,
     startedAtMs: event.startedAtMs,
     endedAtMs: event.endedAtMs ?? null,
     timingBasis: event.timingBasis,
@@ -1318,9 +1319,17 @@ function App() {
             ? collapseAssembledFragments(current, event.sourceEventIds)
             : current;
         const endedAtMs = transcriptTimelineEndedAtMs(event);
-        return upsertTranscriptSegment(base, {
+        const speaker = resolveSpeakerAttribution(
+          event.speakerAttribution,
+          event.text,
+          base.speakerKeys,
+        );
+        const withSpeakers = speaker ? { ...base, speakerKeys: speaker.speakerKeys } : base;
+        return upsertTranscriptSegment(withSpeakers, {
           id: transcriptSegmentIdFromGateway(event),
-          speakerLabel: 'Konuşmacı',
+          speakerLabel: speaker?.speakerLabel ?? DEFAULT_SPEAKER_LABEL,
+          ...(speaker?.speakerKey ? { speakerKey: speaker.speakerKey } : {}),
+          ...(speaker?.speakerTurns ? { speakerTurns: speaker.speakerTurns } : {}),
           startedAtMs: transcriptTimelineStartedAtMs(event),
           endedAtMs,
           timingBasis: transcriptTimelineTimingBasis(event),
