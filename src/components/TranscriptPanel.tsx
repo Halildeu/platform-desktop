@@ -16,6 +16,7 @@ import {
   type TranscriptSegmentStatus,
   type TranscriptSessionState,
 } from '../transcript/session-transcript';
+import { splitSegmentBySpeaker } from '../transcript/speaker-attribution';
 import { buildTurnFlow } from '../transcript/turn-flow';
 import { advanceTypewriter, typewriterBudget } from '../transcript/typewriter';
 import type { LiveSttPreflightState } from '../audio/live-stt-preflight';
@@ -1165,13 +1166,18 @@ export function TranscriptPanel({
     session.sessionId ?? '',
   ].join(':');
   const transcriptTurns = useMemo(() => {
-    const grouped = buildTranscriptTurns(session.segments);
+    // Birden çok konuşmacılı segmentler yalnız gösterimde bölünür.
+    const grouped = buildTranscriptTurns(session.segments.flatMap(splitSegmentBySpeaker));
     const previousTurns =
       turnHistoryRef.current.sessionKey === transcriptSessionKey
         ? turnHistoryRef.current.turns
         : [];
     return reconcileTranscriptTurnIds(previousTurns, grouped);
   }, [session.segments, transcriptSessionKey]);
+  const segmentTextById = useMemo(
+    () => new Map(session.segments.map((segment) => [segment.id, segment.text])),
+    [session.segments],
+  );
   useEffect(() => {
     turnHistoryRef.current = { sessionKey: transcriptSessionKey, turns: transcriptTurns };
   }, [transcriptSessionKey, transcriptTurns]);
@@ -1664,10 +1670,17 @@ export function TranscriptPanel({
                         const editableSegment = Boolean(onSegmentTextChange) && !liveDirectDraft;
                         const canMarkReviewed =
                           Boolean(onSegmentReviewed) && !liveDirectDraft && !reviewedSegment;
+                        // Konuşmacıya göre bölünmüş parça: inceleme ve düzeltme
+                        // asıl segmentin TAMAMINA uygulanır; düzenleyici ilk
+                        // parçada (asıl kimliği taşıyan) açılır.
+                        const parentId = segment.speakerParentId ?? segment.id;
+                        const parentText = segment.speakerParentId
+                          ? (segmentTextById.get(parentId) ?? segment.text)
+                          : segment.text;
                         const editingSegment = editingSegmentId === segment.id;
-                        const segmentDraftText = segmentTextDrafts[segment.id] ?? segment.text;
+                        const segmentDraftText = segmentTextDrafts[segment.id] ?? parentText;
                         const reviewedText = segmentDraftText.trim();
-                        const reviewChanged = reviewedText !== segment.text.trim();
+                        const reviewChanged = reviewedText !== parentText.trim();
 
                         return (
                           <div
@@ -1733,7 +1746,7 @@ export function TranscriptPanel({
                                       <button
                                         className="secondary-action compact-action segment-review-action"
                                         type="button"
-                                        onClick={() => onSegmentReviewed?.(segment.id)}
+                                        onClick={() => onSegmentReviewed?.(parentId)}
                                       >
                                         İncelendi
                                       </button>
@@ -1742,7 +1755,7 @@ export function TranscriptPanel({
                                       <button
                                         className="secondary-action compact-action segment-review-action"
                                         type="button"
-                                        onClick={() => beginSegmentReview(segment.id, segment.text)}
+                                        onClick={() => beginSegmentReview(parentId, parentText)}
                                       >
                                         Metni düzelt
                                       </button>

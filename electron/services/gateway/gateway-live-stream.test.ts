@@ -1368,6 +1368,50 @@ describe('GatewayLiveStream', () => {
     stream.close();
   });
 
+  it('carries anonymous speaker attribution on finals and drops a non-object value', async () => {
+    const sockets: FakeSocket[] = [];
+    const onEvent = vi.fn();
+    const stream = new GatewayLiveStream({
+      cfg: { baseUrl: 'https://testai.acik.com' },
+      sessionId: 'SES-SPEAKER',
+      getJwt: async () => 'JWT',
+      onEvent,
+      onError: vi.fn(),
+      socketFactory: () => {
+        const socket = new FakeSocket();
+        sockets.push(socket);
+        return socket;
+      },
+    });
+
+    const started = stream.start();
+    await waitForSocket(sockets, 1);
+    sockets[0].open();
+    sockets[0].message(JSON.stringify({ type: 'ready' }));
+    await started;
+    onEvent.mockClear();
+
+    const speakerAttribution = {
+      scope: '6f1c2b0e-8a4d-3c5b-9e7f-1a2b3c4d5e6f',
+      turns: [{ speaker: 'S1', textStart: 0, textEnd: 5, startMs: 0, endMs: 400 }],
+    };
+    sockets[0].message(
+      JSON.stringify({ type: 'final', seq: 1, text: 'Evet.', speakerAttribution }),
+    );
+    sockets[0].message(
+      JSON.stringify({ type: 'final', seq: 2, text: 'Hayır.', speakerAttribution: 'S1' }),
+    );
+
+    expect(onEvent).toHaveBeenNthCalledWith(1, {
+      type: 'final',
+      seq: 1,
+      text: 'Evet.',
+      speakerAttribution,
+    });
+    expect(onEvent).toHaveBeenNthCalledWith(2, { type: 'final', seq: 2, text: 'Hayır.' });
+    stream.close();
+  });
+
   it('preserves final text when optional timing metadata is absent or malformed', async () => {
     const sockets: FakeSocket[] = [];
     const onEvent = vi.fn();

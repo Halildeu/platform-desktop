@@ -1,3 +1,5 @@
+import { splitSegmentBySpeaker, type SegmentSpeakerTurn } from './speaker-attribution';
+
 // 'utterance' = gateway cumle birlestiricisinin (backend PR #918) urettigi
 // OKUNABILIR satir. Ham akustik parcalar 'draft' olarak gelir ve bir cumle
 // tamamlaninca UTTERANCE ile degistirilir. Bu ayrim olmadan kullanici ayni
@@ -27,6 +29,12 @@ export interface TranscriptSegment {
   rms?: number | null;
   receivedAtMs?: number | null;
   reviewedAtMs?: number | null;
+  /** Segment tek konuşmacıya atfedildiyse scope:speaker anahtarı. */
+  speakerKey?: string;
+  /** Birden çok konuşmacılı segmentte gösterimde bölünecek aralıklar. */
+  speakerTurns?: SegmentSpeakerTurn[];
+  /** Yalnız gösterim parçalarında: bölünen asıl segmentin kimliği. */
+  speakerParentId?: string;
 }
 
 export interface TranscriptSessionState {
@@ -40,6 +48,8 @@ export interface TranscriptSessionState {
   finishedAtMs: number | null;
   error: string | null;
   segments: TranscriptSegment[];
+  /** scope:speaker → "Konuşmacı N"; kayıt boyunca numaralar sabit kalır. */
+  speakerKeys?: Record<string, string>;
 }
 
 export interface TranscriptSourceExportBundle {
@@ -376,6 +386,7 @@ export function startTranscriptSession(
     finishedAtMs: null,
     error: null,
     segments: [],
+    speakerKeys: {},
   };
 }
 
@@ -555,8 +566,11 @@ export function reviewTranscriptSegmentText(
     }
 
     changed = true;
+    // Düzeltilen metinde eski konuşmacı ofsetleri geçersizdir; karışık
+    // segment bölünmeden "Birden çok konuşmacı" olarak kalır.
     return {
       ...segment,
+      speakerTurns: undefined,
       status: 'revised' as const,
       text: reviewedText,
       revisedFromId: segment.revisedFromId ?? segment.id,
@@ -566,6 +580,30 @@ export function reviewTranscriptSegmentText(
   });
 
   return changed ? { ...state, segments } : state;
+}
+
+/**
+ * Aynı kimlikli segment atıfsız bir kopyayla (ör. SSE yeniden teslimi)
+ * gelirse, metin değişmediyse daha önce çözülmüş konuşmacı korunur. Metin
+ * değiştiyse eski ofsetler geçersizdir ve atıf düşer.
+ */
+function preservedSpeaker(
+  existing: TranscriptSegment,
+  incoming: TranscriptSegment,
+): Partial<TranscriptSegment> {
+  const incomingAttributed = incoming.speakerKey !== undefined || incoming.speakerTurns;
+  const existingAttributed = existing.speakerKey !== undefined || existing.speakerTurns;
+  if (incomingAttributed || !existingAttributed) {
+    return {};
+  }
+  if (incoming.text !== existing.text) {
+    return { speakerKey: undefined, speakerTurns: undefined };
+  }
+  return {
+    speakerLabel: existing.speakerLabel,
+    speakerKey: existing.speakerKey,
+    speakerTurns: existing.speakerTurns,
+  };
 }
 
 function mergeTranscriptSegment(
@@ -603,7 +641,13 @@ function mergeTranscriptSegment(
       ? (incoming.timingBasis ?? 'delivery')
       : undefined;
 
-  return { ...existing, ...incoming, endedAtMs, timingBasis };
+  return {
+    ...existing,
+    ...incoming,
+    ...preservedSpeaker(existing, incoming),
+    endedAtMs,
+    timingBasis,
+  };
 }
 
 function normalizeInsertedSegmentTiming(segment: TranscriptSegment): TranscriptSegment {
@@ -1166,7 +1210,7 @@ function buildTranscriptMarkdown(
     '',
   ];
 
-  for (const segment of segments) {
+  for (const segment of segments.flatMap(splitSegmentBySpeaker)) {
     lines.push(`- ${formatSegmentPrefix(segment)} ${segment.speakerLabel}: ${segment.text.trim()}`);
   }
 
@@ -1201,7 +1245,7 @@ function buildTranscriptText(state: TranscriptSessionState, segments: Transcript
     '',
   ];
 
-  for (const segment of segments) {
+  for (const segment of segments.flatMap(splitSegmentBySpeaker)) {
     lines.push(`${formatSegmentPrefix(segment)} ${segment.speakerLabel}: ${segment.text.trim()}`);
   }
 

@@ -319,6 +319,11 @@ function emitGatewayLiveTranscriptEvent(
     sttLanguage: 'tr',
     durationSeconds: elapsedMs === null ? null : elapsedMs / 1000,
     correlationId: GATEWAY_LIVE_CORRELATION_ID,
+    // Konuşmacı ofsetleri gateway metnine göredir; kırpma metni değiştirdiyse
+    // ofsetler kayar, bu durumda atıf hiç iletilmez (tahmin yok).
+    ...(event.type === 'final' && event.speakerAttribution && event.text === text
+      ? { speakerAttribution: event.speakerAttribution }
+      : {}),
   });
 }
 

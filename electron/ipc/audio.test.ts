@@ -850,6 +850,21 @@ describe('audio IPC recorder consent gate', () => {
       audioDurationMs: null,
     });
 
+    // Konuşmacı atfı yalnız ofsetlerin dayandığı metin değişmediyse iletilir.
+    const speakerAttribution = {
+      scope: '6f1c2b0e-8a4d-3c5b-9e7f-1a2b3c4d5e6f',
+      turns: [{ speaker: 'S2', textStart: 0, textEnd: 5, startMs: 0, endMs: 300 }],
+    };
+    callbacks.onEvent({ type: 'final', seq: 6, text: 'Tamam', speakerAttribution });
+    callbacks.onEvent({ type: 'final', seq: 7, text: ' Olur ', speakerAttribution });
+    const payloadFor = (text: string): Record<string, unknown> =>
+      rendererSend.mock.calls.find(
+        ([channel, payload]) =>
+          channel === 'audio:transcript-event' && (payload as { text?: string }).text === text,
+      )?.[1] as Record<string, unknown>;
+    expect(payloadFor('Tamam').speakerAttribution).toEqual(speakerAttribution);
+    expect(payloadFor('Olur')).not.toHaveProperty('speakerAttribution');
+
     await finishHandler()({}, started.captureId);
     expect(mocks.gatewayLiveStreamStop).toHaveBeenCalledTimes(1);
     expect(mocks.gatewayLiveStreamStop.mock.invocationCallOrder[0]).toBeLessThan(
