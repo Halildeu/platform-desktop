@@ -166,7 +166,8 @@ vi.mock('../services/gateway/transcript-event-subscription', () => ({
 
 vi.mock('../services/gateway/gateway-live-stream', () => ({
   GATEWAY_LIVE_SAMPLE_RATE_HZ: 16_000,
-  REALTIME_MAX_PENDING_FRAME_COUNT: 600,
+  REALTIME_MAX_PENDING_FRAME_COUNT: 1_800,
+  REALTIME_MAX_PENDING_AUDIO_BYTES: 8 * 1024 * 1024,
   REALTIME_CIRCUIT_COOLDOWN_LADDER_MS: [5_000, 15_000, 30_000, 60_000, 120_000, 300_000],
   REALTIME_REPLAY_FRAMES_PER_TICK: 4,
   normalizeGatewayLiveContextTerms: (value: unknown) =>
@@ -928,9 +929,13 @@ describe('audio IPC recorder consent gate', () => {
       [],
     );
     // #138: realtime frames are 100ms, so the replay window is sized by duration.
+    // 25 Sep: 3 minutes, so the window outlives every outage the recording
+    // itself survives (REST budget 100 s + ~20 s reconnect); the byte bound is
+    // raised with it, otherwise the 2 MB default would cap the window at ~62 s.
     expect(mocks.gatewayLiveStreamCtor).toHaveBeenCalledWith(
       expect.objectContaining({
-        maxPendingFrames: 600,
+        maxPendingFrames: 1_800,
+        maxPendingAudioBytes: 8 * 1024 * 1024,
         circuitCooldownLadderMs: expect.arrayContaining([5_000]),
         replayFramesPerTick: 4,
       }),

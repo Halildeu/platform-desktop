@@ -6,6 +6,7 @@ import {
   GatewayLiveStream,
   normalizeGatewayLiveContextTerms,
   REALTIME_CIRCUIT_COOLDOWN_LADDER_MS,
+  REALTIME_MAX_PENDING_AUDIO_BYTES,
   REALTIME_MAX_PENDING_FRAME_COUNT,
   REALTIME_REPLAY_FRAMES_PER_TICK,
   type GatewayLiveDeliverySummary,
@@ -819,6 +820,83 @@ describe('GatewayLiveStream', () => {
     expect(statuses.map((s) => s.kind)).toEqual(['recovering', 'degraded']);
     expect(statuses[1].retryInMs).toBe(30_000);
     stream.close();
+  });
+
+  // 25 Eylül attended (toplantı 91563d83): 45 sn kesinti + ~20 sn geç yeniden
+  // bağlanma 60 sn'lik pencereyi aştı, en eski çerçeveler düştü ve gateway
+  // (audio_discontinuity_v1 yok) atlamalı sırayı reddettiği için canlı hat
+  // toplantının geri kalanında dönmedi. Pencere, kaydın kendisinin dayanabildiği
+  // her kesintiyi kapsayacak şekilde 3 dakikaya çıkarıldı.
+  async function replayAfterOutage(options: {
+    frames: number;
+    maxPendingAudioBytes?: number;
+  }): Promise<number[]> {
+    vi.useFakeTimers();
+    const sockets: FakeSocket[] = [];
+    const stream = new GatewayLiveStream({
+      cfg: { baseUrl: 'https://testai.acik.com' },
+      sessionId: 'SES-1',
+      getJwt: async () => 'JWT',
+      onEvent: vi.fn(),
+      onError: vi.fn(),
+      maxPendingFrames: REALTIME_MAX_PENDING_FRAME_COUNT,
+      ...(options.maxPendingAudioBytes !== undefined
+        ? { maxPendingAudioBytes: options.maxPendingAudioBytes }
+        : {}),
+      replayFramesPerTick: REALTIME_REPLAY_FRAMES_PER_TICK,
+      socketFactory: () => {
+        const socket = new FakeSocket();
+        sockets.push(socket);
+        return socket;
+      },
+    });
+    const started = stream.start();
+    await vi.advanceTimersByTimeAsync(0);
+
+    // Audio captured while the lane has no connection: 100 ms realtime frames.
+    const frame = new Uint8Array(3_200);
+    for (let index = 0; index < options.frames; index += 1) {
+      stream.sendRealtimeFrame(frame, 1_000 + index * 100);
+    }
+
+    sockets[0].open();
+    sockets[0].message(JSON.stringify({ type: 'ready' }));
+    await started;
+
+    // Drain the paced replay, acknowledging as the gateway would.
+    const binary = () =>
+      sockets[0].sent.filter((entry) => entry instanceof ArrayBuffer).map(frameSeq);
+    let acked = 0;
+    for (let tick = 0; tick < 600; tick += 1) {
+      await vi.advanceTimersByTimeAsync(100);
+      const sent = binary();
+      for (; acked < sent.length; acked += 1) {
+        sockets[0].message(JSON.stringify({ type: 'audio_ack', chunk_seq: sent[acked] }));
+      }
+    }
+    const replayed = binary();
+    stream.close();
+    return replayed;
+  }
+
+  it('keeps three minutes of realtime audio across an outage', async () => {
+    // 3 dakika + 1 çerçeve: yalnız en eski tek çerçeve düşer.
+    const replayed = await replayAfterOutage({
+      frames: REALTIME_MAX_PENDING_FRAME_COUNT + 1,
+      maxPendingAudioBytes: REALTIME_MAX_PENDING_AUDIO_BYTES,
+    });
+    expect(REALTIME_MAX_PENDING_FRAME_COUNT).toBe(1_800);
+    expect(replayed).toHaveLength(1_800);
+    expect(replayed[0]).toBe(1);
+    expect(replayed.at(-1)).toBe(1_800);
+  });
+
+  it('would still cut the window at ~62 s if the byte bound were not raised', async () => {
+    // Bayt sınırı varsayılanda (2 MB) kalsaydı, çerçeve sayısı ne olursa olsun
+    // pencere ~62 sn'de kesilirdi: 3 dakikalık kesintinin ilk ~2 dakikası düşerdi.
+    const replayed = await replayAfterOutage({ frames: REALTIME_MAX_PENDING_FRAME_COUNT });
+    expect(replayed.length).toBeLessThan(700);
+    expect(replayed[0]).toBeGreaterThan(1_000);
   });
 
   // #138: a whole backlog written in one burst came back partly untranscribed.

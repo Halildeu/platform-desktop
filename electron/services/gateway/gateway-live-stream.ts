@@ -23,9 +23,26 @@ const MAX_PENDING_AUDIO_BYTES = 2 * 1024 * 1024;
 // #138: the 32-frame window was sized for 2s REST chunks (~64s). Realtime
 // frames are 100ms, where 32 frames held only ~3.2s, so a few seconds of
 // network loss evicted speech that is the only STT input for Speechmatics.
-// Realtime sizes the window by duration instead; the byte bound (~62s of
-// 16 kHz mono PCM16 plus frame headers) still caps memory.
-export const REALTIME_MAX_PENDING_FRAME_COUNT = 600;
+// Realtime sizes the window by duration instead.
+//
+// 25 Sep attended (meeting 91563d83): a 45 s outage ended with the live lane
+// dead for the rest of the meeting. The fast reconnect after the network came
+// back arrived ~20 s late (REST chunk requests hang on their 15 s timeout while
+// offline), so outage + reconnect passed the old 60 s window and the oldest
+// frames were evicted. The gateway does not implement audio_discontinuity_v1,
+// so a replay that starts after a hole is rejected as a sequence Gap, and every
+// retry replays the same hole: the lane never recovers.
+//
+// The window is sized to outlive the recording itself: the REST upload gives up
+// after CHUNK_OUTAGE_BUDGET_MS (100 s) and ends the recording, and reconnecting
+// adds ~20 s, so 3 minutes covers every outage the recording survives. This
+// moves the cliff, it does not remove it; the lasting fix is gateway support
+// for audio_discontinuity_v1.
+export const REALTIME_MAX_PENDING_FRAME_COUNT = 1_800;
+// The 2 MB default holds ~62 s of 100 ms frames; the realtime window needs
+// ~5.8 MB (1 800 × (3 200 PCM bytes + header)). The frame count stays the
+// binding limit and this still caps memory.
+export const REALTIME_MAX_PENDING_AUDIO_BYTES = 8 * 1024 * 1024;
 // #138: the default ladder starts at 30s, so after three quick failures during a
 // short outage the lane waited half the replay window before probing again. On
 // the realtime (Speechmatics) lane the backlog is the transcript itself, so the
@@ -253,6 +270,8 @@ export interface GatewayLiveStreamOptions {
   socketFactory?: GatewaySocketFactory;
   /** Replay window in frames; defaults to 32 (sized for 2s REST chunks). */
   maxPendingFrames?: number;
+  /** Byte bound of the replay window; defaults to 2 MB. */
+  maxPendingAudioBytes?: number;
   /** Circuit cooldowns after immediate retries; defaults to 30s..300s. */
   circuitCooldownLadderMs?: readonly number[];
   /**
@@ -926,7 +945,8 @@ export class GatewayLiveStream {
     while (
       this.pendingFrames.size > 0 &&
       (this.pendingFrames.size >= (this.options.maxPendingFrames ?? MAX_PENDING_FRAME_COUNT) ||
-        this.pendingAudioBytes + byteLength > MAX_PENDING_AUDIO_BYTES)
+        this.pendingAudioBytes + byteLength >
+          (this.options.maxPendingAudioBytes ?? MAX_PENDING_AUDIO_BYTES))
     ) {
       const oldest = this.pendingFrames.keys().next();
       if (oldest.done) {

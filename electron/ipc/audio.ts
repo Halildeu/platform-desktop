@@ -30,6 +30,7 @@ import {
   GatewayLiveStream,
   normalizeGatewayLiveContextTerms,
   REALTIME_CIRCUIT_COOLDOWN_LADDER_MS,
+  REALTIME_MAX_PENDING_AUDIO_BYTES,
   REALTIME_MAX_PENDING_FRAME_COUNT,
   REALTIME_REPLAY_FRAMES_PER_TICK,
   type GatewayLiveDeliveryStatus,
@@ -1103,6 +1104,7 @@ export function registerAudioIpc(): void {
             ...(normalizedTranscriptionMode === 'realtime'
               ? {
                   maxPendingFrames: REALTIME_MAX_PENDING_FRAME_COUNT,
+                  maxPendingAudioBytes: REALTIME_MAX_PENDING_AUDIO_BYTES,
                   circuitCooldownLadderMs: REALTIME_CIRCUIT_COOLDOWN_LADDER_MS,
                   replayFramesPerTick: REALTIME_REPLAY_FRAMES_PER_TICK,
                 }
