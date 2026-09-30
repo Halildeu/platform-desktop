@@ -1,6 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { CHUNK_OUTAGE_BUDGET_MS, type ChunkDeliveryStatus, ChunkSender } from './chunk-sender';
+import {
+  CHUNK_OUTAGE_BUDGET_MS,
+  CHUNK_OUTAGE_PROBE_TIMEOUT_MS,
+  type ChunkDeliveryStatus,
+  ChunkSender,
+} from './chunk-sender';
 import { loadGatewayConfig } from './gateway-client';
 
 const cfg = loadGatewayConfig({ GATEWAY_BASE_URL: 'https://gw.example.com' });
@@ -304,6 +309,53 @@ describe('ChunkSender outage recovery (#138)', () => {
       name: 'TimeoutError',
     });
     expect(chunkCalls).toHaveLength(attempts);
+  });
+
+  it('cuts recovery probes short so a returning network is noticed quickly (#153)', async () => {
+    // Ağ kesikken istek hata vermez, kendi deadline'ı iptal edene kadar asılı
+    // kalır. Ölçülen şey: her denemenin kaç ms sonra kesildiği.
+    vi.useFakeTimers();
+    try {
+      const cutoffs: number[] = [];
+      let networkBack = false;
+      const fetchMock = vi.fn(async (url: string, opts?: RequestInit) => {
+        if (url.endsWith('/sessions')) {
+          return { ok: true, json: async () => ({ sessionId: 'SES-1', sttProvider: 'internal' }) };
+        }
+        if (networkBack) {
+          return { ok: true };
+        }
+        const signal = opts?.signal as AbortSignal;
+        const startedAt = Date.now();
+        return await new Promise((_resolve, reject) => {
+          signal.addEventListener(
+            'abort',
+            () => {
+              cutoffs.push(Date.now() - startedAt);
+              reject(new Error('aborted'));
+            },
+            { once: true },
+          );
+        });
+      });
+      vi.stubGlobal('fetch', fetchMock);
+
+      const sender = new ChunkSender(cfg, () => 'JWT');
+      await sender.start(meetingId, 'dev1');
+
+      const sent = sender.send(new Uint8Array([1, 2]), 10);
+      // 1. deneme tam süreyi kullanır (anlık takılma cezalandırılmaz).
+      await vi.advanceTimersByTimeAsync(15_000);
+      // 1 sn backoff + kısa yoklama.
+      await vi.advanceTimersByTimeAsync(1_000 + CHUNK_OUTAGE_PROBE_TIMEOUT_MS);
+      networkBack = true;
+      await vi.advanceTimersByTimeAsync(2_000);
+
+      await expect(sent).resolves.toBe(0);
+      expect(cutoffs).toEqual([15_000, CHUNK_OUTAGE_PROBE_TIMEOUT_MS]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('refreshes the token once on 401 but does not loop on repeated 401', async () => {

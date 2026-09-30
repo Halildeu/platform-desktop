@@ -507,6 +507,7 @@ export async function sendChunk(
   sessionId: string,
   chunk: { seq: number; bytes: Uint8Array; startedAtMs: number },
   idempotencyKey: string = newIdempotencyKey(),
+  timeoutMs: number = HTTP_TIMEOUT_MS,
 ): Promise<void> {
   const body = new ArrayBuffer(chunk.bytes.byteLength);
   new Uint8Array(body).set(chunk.bytes);
@@ -521,7 +522,7 @@ export async function sendChunk(
     }),
     body,
   };
-  const deadline = performance.now() + HTTP_TIMEOUT_MS;
+  const deadline = performance.now() + Math.max(1, timeoutMs);
   for (let attempt = 0; attempt < 2; attempt += 1) {
     let responseObserved = false;
     try {

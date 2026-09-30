@@ -30,6 +30,22 @@ const START_MAX_ATTEMPTS = 2;
  * counted twice.
  */
 export const CHUNK_OUTAGE_BUDGET_MS = 100_000;
+
+/**
+ * #153 attended kanıtı: ağ kesikken istek hemen hata vermiyor, tam
+ * `HTTP_TIMEOUT_MS` (15 sn) boyunca asılı kalıyor (makinede Tailscale/Hyper-V
+ * gibi sanal bağdaştırıcılar olduğu için paket boşluğa gidiyor). Ağ geri
+ * geldiğinde o an uçuşta olan istek yine 15 sn'yi doldurduğundan `recovered`
+ * — dolayısıyla canlı hattın yeniden bağlanması — ~20 sn geç tetikleniyordu.
+ *
+ * İlk deneme tam süreyi korur: anlık bir takılma cezalandırılmamalı. Ama bir
+ * chunk bir kez başarısız olduysa hattın bozuk olduğu BİLİNİYOR; sonraki
+ * denemeler toparlanma yoklamasıdır ve kısa kesilir. 2 sn'lik PCM16 chunk
+ * 64 KB: bunu 4 sn'de gönderemeyen bir hat, her 2 sn'de bir yeni chunk üreten
+ * canlı akışa zaten yetişemez. Yoklamanın erken kesilmesi chunk'ı düşürmez,
+ * yalnız aynı bütçe içinde bir deneme daha yapılmasına yol açar.
+ */
+export const CHUNK_OUTAGE_PROBE_TIMEOUT_MS = 4_000;
 const CHUNK_RETRY_BACKOFF_MS = [1_000, 2_000, 4_000] as const;
 const CHUNK_RETRY_MAX_BACKOFF_MS = 5_000;
 const CHUNK_AUTH_RETRY_LIMIT = 1;
@@ -217,7 +233,15 @@ export class ChunkSender {
     for (;;) {
       attempts += 1;
       try {
-        await sendChunk(this.cfg, await this.getJwt(), sessionId, chunk, idempotencyKey);
+        await sendChunk(
+          this.cfg,
+          await this.getJwt(),
+          sessionId,
+          chunk,
+          idempotencyKey,
+          // Kesinti biliniyorsa bu bir toparlanma yoklaması: kısa kes.
+          outageStartedAtMs === null ? undefined : CHUNK_OUTAGE_PROBE_TIMEOUT_MS,
+        );
         if (outageStartedAtMs !== null) {
           this.options.onDeliveryStatus?.({
             state: 'recovered',
